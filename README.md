@@ -2,7 +2,7 @@
 
 ![dsh-旋律启动器](public/launcher-background.png)
 
-一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 Windows 桌面启动器和插件管理器。界面参考我的世界忘却的旋律启动器的使用方式，在启动 DSH 前集中管理运行配置、DeepSeek API Key、插件状态和加载顺序。
+一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 Windows 桌面下载/启动器和插件管理器，提供本体和插件下载/管理，整合包安装功能。界面参考我的世界忘却的旋律启动器的使用方式，在启动 DSH 前集中管理运行配置、DeepSeek API Key、插件状态和加载顺序。
 
 > 开发状态：整合包功能正在开发中。后续将支持将一组插件与配置保存、导入和分享为可复用的整合包。
 
