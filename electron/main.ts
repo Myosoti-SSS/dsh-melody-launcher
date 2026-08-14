@@ -35,6 +35,14 @@ import {
   isDshRepository,
   packageManagerProgress,
 } from './dsh-install'
+import {
+  ensureNodeRuntime,
+  findSystemNodeRuntime,
+  requiresNodeRuntime,
+  resolveNodeExecutable,
+  type NodeRuntime,
+  type NodeRuntimeProgress,
+} from './node-runtime'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 let mainWindow: BrowserWindow | null = null
@@ -50,26 +58,12 @@ const WINDOW_MODES: Record<WindowMode, { width: number; height: number; minWidth
   manager: { width: 1380, height: 860, minWidth: 1024, minHeight: 680 },
 }
 
-function findNpx(): string {
-  const executable = process.platform === 'win32' ? 'npx.cmd' : 'npx'
-  const pathCandidates = (process.env.PATH ?? '').split(path.delimiter).map(entry => path.join(entry, executable))
-  if (process.platform === 'win32') {
-    pathCandidates.unshift(path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'nodejs', 'npx.cmd'))
-  }
-  return pathCandidates.find(candidate => Boolean(candidate && path.isAbsolute(candidate)) && existsSync(candidate)) ?? executable
-}
-
-function findNpm(): string {
-  const executable = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-  const pathCandidates = (process.env.PATH ?? '').split(path.delimiter).map(entry => path.join(entry, executable))
-  if (process.platform === 'win32') {
-    pathCandidates.unshift(path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'nodejs', 'npm.cmd'))
-  }
-  return pathCandidates.find(candidate => Boolean(candidate && path.isAbsolute(candidate)) && existsSync(candidate)) ?? executable
-}
-
 function managedDshRoot(): string {
   return path.join(app.getPath('userData'), 'dsh-runtime')
+}
+
+function managedNodeRoot(): string {
+  return path.join(app.getPath('userData'), 'node-runtime')
 }
 
 function setWindowMode(mode: WindowMode): void {
@@ -81,8 +75,28 @@ function setWindowMode(mode: WindowMode): void {
   mainWindow.center()
 }
 
-function withNodeOnPath(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return withExecutableDirectoryOnPath(findNpm(), environment)
+function withNodeOnPath(runtime: NodeRuntime, environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return withExecutableDirectoryOnPath(runtime.node, environment)
+}
+
+async function prepareNodeRuntime(channel: RuntimeOutput['channel'], repository?: string): Promise<NodeRuntime> {
+  let lastLogBucket = -1
+  return ensureNodeRuntime(managedNodeRoot(), (progress: NodeRuntimeProgress) => {
+    const bucket = Math.floor(progress.percent / 10)
+    if (bucket !== lastLogBucket || progress.percent === 100) {
+      lastLogBucket = bucket
+      emitOutput(channel, 'info', `${progress.message}（${progress.percent}%）`)
+    }
+    if (repository && activeInstallation) {
+      emitInstallProgress({
+        repository,
+        kind: activeInstallation.kind,
+        phase: 'preparing',
+        percent: Math.min(17, 5 + Math.round(progress.percent * 0.12)),
+        message: progress.message,
+      })
+    }
+  })
 }
 
 function defaultSettings(): AppSettings {
@@ -90,7 +104,7 @@ function defaultSettings(): AppSettings {
     dshHome: process.env.DSH_HOME || path.join(os.homedir(), '.dsh'),
     profileName: 'web',
     workspace: app.getPath('documents'),
-    launchExecutable: findNpx(),
+    launchExecutable: findSystemNodeRuntime()?.npx ?? (process.platform === 'win32' ? 'npx.cmd' : 'npx'),
     launchArgs: ['--yes', '@deepseek-ai/dsh', 'web'],
     openAfterLaunch: true,
   }
@@ -181,11 +195,18 @@ async function startRuntime(): Promise<RuntimeState> {
   if (runtimeProcess) return runtimeState()
   const settings = await getSettings()
   const cwd = (await pathExists(settings.workspace)) ? settings.workspace : app.getPath('documents')
-  emitOutput('runtime', 'info', `启动：${settings.launchExecutable} ${settings.launchArgs.join(' ')}`)
+  let executable = settings.launchExecutable
+  let environment: NodeJS.ProcessEnv = { ...process.env, DSH_HOME: settings.dshHome, FORCE_COLOR: '0' }
+  if (requiresNodeRuntime(executable, settings.launchArgs)) {
+    const nodeRuntime = await prepareNodeRuntime('runtime')
+    executable = resolveNodeExecutable(executable, nodeRuntime)
+    environment = withNodeOnPath(nodeRuntime, environment)
+  }
+  emitOutput('runtime', 'info', `启动：${executable} ${settings.launchArgs.join(' ')}`)
   emitOutput('runtime', 'info', `工作目录：${cwd}`)
-  const child = spawnCommand(settings.launchExecutable, settings.launchArgs, {
+  const child = spawnCommand(executable, settings.launchArgs, {
     cwd,
-    env: withNodeOnPath({ ...process.env, DSH_HOME: settings.dshHome, FORCE_COLOR: '0' }),
+    env: environment,
   })
   runtimeProcess = child
   runtimeStartedAt = new Date().toISOString()
@@ -241,7 +262,8 @@ async function stopRuntime(): Promise<RuntimeState> {
 
 async function runPluginCommand(args: string[], installingRepository?: string): Promise<void> {
   const settings = await getSettings()
-  const executable = settings.launchExecutable
+  const nodeRuntime = await prepareNodeRuntime('plugin', installingRepository)
+  const executable = resolveNodeExecutable(settings.launchExecutable, nodeRuntime)
   const packageIndex = settings.launchArgs.indexOf('@deepseek-ai/dsh')
   const prefix = packageIndex >= 0
     ? settings.launchArgs.slice(0, packageIndex + 1)
@@ -255,7 +277,7 @@ async function runPluginCommand(args: string[], installingRepository?: string): 
   }
   const child = spawnCommand(executable, commandArgs, {
     cwd: settings.workspace,
-    env: withNodeOnPath({ ...process.env, DSH_HOME: settings.dshHome, FORCE_COLOR: '0' }),
+    env: withNodeOnPath(nodeRuntime, { ...process.env, DSH_HOME: settings.dshHome, FORCE_COLOR: '0' }),
   })
   if (installingRepository) {
     emitInstallProgress({ repository: installingRepository, kind: 'plugin', phase: 'downloading', percent: 28, message: '正在下载插件' })
@@ -288,8 +310,9 @@ async function installManagedDsh(repository: string): Promise<RepositoryInstallR
     await writeFile(manifestPath, `${JSON.stringify({ name: 'dsh-launcher-runtime', private: true }, null, 2)}\n`, 'utf8')
   }
 
-  emitInstallProgress({ repository, kind: 'dsh', phase: 'resolving', percent: 15, message: '正在解析 DSH 安装包' })
-  const child = spawnCommand(findNpm(), [
+  const nodeRuntime = await prepareNodeRuntime('plugin', repository)
+  emitInstallProgress({ repository, kind: 'dsh', phase: 'resolving', percent: 18, message: '正在解析 DSH 安装包' })
+  const child = spawnCommand(nodeRuntime.npm, [
     'install',
     '--prefix', runtimeRoot,
     '--save-exact',
@@ -299,7 +322,7 @@ async function installManagedDsh(repository: string): Promise<RepositoryInstallR
     '@deepseek-ai/dsh@latest',
   ], {
     cwd: runtimeRoot,
-    env: { ...process.env, FORCE_COLOR: '0', NPM_CONFIG_UPDATE_NOTIFIER: 'false' },
+    env: withNodeOnPath(nodeRuntime, { ...process.env, FORCE_COLOR: '0', NPM_CONFIG_UPDATE_NOTIFIER: 'false' }),
   })
   emitInstallProgress({ repository, kind: 'dsh', phase: 'downloading', percent: 28, message: '正在下载 DSH' })
 

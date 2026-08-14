@@ -12,6 +12,7 @@
 - 在软件内配置或清除 DeepSeek API Key
 - 从 GitHub [`dsh-plugin`](https://github.com/topics/dsh-plugin) Topic 搜索插件
 - 显示插件或 DSH 本体的下载状态、安装阶段和进度
+- 未检测到 Node.js 时自动下载、校验并使用官方便携运行时，支持中断后续传
 - 当插件列表中出现 `deepseek-ai/deepseek-harness` 时，将其识别为 DSH 本体并安装到启动器本地运行目录
 - 读取 DSH 官方 Profile，启用、停用和调整插件加载顺序
 - 卸载第三方插件，同时保护 DSH Web Profile 所需的核心 Bundle
@@ -22,11 +23,12 @@
 ## 使用方法
 
 1. 从 [Releases](../../releases) 下载最新的 `DSH-Launcher-*-portable.exe`。
-2. 确保电脑已安装 Node.js 20 或更高版本，并且 `npm`、`npx` 可用。
-3. 打开启动器，在启动页配置 DeepSeek API Key。
-4. 进入“管理”页面，从“发现插件”安装 DSH 本体或第三方插件。
-5. 在“插件加载顺序”中调整启用状态和加载顺序。
-6. 返回启动页并点击“启动 DSH”。服务就绪后可直接打开 Harness 网页。
+2. 打开启动器，在启动页配置 DeepSeek API Key。
+3. 进入“管理”页面，从“发现插件”安装 DSH 本体或第三方插件。
+4. 在“插件加载顺序”中调整启用状态和加载顺序。
+5. 返回启动页并点击“启动 DSH”。服务就绪后可直接打开 Harness 网页。
+
+使用 Release 便携版时不要求预先安装 DSH、Node.js、npm 或 npx。首次安装或启动 DSH 时，启动器会从 Node.js 官网下载经过 SHA-256 校验的便携运行时；请保持网络连接，下载中断后可继续。
 
 Windows 便携版目前未使用商业代码签名证书。首次运行时，Windows 可能显示来源提示，请确认文件来自本仓库 Release 后继续。
 
@@ -74,6 +76,7 @@ Windows 便携版输出到 `release/`。
 - [x] 插件搜索、下载进度和安装状态
 - [x] 插件启停、排序和卸载
 - [x] DSH 本体识别与本地安装
+- [x] 无系统 Node.js 环境下自动准备便携运行时
 - [x] DSH 启动、停止和日志查看
 - [ ] 插件整合包创建与导入（开发中）
 - [ ] 整合包版本管理与分享

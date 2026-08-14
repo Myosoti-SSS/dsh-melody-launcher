@@ -444,7 +444,7 @@ function LauncherHome({ settings, profile, runtime, busy, onCredential, onManage
       </main>
 
       <footer className="launcher-footer">
-        <span>DSH Launcher 0.1.0</span>
+        <span>DSH Launcher 0.1.1</span>
         <span>{profile.initialized ? `${profile.plugins.length} 个插件` : 'Profile 等待初始化'}</span>
       </footer>
     </div>
