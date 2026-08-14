@@ -518,6 +518,7 @@ function createWindow(): void {
     backgroundColor: '#151914',
     frame: false,
     hasShadow: true,
+    icon: path.join(__dirname, app.isPackaged ? '../dist/launcher-icon.png' : '../public/launcher-icon.png'),
     title: 'DSH Launcher',
     show: false,
     webPreferences: {
