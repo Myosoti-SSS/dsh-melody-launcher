@@ -4,6 +4,7 @@ import type { AppSettings, InstallProgress, LauncherApi, RuntimeOutput, RuntimeS
 const api: LauncherApi = {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings: AppSettings) => ipcRenderer.invoke('settings:save', settings),
+  detectDshInstallation: () => ipcRenderer.invoke('dsh:detect-installation'),
   getDeepSeekCredentialStatus: () => ipcRenderer.invoke('credentials:deepseek-status'),
   setDeepSeekApiKey: apiKey => ipcRenderer.invoke('credentials:deepseek-set', apiKey),
   clearDeepSeekApiKey: () => ipcRenderer.invoke('credentials:deepseek-clear'),

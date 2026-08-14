@@ -51,6 +51,8 @@ import type {
 const api: LauncherApi = window.launcher ?? demoApi
 
 const EMPTY_RUNTIME: RuntimeState = { running: false, pid: null, startedAt: null, url: null }
+const EMPTY_DSH_INSTALLATION: DshInstallationStatus = { installed: false, version: null, executable: null, source: null }
+const DSH_REPOSITORY = 'deepseek-ai/deepseek-harness'
 
 function formatStars(value: number): string {
   if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 1 : 1)}k`
@@ -87,6 +89,8 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [profile, setProfile] = useState<ProfileState | null>(null)
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME)
+  const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
+  const [installProgress, setInstallProgress] = useState<InstallProgress | null>(null)
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>({ configured: false })
   const [logs, setLogs] = useState<RuntimeOutput[]>([])
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null)
@@ -115,21 +119,24 @@ export default function App() {
   }, [showToast])
 
   useEffect(() => {
-    void Promise.all([api.getSettings(), api.readProfile(), api.getRuntimeState(), api.getDeepSeekCredentialStatus()])
-      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus]) => {
+    void Promise.all([api.getSettings(), api.readProfile(), api.getRuntimeState(), api.getDeepSeekCredentialStatus(), api.detectDshInstallation()])
+      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextDshInstallation]) => {
         setSettings(nextSettings)
         setProfile(nextProfile)
         setRuntime(nextRuntime)
         setCredentialStatus(nextCredentialStatus)
+        setDshInstallation(nextDshInstallation)
         setSelectedPlugin(nextProfile.plugins[0]?.packageName ?? null)
       })
       .catch(error => showToast({ kind: 'error', message: errorText(error) }))
       .finally(() => setLoading(false))
     const unsubscribeOutput = api.onRuntimeOutput(output => setLogs(current => [...current.slice(-499), output]))
     const unsubscribeState = api.onRuntimeState(setRuntime)
+    const unsubscribeInstallProgress = api.onInstallProgress(setInstallProgress)
     return () => {
       unsubscribeOutput()
       unsubscribeState()
+      unsubscribeInstallProgress()
     }
   }, [showToast])
 
@@ -146,8 +153,19 @@ export default function App() {
   }
 
   const toggleRuntime = async () => {
-    setBusy('runtime')
+    const needsInstallation = !runtime.running && !dshInstallation.installed
+    setBusy(needsInstallation ? 'dsh-install' : 'runtime')
     try {
+      if (needsInstallation) {
+        setInstallProgress({ repository: DSH_REPOSITORY, kind: 'dsh', phase: 'preparing', percent: 0, message: '正在准备本地 DSH' })
+        const result = await api.installPlugin(DSH_REPOSITORY)
+        setSettings(result.settings)
+        setProfile(result.profile)
+        setDshInstallation(result.dshInstallation)
+        setSelectedPlugin(result.profile.plugins[0]?.packageName ?? null)
+        showToast({ kind: 'success', message: `本地 DSH ${result.dshInstallation.version ?? ''} 已安装，可以启动。` })
+        return
+      }
       const next = runtime.running ? await api.stopRuntime() : await api.startRuntime()
       setRuntime(next)
       if (!runtime.running) setView('runtime')
@@ -163,6 +181,7 @@ export default function App() {
     try {
       const saved = await api.saveSettings(next)
       setSettings(saved)
+      setDshInstallation(await api.detectDshInstallation())
       setCredentialStatus(await api.getDeepSeekCredentialStatus())
       setSettingsOpen(false)
       await refreshProfile()
@@ -270,7 +289,10 @@ export default function App() {
           settings={settings}
           profile={profile}
           runtime={runtime}
-          busy={busy === 'runtime'}
+          dshInstallation={dshInstallation}
+          installProgress={installProgress?.repository === DSH_REPOSITORY ? installProgress : null}
+          busy={busy === 'runtime' || busy === 'dsh-install'}
+          installingDsh={busy === 'dsh-install'}
           onCredential={() => setCredentialOpen(true)}
           onManage={showManager}
           onToggleRuntime={toggleRuntime}
@@ -281,7 +303,9 @@ export default function App() {
         <div className="app-shell">
           <AppHeader
             runtime={runtime}
-            busy={busy === 'runtime'}
+            busy={busy === 'runtime' || busy === 'dsh-install'}
+            dshInstalled={dshInstallation.installed}
+            installingDsh={busy === 'dsh-install'}
             profileName={settings.profileName}
             credentialStatus={credentialStatus}
             onBack={showLauncher}
@@ -320,6 +344,7 @@ export default function App() {
                   onInstalled={result => {
                     setProfile(result.profile)
                     setSettings(result.settings)
+                    setDshInstallation(result.dshInstallation)
                     showToast({
                       kind: 'success',
                       message: result.kind === 'dsh' ? `本地 DSH ${result.dshInstallation.version ?? ''} 已安装。` : '插件已安装并加入加载顺序。',
@@ -334,7 +359,7 @@ export default function App() {
                   runtime={runtime}
                   settings={settings}
                   logs={logs}
-                  busy={busy === 'runtime'}
+                  busy={busy === 'runtime' || busy === 'dsh-install'}
                   onToggleRuntime={toggleRuntime}
                   onOpenHarness={() => runtime.url && void api.openExternal(runtime.url)}
                   onClearLogs={() => setLogs([])}
@@ -374,22 +399,25 @@ export default function App() {
   )
 }
 
-function LauncherHome({ settings, profile, runtime, busy, onCredential, onManage, onToggleRuntime, onOpenHarness, onClose }: {
+function LauncherHome({ settings, profile, runtime, dshInstallation, installProgress, busy, installingDsh, onCredential, onManage, onToggleRuntime, onOpenHarness, onClose }: {
   settings: AppSettings
   profile: ProfileState
   runtime: RuntimeState
+  dshInstallation: DshInstallationStatus
+  installProgress: InstallProgress | null
   busy: boolean
+  installingDsh: boolean
   onCredential: () => void
   onManage: () => void
   onToggleRuntime: () => void
   onOpenHarness: () => void
   onClose: () => void
 }) {
-  const managedRuntime = settings.launchExecutable.toLowerCase().includes('dsh-runtime')
+  const needsInstallation = !dshInstallation.installed
   const runtimeLabel = busy
-    ? runtime.running ? '正在停止' : '正在启动'
+    ? installingDsh ? '正在安装' : runtime.running ? '正在停止' : '正在启动'
     : runtime.running ? runtime.url ? '已就绪' : '正在启动'
-      : '等待启动'
+      : needsInstallation ? '尚未安装' : '等待启动'
 
   return (
     <div className="launcher-home">
@@ -402,7 +430,7 @@ function LauncherHome({ settings, profile, runtime, busy, onCredential, onManage
         <div className="launcher-title-block">
           <span className="launcher-kicker">LOCAL AI WORKSPACE</span>
           <h1>DeepSeek Harness</h1>
-          <p>{managedRuntime ? '本地 DSH' : '官方 npm 运行时'} · {profile.activeBundles.length} 个加载层</p>
+          <p>{needsInstallation ? '首次部署准备' : `本地 DSH ${dshInstallation.version ?? ''}`} · {profile.activeBundles.length} 个加载层</p>
         </div>
 
         <div className="launcher-controls">
@@ -419,11 +447,14 @@ function LauncherHome({ settings, profile, runtime, busy, onCredential, onManage
               onClick={onToggleRuntime}
               disabled={busy}
             >
-              {busy ? <LoaderCircle className="spin" size={24} /> : runtime.running ? <CircleStop size={24} /> : <Play size={25} fill="currentColor" />}
-              <span><small>{runtime.running ? '结束本地服务' : '启动本地工作台'}</small><strong>{runtime.running ? '停止 DSH' : '启动 DSH'}</strong></span>
+              {busy ? <LoaderCircle className="spin" size={24} /> : runtime.running ? <CircleStop size={24} /> : needsInstallation ? <Download size={24} /> : <Play size={25} fill="currentColor" />}
+              <span>
+                <small>{installingDsh ? installProgress?.message ?? '正在准备本地 DSH' : runtime.running ? '结束本地服务' : needsInstallation ? '首次使用需要完成本地部署' : '启动本地工作台'}</small>
+                <strong>{runtime.running ? '停止 DSH' : installingDsh ? installProgress?.indeterminate ? '安装进行中' : `安装 DSH ${installProgress?.percent ?? 0}%` : needsInstallation ? '下载安装 DSH' : '启动 DSH'}</strong>
+              </span>
             </button>
-            <button type="button" className="launcher-utility-button" onClick={onManage}><Settings size={17} /><span>管理</span></button>
-            <button type="button" className="launcher-utility-button" onClick={onCredential}><KeyRound size={17} /><span>API Key</span></button>
+            <button type="button" className="launcher-utility-button" onClick={onManage} disabled={busy}><Settings size={17} /><span>管理</span></button>
+            <button type="button" className="launcher-utility-button" onClick={onCredential} disabled={busy}><KeyRound size={17} /><span>API Key</span></button>
           </div>
 
           <div className="launcher-profile-row">
@@ -437,7 +468,7 @@ function LauncherHome({ settings, profile, runtime, busy, onCredential, onManage
             {runtime.url ? (
               <button type="button" className="launcher-open-button" onClick={onOpenHarness}>打开 Harness<ExternalLink size={13} /></button>
             ) : (
-              <span className="launcher-runtime-source">{managedRuntime ? '本地安装' : '按需运行'}</span>
+              <span className="launcher-runtime-source">{needsInstallation ? '等待部署' : dshInstallation.source === 'system' ? '系统安装' : '启动器安装'}</span>
             )}
           </div>
         </div>
@@ -451,9 +482,11 @@ function LauncherHome({ settings, profile, runtime, busy, onCredential, onManage
   )
 }
 
-function AppHeader({ runtime, busy, profileName, credentialStatus, onBack, onCredential, onSettings, onToggleRuntime, onClose }: {
+function AppHeader({ runtime, busy, dshInstalled, installingDsh, profileName, credentialStatus, onBack, onCredential, onSettings, onToggleRuntime, onClose }: {
   runtime: RuntimeState
   busy: boolean
+  dshInstalled: boolean
+  installingDsh: boolean
   profileName: string
   credentialStatus: CredentialStatus
   onBack: () => void
@@ -479,7 +512,7 @@ function AppHeader({ runtime, busy, profileName, credentialStatus, onBack, onCre
         <strong>{profileName}</strong>
         <ChevronRight size={14} />
         <span className={`status-dot ${runtime.running ? 'running' : ''}`} />
-        <span>{runtime.running ? `运行中 · PID ${runtime.pid}` : '尚未启动'}</span>
+        <span>{runtime.running ? `运行中 · PID ${runtime.pid}` : dshInstalled ? '尚未启动' : '尚未安装'}</span>
       </div>
       <div className="header-actions">
         <button
@@ -496,8 +529,8 @@ function AppHeader({ runtime, busy, profileName, credentialStatus, onBack, onCre
           <Settings size={19} />
         </button>
         <button className={`primary-command ${runtime.running ? 'stop' : ''}`} type="button" onClick={onToggleRuntime} disabled={busy}>
-          {busy ? <LoaderCircle className="spin" size={18} /> : runtime.running ? <CircleStop size={18} /> : <Play size={18} fill="currentColor" />}
-          <span>{runtime.running ? '停止 DSH' : '启动 DSH'}</span>
+          {busy ? <LoaderCircle className="spin" size={18} /> : runtime.running ? <CircleStop size={18} /> : dshInstalled ? <Play size={18} fill="currentColor" /> : <Download size={18} />}
+          <span>{runtime.running ? '停止 DSH' : installingDsh ? '安装中' : dshInstalled ? '启动 DSH' : '安装 DSH'}</span>
         </button>
         <button className="manager-window-close" type="button" title="关闭" aria-label="关闭" onClick={onClose}>
           <X size={18} />
@@ -788,7 +821,7 @@ function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState<string | null>(null)
   const [installProgress, setInstallProgress] = useState<InstallProgress | null>(null)
-  const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>({ installed: false, version: null, executable: null })
+  const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>({ installed: false, version: null, executable: null, source: null })
 
   const search = useCallback(async (searchQuery = query, searchSort = sort) => {
     setLoading(true)
@@ -849,6 +882,7 @@ function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
         ) : repositories.map(repo => {
           const installed = repo.kind === 'dsh' ? dshInstallation.installed : installedRepos.has(repo.fullName.toLowerCase())
           const progress = installing === repo.fullName && installProgress?.repository === repo.fullName ? installProgress : null
+          const indeterminate = progress?.indeterminate === true && progress.phase !== 'error'
           return (
             <article className={`repository-row ${repo.kind === 'dsh' ? 'dsh-core-row' : ''}`} key={repo.id}>
               <div className="repo-main">
@@ -866,12 +900,20 @@ function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
               <div className="activity-cell"><span><Star size={15} fill="currentColor" />{formatStars(repo.stars)}</span><small>更新于 {formatDate(repo.updatedAt)}</small></div>
               <div className="install-cell">
                 {progress ? (
-                  <div className={`install-progress ${progress.phase === 'error' ? 'error' : ''}`}>
-                    <div><LoaderCircle className="spin" size={14} /><span>{progress.message}</span><strong>{progress.percent}%</strong></div>
-                    <div className="progress-track"><span style={{ width: `${progress.percent}%` }} /></div>
+                  <div className={`install-progress ${progress.phase === 'error' ? 'error' : ''} ${indeterminate ? 'indeterminate' : ''}`}>
+                    <div><LoaderCircle className="spin" size={14} /><span>{progress.message}</span><strong>{indeterminate ? '进行中' : `${progress.percent}%`}</strong></div>
+                    <div
+                      className="progress-track"
+                      role="progressbar"
+                      aria-label={progress.message}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={indeterminate ? undefined : progress.percent}
+                      aria-valuetext={indeterminate ? '正在进行' : undefined}
+                    ><span style={indeterminate ? undefined : { width: `${progress.percent}%` }} /></div>
                   </div>
                 ) : installed ? (
-                  <span className="installed-label"><Check size={16} />{repo.kind === 'dsh' ? `本地 DSH ${dshInstallation.version ?? ''}` : '已安装'}</span>
+                  <span className="installed-label"><Check size={16} />{repo.kind === 'dsh' ? `${dshInstallation.source === 'system' ? '系统 DSH' : '本地 DSH'} ${dshInstallation.version ?? ''}` : '已安装'}</span>
                 ) : (
                   <button type="button" className="install-button" disabled={installing !== null} onClick={() => void install(repo)}>
                     {installing === repo.fullName ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}

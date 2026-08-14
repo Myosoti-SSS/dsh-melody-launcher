@@ -57,6 +57,7 @@ export interface DshInstallationStatus {
   installed: boolean
   version: string | null
   executable: string | null
+  source: 'launcher' | 'system' | null
 }
 
 export interface DiscoveryResult {
@@ -72,6 +73,7 @@ export interface InstallProgress {
   phase: 'preparing' | 'resolving' | 'downloading' | 'configuring' | 'complete' | 'error'
   percent: number
   message: string
+  indeterminate?: boolean
 }
 
 export interface RepositoryInstallResult {
@@ -98,6 +100,7 @@ export interface RuntimeOutput {
 export interface LauncherApi {
   getSettings(): Promise<AppSettings>
   saveSettings(settings: AppSettings): Promise<AppSettings>
+  detectDshInstallation(): Promise<DshInstallationStatus>
   getDeepSeekCredentialStatus(): Promise<CredentialStatus>
   setDeepSeekApiKey(apiKey: string): Promise<CredentialStatus>
   clearDeepSeekApiKey(): Promise<CredentialStatus>

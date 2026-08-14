@@ -95,7 +95,7 @@ const demoRepositories: RepositoryResult[] = [
 
 let demoRuntime: RuntimeState = { running: false, pid: null, startedAt: null, url: null }
 let demoCredential: CredentialStatus = { configured: false }
-let demoDshInstallation: DshInstallationStatus = { installed: false, version: null, executable: null }
+let demoDshInstallation: DshInstallationStatus = { installed: false, version: null, executable: null, source: null }
 const outputListeners = new Set<(output: RuntimeOutput) => void>()
 const stateListeners = new Set<(state: RuntimeState) => void>()
 const installProgressListeners = new Set<(progress: InstallProgress) => void>()
@@ -124,6 +124,7 @@ function renumber(plugins: ManagedPlugin[]): ManagedPlugin[] {
 export const demoApi: LauncherApi = {
   getSettings: async () => demoSettings,
   saveSettings: async settings => (demoSettings = settings),
+  detectDshInstallation: async () => ({ ...demoDshInstallation }),
   getDeepSeekCredentialStatus: async () => demoCredential,
   setDeepSeekApiKey: async apiKey => {
     if (!apiKey.trim()) throw new Error('API Key 不能为空。')
@@ -158,12 +159,12 @@ export const demoApi: LauncherApi = {
     const kind = repo?.kind ?? 'plugin'
     installProgressListeners.forEach(listener => listener({ repository: fullName, kind, phase: 'resolving', percent: 18, message: kind === 'dsh' ? '正在解析 DSH 安装包' : '正在解析插件仓库' }))
     await wait(350)
-    installProgressListeners.forEach(listener => listener({ repository: fullName, kind, phase: 'downloading', percent: 48, message: kind === 'dsh' ? '正在下载 DSH' : '正在下载插件' }))
+    installProgressListeners.forEach(listener => listener({ repository: fullName, kind, phase: 'downloading', percent: 28, message: kind === 'dsh' ? '正在下载并安装 DSH' : '正在下载并安装插件', indeterminate: true }))
     await wait(900)
     installProgressListeners.forEach(listener => listener({ repository: fullName, kind, phase: 'configuring', percent: 90, message: kind === 'dsh' ? '正在切换本地启动命令' : '正在更新插件配置' }))
     await wait(350)
     if (kind === 'dsh') {
-      demoDshInstallation = { installed: true, version: '0.1.0-rc.6', executable: 'C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\dsh-runtime\\node_modules\\.bin\\dsh.cmd' }
+      demoDshInstallation = { installed: true, version: '0.1.0-rc.6', executable: 'C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\dsh-runtime\\node_modules\\.bin\\dsh.cmd', source: 'launcher' }
       demoSettings = { ...demoSettings, launchExecutable: demoDshInstallation.executable!, launchArgs: ['web'] }
     } else if (repo && !demoPlugins.some(plugin => plugin.repositoryFullName === fullName)) {
       demoPlugins = renumber([...demoPlugins, {

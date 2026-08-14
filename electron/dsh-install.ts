@@ -1,8 +1,15 @@
-import { readFile } from 'node:fs/promises'
+import { access, readFile, realpath } from 'node:fs/promises'
 import path from 'node:path'
-import type { DshInstallationStatus } from '../src/types'
+import type { DshInstallationStatus, InstallProgress } from '../src/types'
 
 export const DSH_REPOSITORY = 'deepseek-ai/deepseek-harness'
+const DSH_PACKAGE_NAME = '@deepseek-ai/dsh'
+
+interface DshDetectionOptions {
+  managedRoot: string
+  configuredExecutable?: string
+  environment?: NodeJS.ProcessEnv
+}
 
 export function isDshRepository(fullName: string): boolean {
   return fullName.toLowerCase() === DSH_REPOSITORY
@@ -12,7 +19,105 @@ export function managedDshExecutable(runtimeRoot: string): string {
   return path.join(runtimeRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'dsh.cmd' : 'dsh')
 }
 
-export function packageManagerProgress(text: string, currentPercent: number): { percent: number; message: string } | null {
+function missingDshStatus(): DshInstallationStatus {
+  return { installed: false, version: null, executable: null, source: null }
+}
+
+function isDshExecutableName(filePath: string): boolean {
+  return /^(?:dsh|dsh\.cmd|dsh\.exe)$/i.test(path.basename(filePath))
+}
+
+function manifestCandidates(executable: string, resolvedExecutable: string): string[] {
+  const candidates = new Set<string>()
+  for (const candidateExecutable of [executable, resolvedExecutable]) {
+    const binDirectory = path.dirname(candidateExecutable)
+    candidates.add(path.join(binDirectory, 'node_modules', ...DSH_PACKAGE_NAME.split('/'), 'package.json'))
+    if (path.basename(binDirectory).toLowerCase() === '.bin') {
+      candidates.add(path.join(binDirectory, '..', ...DSH_PACKAGE_NAME.split('/'), 'package.json'))
+    }
+    let current = binDirectory
+    for (let depth = 0; depth < 6; depth += 1) {
+      candidates.add(path.join(current, 'package.json'))
+      const parent = path.dirname(current)
+      if (parent === current) break
+      current = parent
+    }
+  }
+  return [...candidates]
+}
+
+async function inspectDshExecutable(
+  executable: string,
+  source: DshInstallationStatus['source'],
+): Promise<DshInstallationStatus> {
+  if (!path.isAbsolute(executable) || !isDshExecutableName(executable)) return missingDshStatus()
+  try {
+    await access(executable)
+    const resolvedExecutable = await realpath(executable).catch(() => executable)
+    for (const manifestPath of manifestCandidates(executable, resolvedExecutable)) {
+      try {
+        const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { name?: unknown; version?: unknown }
+        if (manifest.name !== DSH_PACKAGE_NAME || typeof manifest.version !== 'string' || !manifest.version.trim()) continue
+        return { installed: true, version: manifest.version, executable, source }
+      } catch {
+        // Keep checking other standard npm layouts.
+      }
+    }
+  } catch {
+    // Missing and inaccessible candidates are not installations.
+  }
+  return missingDshStatus()
+}
+
+function systemDshCandidates(configuredExecutable: string | undefined, environment: NodeJS.ProcessEnv): string[] {
+  const candidates: string[] = []
+  if (configuredExecutable && path.isAbsolute(configuredExecutable)) candidates.push(configuredExecutable)
+
+  const pathKey = Object.keys(environment).find(key => key.toLowerCase() === 'path')
+  const pathEntries = (pathKey ? environment[pathKey] : '')?.split(path.delimiter).filter(Boolean) ?? []
+  const extraEntries = process.platform === 'win32'
+    ? [
+        environment.APPDATA ? path.join(environment.APPDATA, 'npm') : '',
+        environment.npm_config_prefix ?? '',
+        path.join(environment.ProgramFiles ?? 'C:\\Program Files', 'nodejs'),
+      ]
+    : [environment.npm_config_prefix ? path.join(environment.npm_config_prefix, 'bin') : '']
+  const executableNames = process.platform === 'win32' ? ['dsh.cmd', 'dsh.exe', 'dsh'] : ['dsh']
+  for (const entry of [...pathEntries, ...extraEntries]) {
+    const normalized = entry.trim().replace(/^"|"$/g, '')
+    if (!normalized) continue
+    for (const name of executableNames) candidates.push(path.join(normalized, name))
+  }
+
+  const seen = new Set<string>()
+  return candidates.filter(candidate => {
+    const key = process.platform === 'win32' ? path.resolve(candidate).toLowerCase() : path.resolve(candidate)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+export async function findInstalledDsh(options: DshDetectionOptions): Promise<DshInstallationStatus> {
+  const managed = await getManagedDshStatus(options.managedRoot)
+  if (managed.installed) return managed
+
+  for (const executable of systemDshCandidates(options.configuredExecutable, options.environment ?? process.env)) {
+    const detected = await inspectDshExecutable(executable, 'system')
+    if (detected.installed) return detected
+  }
+  return missingDshStatus()
+}
+
+export function installWaitingMessage(initialMessage: string, elapsedMilliseconds: number): string {
+  const elapsedSeconds = Math.max(0, Math.floor(elapsedMilliseconds / 1000))
+  return elapsedSeconds >= 5 ? `安装中 · 已等待 ${elapsedSeconds} 秒` : initialMessage
+}
+
+export function packageManagerProgress(
+  text: string,
+  currentPercent: number,
+): Pick<InstallProgress, 'percent' | 'message' | 'indeterminate'> | null {
   const pnpmMatches = [...text.matchAll(/Progress:\s*resolved\s+(\d+),\s*reused\s+(\d+),\s*downloaded\s+(\d+),\s*added\s+(\d+)/gi)]
   const pnpm = pnpmMatches.at(-1)
   if (pnpm) {
@@ -41,21 +146,12 @@ export function packageManagerProgress(text: string, currentPercent: number): { 
     return { percent: Math.max(currentPercent, 82), message: '下载完成，正在安装依赖' }
   }
   if (/download|fetch|resolve|reify|progress:/i.test(text)) {
-    return { percent: Math.max(currentPercent, 35), message: '正在下载所需文件' }
+    return { percent: Math.max(currentPercent, 35), message: '正在下载所需文件', indeterminate: true }
   }
   return null
 }
 
 export async function getManagedDshStatus(runtimeRoot: string): Promise<DshInstallationStatus> {
   const executable = managedDshExecutable(runtimeRoot)
-  try {
-    const packageJson = JSON.parse(await readFile(path.join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8')) as {
-      version?: unknown
-    }
-    await readFile(executable)
-    if (typeof packageJson.version !== 'string' || !packageJson.version.trim()) throw new Error('missing version')
-    return { installed: true, version: packageJson.version, executable }
-  } catch {
-    return { installed: false, version: null, executable: null }
-  }
+  return inspectDshExecutable(executable, 'launcher')
 }

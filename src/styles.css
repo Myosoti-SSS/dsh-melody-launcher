@@ -258,6 +258,11 @@ input:focus-visible {
   opacity: 0.72;
 }
 
+.launcher-utility-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .launcher-start-button > span {
   display: flex;
   min-width: 0;
@@ -1707,6 +1712,17 @@ input:focus-visible {
   border-radius: inherit;
   background: var(--accent);
   transition: width 180ms ease;
+}
+
+.install-progress.indeterminate .progress-track span {
+  width: 38%;
+  animation: install-progress-slide 1.25s ease-in-out infinite;
+  transition: none;
+}
+
+@keyframes install-progress-slide {
+  from { transform: translateX(-105%); }
+  to { transform: translateX(270%); }
 }
 
 .install-progress.error .progress-track span {

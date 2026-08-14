@@ -31,7 +31,9 @@ import {
 } from './credentials'
 import { spawnCommand, withExecutableDirectoryOnPath } from './process'
 import {
+  findInstalledDsh,
   getManagedDshStatus,
+  installWaitingMessage,
   isDshRepository,
   packageManagerProgress,
 } from './dsh-install'
@@ -114,6 +116,11 @@ function settingsPath(): string {
   return path.join(app.getPath('userData'), 'settings.json')
 }
 
+function usesOnDemandDsh(settings: AppSettings): boolean {
+  const executable = path.basename(settings.launchExecutable).toLowerCase()
+  return (executable === 'npx' || executable === 'npx.cmd') && settings.launchArgs.includes('@deepseek-ai/dsh')
+}
+
 async function getSettings(): Promise<AppSettings> {
   if (settingsCache) return settingsCache
   const defaults = defaultSettings()
@@ -126,6 +133,15 @@ async function getSettings(): Promise<AppSettings> {
     }
   } catch {
     settingsCache = defaults
+  }
+  if (usesOnDemandDsh(settingsCache)) {
+    const detected = await findInstalledDsh({
+      managedRoot: managedDshRoot(),
+      configuredExecutable: settingsCache.launchExecutable,
+    })
+    if (detected.installed && detected.executable) {
+      settingsCache = { ...settingsCache, launchExecutable: detected.executable, launchArgs: ['web'] }
+    }
   }
   return settingsCache
 }
@@ -152,6 +168,11 @@ async function saveSettings(input: AppSettings): Promise<AppSettings> {
   await writeFile(settingsPath(), `${JSON.stringify(next, null, 2)}\n`, 'utf8')
   settingsCache = next
   return next
+}
+
+async function detectDshInstallation() {
+  const settings = await getSettings()
+  return findInstalledDsh({ managedRoot: managedDshRoot(), configuredExecutable: settings.launchExecutable })
 }
 
 function runtimeState(): RuntimeState {
@@ -184,6 +205,41 @@ function emitInstallProgress(progress: InstallProgress): void {
 
 function currentInstallPercent(fallback: number): number {
   return activeInstallation?.percent ?? fallback
+}
+
+function beginPackageInstallProgress(
+  repository: string,
+  kind: InstallProgress['kind'],
+  message: string,
+): { handleOutput: (text: string) => void; stop: () => void } {
+  const startedAt = Date.now()
+  let hasMeasuredProgress = false
+
+  const emitWaiting = () => {
+    if (hasMeasuredProgress) return
+    emitInstallProgress({
+      repository,
+      kind,
+      phase: 'downloading',
+      percent: Math.max(28, currentInstallPercent(28)),
+      message: installWaitingMessage(message, Date.now() - startedAt),
+      indeterminate: true,
+    })
+  }
+
+  emitWaiting()
+  const heartbeat = setInterval(emitWaiting, 5_000)
+  heartbeat.unref()
+
+  return {
+    handleOutput: text => {
+      const parsed = packageManagerProgress(text, currentInstallPercent(28))
+      if (!parsed || (parsed.indeterminate && hasMeasuredProgress)) return
+      if (!parsed.indeterminate) hasMeasuredProgress = true
+      emitInstallProgress({ repository, kind, phase: 'downloading', ...parsed })
+    },
+    stop: () => clearInterval(heartbeat),
+  }
 }
 
 function extractUrl(text: string): string | null {
@@ -279,24 +335,25 @@ async function runPluginCommand(args: string[], installingRepository?: string): 
     cwd: settings.workspace,
     env: withNodeOnPath(nodeRuntime, { ...process.env, DSH_HOME: settings.dshHome, FORCE_COLOR: '0' }),
   })
-  if (installingRepository) {
-    emitInstallProgress({ repository: installingRepository, kind: 'plugin', phase: 'downloading', percent: 28, message: '正在下载插件' })
-  }
+  const progressReporter = installingRepository
+    ? beginPackageInstallProgress(installingRepository, 'plugin', '正在下载并安装插件')
+    : null
   const handleOutput = (level: RuntimeOutput['level']) => (chunk: Buffer) => {
     const text = chunk.toString('utf8')
     emitOutput('plugin', level, text)
-    if (!installingRepository) return
-    const parsed = packageManagerProgress(text, currentInstallPercent(28))
-    if (parsed) {
-      emitInstallProgress({ repository: installingRepository, kind: 'plugin', phase: 'downloading', ...parsed })
-    }
+    progressReporter?.handleOutput(text)
   }
   child.stdout.on('data', handleOutput('info'))
   child.stderr.on('data', handleOutput('error'))
-  const exitCode = await new Promise<number>((resolve, reject) => {
-    child.once('error', reject)
-    child.once('exit', code => resolve(code ?? 1))
-  })
+  let exitCode: number
+  try {
+    exitCode = await new Promise<number>((resolve, reject) => {
+      child.once('error', reject)
+      child.once('exit', code => resolve(code ?? 1))
+    })
+  } finally {
+    progressReporter?.stop()
+  }
   if (exitCode !== 0) throw new Error(`插件操作失败（代码 ${exitCode}），请查看运行日志。`)
   emitOutput('plugin', 'success', '插件操作完成。')
 }
@@ -324,20 +381,24 @@ async function installManagedDsh(repository: string): Promise<RepositoryInstallR
     cwd: runtimeRoot,
     env: withNodeOnPath(nodeRuntime, { ...process.env, FORCE_COLOR: '0', NPM_CONFIG_UPDATE_NOTIFIER: 'false' }),
   })
-  emitInstallProgress({ repository, kind: 'dsh', phase: 'downloading', percent: 28, message: '正在下载 DSH' })
+  const progressReporter = beginPackageInstallProgress(repository, 'dsh', '正在下载并安装 DSH')
 
   const handleOutput = (level: RuntimeOutput['level']) => (chunk: Buffer) => {
     const text = chunk.toString('utf8')
     emitOutput('plugin', level, text)
-    const parsed = packageManagerProgress(text, currentInstallPercent(28))
-    if (parsed) emitInstallProgress({ repository, kind: 'dsh', phase: 'downloading', ...parsed })
+    progressReporter.handleOutput(text)
   }
   child.stdout.on('data', handleOutput('info'))
   child.stderr.on('data', handleOutput('error'))
-  const exitCode = await new Promise<number>((resolve, reject) => {
-    child.once('error', reject)
-    child.once('exit', code => resolve(code ?? 1))
-  })
+  let exitCode: number
+  try {
+    exitCode = await new Promise<number>((resolve, reject) => {
+      child.once('error', reject)
+      child.once('exit', code => resolve(code ?? 1))
+    })
+  } finally {
+    progressReporter.stop()
+  }
   if (exitCode !== 0) throw new Error(`本地 DSH 安装失败（代码 ${exitCode}），请查看运行日志。`)
 
   emitInstallProgress({ repository, kind: 'dsh', phase: 'configuring', percent: 90, message: '正在切换本地启动命令' })
@@ -372,7 +433,7 @@ async function installRepository(fullName: string): Promise<RepositoryInstallRes
     emitInstallProgress({ repository: fullName, kind, phase: 'configuring', percent: 90, message: '正在更新插件配置' })
     const settings = await getSettings()
     const profile = await readProfile(settings.dshHome, settings.profileName)
-    const dshInstallation = await getManagedDshStatus(managedDshRoot())
+    const dshInstallation = await detectDshInstallation()
     emitInstallProgress({ repository: fullName, kind, phase: 'complete', percent: 100, message: '插件安装完成' })
     return { kind, profile, settings, dshInstallation }
   } catch (error) {
@@ -443,7 +504,7 @@ async function discoverPlugins(query: string, sort: 'stars' | 'updated'): Promis
     repositories,
     totalCount: data.total_count,
     rateRemaining: Number.isFinite(remaining) ? remaining : undefined,
-    dshInstallation: await getManagedDshStatus(managedDshRoot()),
+    dshInstallation: await detectDshInstallation(),
   }
 }
 
@@ -479,6 +540,7 @@ function createWindow(): void {
 function registerHandlers(): void {
   ipcMain.handle('settings:get', () => getSettings())
   ipcMain.handle('settings:save', (_event, settings: AppSettings) => saveSettings(settings))
+  ipcMain.handle('dsh:detect-installation', () => detectDshInstallation())
   ipcMain.handle('credentials:deepseek-status', async () => {
     const settings = await getSettings()
     return getDeepSeekCredentialStatus(settings.dshHome)
