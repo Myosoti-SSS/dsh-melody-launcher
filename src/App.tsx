@@ -33,6 +33,7 @@ import {
   X,
 } from 'lucide-react'
 import { demoApi } from './demo-api'
+import packageMetadata from '../package.json'
 import type {
   AppSettings,
   CredentialStatus,
@@ -475,7 +476,7 @@ function LauncherHome({ settings, profile, runtime, dshInstallation, installProg
       </main>
 
       <footer className="launcher-footer">
-        <span>DSH Launcher 0.1.1</span>
+        <span>DSH Launcher {packageMetadata.version}</span>
         <span>{profile.initialized ? `${profile.plugins.length} 个插件` : 'Profile 等待初始化'}</span>
       </footer>
     </div>
@@ -913,7 +914,12 @@ function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
                     ><span style={indeterminate ? undefined : { width: `${progress.percent}%` }} /></div>
                   </div>
                 ) : installed ? (
-                  <span className="installed-label"><Check size={16} />{repo.kind === 'dsh' ? `${dshInstallation.source === 'system' ? '系统 DSH' : '本地 DSH'} ${dshInstallation.version ?? ''}` : '已安装'}</span>
+                  <div className="installed-actions">
+                    <span className="installed-label"><Check size={16} />{repo.kind === 'dsh' ? `${dshInstallation.source === 'system' ? '系统 DSH' : '本地 DSH'} ${dshInstallation.version ?? ''}` : '已下载'}</span>
+                    <button type="button" className="install-button update-button" disabled={installing !== null} onClick={() => void install(repo)} title={`检查并更新 ${repo.name}`}>
+                      <RefreshCw size={15} />更新
+                    </button>
+                  </div>
                 ) : (
                   <button type="button" className="install-button" disabled={installing !== null} onClick={() => void install(repo)}>
                     {installing === repo.fullName ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}

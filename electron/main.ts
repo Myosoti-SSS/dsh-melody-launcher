@@ -30,6 +30,7 @@ import {
   setDeepSeekApiKey,
 } from './credentials'
 import { spawnCommand, withExecutableDirectoryOnPath } from './process'
+import { approveIgnoredGitHubBuilds } from './plugin-install'
 import {
   findInstalledDsh,
   getManagedDshStatus,
@@ -316,7 +317,7 @@ async function stopRuntime(): Promise<RuntimeState> {
   return runtimeState()
 }
 
-async function runPluginCommand(args: string[], installingRepository?: string): Promise<void> {
+async function runPluginCommand(args: string[], installingRepository?: string, allowBuildRetry = true): Promise<void> {
   const settings = await getSettings()
   const nodeRuntime = await prepareNodeRuntime('plugin', installingRepository)
   const executable = resolveNodeExecutable(settings.launchExecutable, nodeRuntime)
@@ -338,8 +339,10 @@ async function runPluginCommand(args: string[], installingRepository?: string): 
   const progressReporter = installingRepository
     ? beginPackageInstallProgress(installingRepository, 'plugin', '正在下载并安装插件')
     : null
+  let commandOutput = ''
   const handleOutput = (level: RuntimeOutput['level']) => (chunk: Buffer) => {
     const text = chunk.toString('utf8')
+    commandOutput = `${commandOutput}${text}`.slice(-48_000)
     emitOutput('plugin', level, text)
     progressReporter?.handleOutput(text)
   }
@@ -353,6 +356,21 @@ async function runPluginCommand(args: string[], installingRepository?: string): 
     })
   } finally {
     progressReporter?.stop()
+  }
+  if (exitCode !== 0 && installingRepository && allowBuildRetry && commandOutput.includes('ERR_PNPM_IGNORED_BUILDS')) {
+    const workspacePath = path.join(settings.dshHome, 'profiles', settings.profileName, 'pnpm-workspace.yaml')
+    const approved = await approveIgnoredGitHubBuilds(workspacePath, commandOutput, installingRepository)
+    if (approved.length > 0) {
+      emitOutput('plugin', 'info', `已允许当前仓库的 ${approved.length} 个构建脚本，正在自动重试。`)
+      emitInstallProgress({
+        repository: installingRepository,
+        kind: 'plugin',
+        phase: 'configuring',
+        percent: Math.max(82, currentInstallPercent(82)),
+        message: '已确认构建权限，正在重新安装',
+      })
+      return runPluginCommand(args, installingRepository, false)
+    }
   }
   if (exitCode !== 0) throw new Error(`插件操作失败（代码 ${exitCode}），请查看运行日志。`)
   emitOutput('plugin', 'success', '插件操作完成。')

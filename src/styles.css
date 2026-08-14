@@ -1666,6 +1666,19 @@ input:focus-visible {
   text-align: right;
 }
 
+.installed-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.install-button.update-button {
+  min-width: 62px;
+  min-height: 30px;
+  padding: 0 10px;
+}
+
 .install-progress {
   display: flex;
   width: 170px;

@@ -7,6 +7,7 @@ import {
   isSafeProfileName,
   isSafeRepositoryName,
   readProfile,
+  repositoryFullNameFromSpecifier,
   reorderPlugins,
   togglePlugin,
 } from '../electron/profile'
@@ -21,7 +22,7 @@ async function seedProfile(): Promise<string> {
   await writeFile(path.join(profileDir, 'package.json'), JSON.stringify({
     name: 'dsh-profile-web',
     dependencies: {
-      '@demo/vision': '1.2.0',
+      '@demo/vision': 'github:demo/vision#abc123',
       '@demo/sidebar': '2.0.0',
     },
     dsh: {
@@ -83,7 +84,7 @@ describe('profile management', () => {
     expect(disabled.plugins.find(plugin => plugin.packageName === '@demo/vision')?.enabled).toBe(false)
 
     const manifest = JSON.parse(await readFile(path.join(profileDir, 'package.json'), 'utf8'))
-    expect(manifest.dependencies['@demo/vision']).toBe('1.2.0')
+    expect(manifest.dependencies['@demo/vision']).toBe('github:demo/vision#abc123')
 
     const enabled = await togglePlugin(temporaryHome, profileName, '@demo/sidebar', true)
     expect(enabled.activeBundles.at(-1)).toBe('@demo/sidebar')
@@ -114,5 +115,11 @@ describe('external input validation', () => {
     expect(isSafeRepositoryName('owner/repo && whoami')).toBe(false)
     expect(isSafePackageName('@scope/plugin-name')).toBe(true)
     expect(isSafePackageName('plugin; Remove-Item')).toBe(false)
+  })
+
+  it('recognizes GitHub dependency and codeload repository specifiers', () => {
+    expect(repositoryFullNameFromSpecifier('github:anywhere-labs/deepseek-harness-desktop')).toBe('anywhere-labs/deepseek-harness-desktop')
+    expect(repositoryFullNameFromSpecifier('https://codeload.github.com/Small-tailqwq/dsh-deep-whale/tar.gz/abc123')).toBe('Small-tailqwq/dsh-deep-whale')
+    expect(repositoryFullNameFromSpecifier('1.2.0')).toBeUndefined()
   })
 })

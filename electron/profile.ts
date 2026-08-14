@@ -31,10 +31,13 @@ function repositoryUrl(manifest: PackageManifest): string | undefined {
   return raw.replace(/^git\+/, '').replace(/\.git$/, '')
 }
 
-function repositoryFullName(url?: string): string | undefined {
-  if (!url) return undefined
-  const match = /github\.com[/:]([^/]+)\/([^/#]+?)(?:\.git)?$/.exec(url)
-  return match ? `${match[1]}/${match[2]}` : undefined
+export function repositoryFullNameFromSpecifier(value?: string): string | undefined {
+  if (!value) return undefined
+  const normalized = value.trim().replace(/^git\+/, '')
+  const urlMatch = /(?:github\.com[/:]|codeload\.github\.com\/)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)/i.exec(normalized)
+  if (urlMatch) return `${urlMatch[1]}/${urlMatch[2].replace(/\.git$/i, '')}`
+  const shortcutMatch = /^(?:github:)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?(?:#.*)?$/i.exec(normalized)
+  return shortcutMatch ? `${shortcutMatch[1]}/${shortcutMatch[2]}` : undefined
 }
 
 function displayName(packageName: string): string {
@@ -90,14 +93,17 @@ export async function readProfile(dshHome: string, profileName: string): Promise
       const enabled = activeBundles.includes(packageName)
       const builtin = !dependencies.includes(packageName)
       const compatible = enabled || Boolean(dependencyManifest?.dsh?.bundle?.patch)
-      const repo = repositoryUrl(dependencyManifest ?? {})
+      const manifestRepo = repositoryUrl(dependencyManifest ?? {})
+      const dependencyRepo = repositoryFullNameFromSpecifier(manifest.dependencies?.[packageName])
+      const repositoryFullName = dependencyRepo ?? repositoryFullNameFromSpecifier(manifestRepo)
+      const repo = dependencyRepo ? `https://github.com/${dependencyRepo}` : manifestRepo
       return {
         packageName,
         displayName: displayName(packageName),
         version: dependencyManifest?.version ?? (builtin ? '随 DSH 提供' : '未知版本'),
         description: dependencyManifest?.description ?? (builtin ? 'DeepSeek Harness 核心组合层' : '未提供插件说明'),
         repository: repo,
-        repositoryFullName: repositoryFullName(repo),
+        repositoryFullName,
         enabled,
         builtin,
         locked: CORE_BUNDLES.has(packageName),
