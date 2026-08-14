@@ -31,13 +31,15 @@ describe('node runtime', () => {
       managed: true,
     }
     expect(resolveNodeExecutable('npx.cmd', runtime)).toBe(runtime.npx)
-    expect(resolveNodeExecutable('C:\\old\\npm.cmd', runtime)).toBe(runtime.npm)
+    // path.join 而不是硬编码反斜杠：反斜杠在 POSIX 上不是分隔符，
+    // 硬编码会让这条断言只在 Windows 上成立。
+    expect(resolveNodeExecutable(path.join('C:', 'old', 'npm.cmd'), runtime)).toBe(runtime.npm)
     expect(resolveNodeExecutable('custom.exe', runtime)).toBe('custom.exe')
   })
 
   it('detects commands that need Node.js on PATH', () => {
     expect(requiresNodeRuntime('npx.cmd', ['--yes', '@deepseek-ai/dsh', 'web'])).toBe(true)
-    expect(requiresNodeRuntime('C:\\runtime\\dsh.cmd', ['web'])).toBe(true)
+    expect(requiresNodeRuntime(path.join('C:', 'runtime', 'dsh.cmd'), ['web'])).toBe(true)
     expect(requiresNodeRuntime('custom.exe', ['serve'])).toBe(false)
   })
 })

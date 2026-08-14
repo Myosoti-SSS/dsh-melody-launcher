@@ -1,9 +1,9 @@
 import { access, readFile, realpath } from 'node:fs/promises'
 import path from 'node:path'
+import { DSH_PACKAGE_NAME, DSH_REPOSITORY } from '../src/constants'
 import type { DshInstallationStatus, InstallProgress } from '../src/types'
 
-export const DSH_REPOSITORY = 'deepseek-ai/deepseek-harness'
-const DSH_PACKAGE_NAME = '@deepseek-ai/dsh'
+export { DSH_PACKAGE_NAME, DSH_REPOSITORY }
 
 interface DshDetectionOptions {
   managedRoot: string
