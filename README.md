@@ -10,6 +10,7 @@
 
 <br />
 
+[![CI](https://img.shields.io/github/actions/workflow/status/rirko/dsh-melody-launcher/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI)](https://github.com/rirko/dsh-melody-launcher/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rirko/dsh-melody-launcher?style=for-the-badge&logo=github&color=6C7BFF)](https://github.com/rirko/dsh-melody-launcher/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/rirko/dsh-melody-launcher/total?style=for-the-badge&logo=windows&logoColor=white&color=0078D6)](https://github.com/rirko/dsh-melody-launcher/releases)
 [![Stars](https://img.shields.io/github/stars/rirko/dsh-melody-launcher?style=for-the-badge&logo=github&color=FFB020)](https://github.com/rirko/dsh-melody-launcher/stargazers)
