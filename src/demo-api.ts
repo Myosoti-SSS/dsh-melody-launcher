@@ -2,21 +2,20 @@ import type {
   AiInstallEvent,
   AiInstallStatus,
   AppSettings,
+  CatalogDiscoveryResult,
+  CatalogRepositoryAnalysis,
+  CatalogRepositoryResult,
   CredentialStatus,
   DshInstallationStatus,
-  DiscoveryResult,
   InstallProgress,
   InstalledSkill,
   LauncherApi,
   ManagedPlugin,
   ProfileState,
   RepositoryAnalysis,
-  RepositoryResult,
   RuntimeOutput,
   RuntimeState,
-  SkillDiscoveryResult,
   SkillRepositoryAnalysis,
-  SkillRepositoryResult,
 } from './types'
 
 let demoSettings: AppSettings = {
@@ -93,18 +92,16 @@ let demoPlugins: ManagedPlugin[] = [
   },
 ]
 
-const demoRepositories: RepositoryResult[] = [
-  { id: 0, fullName: 'deepseek-ai/deepseek-harness', name: 'deepseek-harness', owner: 'deepseek-ai', description: 'DeepSeek Harness 官方本体。', url: 'https://github.com/deepseek-ai/deepseek-harness', stars: 71883, language: 'TypeScript', updatedAt: '2026-08-14T05:20:00Z', topics: ['dsh-plugin', 'dsh', 'cordis'], defaultBranch: 'master', kind: 'dsh' },
-  { id: 1, fullName: 'zhu1090093659/dsh-web-ui', name: 'dsh-web-ui', owner: 'zhu1090093659', description: 'Plugin and skin collection for DeepSeek Harness Web UI.', url: 'https://github.com/zhu1090093659/dsh-web-ui', stars: 863, language: 'TypeScript', updatedAt: '2026-08-14T03:20:00Z', topics: ['dsh-plugin', 'web-ui', 'deepseek-harness'], defaultBranch: 'main', kind: 'plugin' },
-  { id: 2, fullName: 'liustack/modlens', name: 'modlens', owner: 'liustack', description: 'The first vision plugin for DeepSeek Harness.', url: 'https://github.com/liustack/modlens', stars: 829, language: 'TypeScript', updatedAt: '2026-08-14T02:10:00Z', topics: ['dsh-plugin', 'vision', 'ocr'], defaultBranch: 'main', kind: 'plugin' },
-  { id: 3, fullName: 'ccch1mneyyy/dsh-TUI', name: 'dsh-TUI', owner: 'ccch1mneyyy', description: 'Claude Code 风格全屏交互终端插件。', url: 'https://github.com/ccch1mneyyy/dsh-TUI', stars: 443, language: 'TypeScript', updatedAt: '2026-08-14T04:10:00Z', topics: ['dsh-plugin', 'tui', 'terminal'], defaultBranch: 'main', kind: 'plugin' },
-  { id: 4, fullName: 'omdsh-dev/DSH-better-sidebar', name: 'DSH-better-sidebar', owner: 'omdsh-dev', description: '支持文件、终端、Git 和子代理的侧边栏工作台。', url: 'https://github.com/omdsh-dev/DSH-better-sidebar', stars: 337, language: 'TypeScript', updatedAt: '2026-08-13T21:30:00Z', topics: ['dsh-plugin', 'sidebar'], defaultBranch: 'main', kind: 'plugin' },
-]
-
-const demoSkillRepositories: SkillRepositoryResult[] = [
-  { id: 101, fullName: 'TohsakaRIN521/dsh-academic-skill', name: 'dsh-academic-skill', owner: 'TohsakaRIN521', description: 'Academic writing and verification skills for DSH.', url: 'https://github.com/TohsakaRIN521/dsh-academic-skill', stars: 210, language: 'Python', updatedAt: '2026-08-15T03:20:00Z', topics: ['dsh-skill', 'academic'], defaultBranch: 'main' },
-  { id: 102, fullName: 'v587d/dsh-multimodal-skill', name: 'dsh-multimodal-skill', owner: 'v587d', description: 'Multimodal image and audio workflows.', url: 'https://github.com/v587d/dsh-multimodal-skill', stars: 96, language: 'Python', updatedAt: '2026-08-14T23:10:00Z', topics: ['dsh-skill', 'multimodal'], defaultBranch: 'main' },
-  { id: 103, fullName: '2BingLing/dsh-market', name: 'dsh-market', owner: '2BingLing', description: 'DSH ecosystem index.', url: 'https://github.com/2BingLing/dsh-market', stars: 350, language: 'TypeScript', updatedAt: '2026-08-15T02:10:00Z', topics: ['dsh-skill', 'market'], defaultBranch: 'master' },
+const demoRepositories: CatalogRepositoryResult[] = [
+  { id: 0, fullName: 'deepseek-ai/deepseek-harness', name: 'deepseek-harness', owner: 'deepseek-ai', description: 'DeepSeek Harness 官方本体。', url: 'https://github.com/deepseek-ai/deepseek-harness', stars: 71883, language: 'TypeScript', updatedAt: '2026-08-14T05:20:00Z', topics: ['dsh-plugin', 'dsh', 'cordis'], defaultBranch: 'master', kind: 'dsh', candidateTypes: [] },
+  { id: 1, fullName: 'zhu1090093659/dsh-web-ui', name: 'dsh-web-ui', owner: 'zhu1090093659', description: 'Plugin and skin collection for DeepSeek Harness Web UI.', url: 'https://github.com/zhu1090093659/dsh-web-ui', stars: 863, language: 'TypeScript', updatedAt: '2026-08-14T03:20:00Z', topics: ['dsh-plugin', 'web-ui', 'deepseek-harness'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['plugin'] },
+  { id: 2, fullName: 'liustack/modlens', name: 'modlens', owner: 'liustack', description: 'The first vision plugin for DeepSeek Harness.', url: 'https://github.com/liustack/modlens', stars: 829, language: 'TypeScript', updatedAt: '2026-08-14T02:10:00Z', topics: ['dsh-plugin', 'vision', 'ocr'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['plugin'] },
+  { id: 3, fullName: 'ccch1mneyyy/dsh-TUI', name: 'dsh-TUI', owner: 'ccch1mneyyy', description: 'Claude Code 风格全屏交互终端插件。', url: 'https://github.com/ccch1mneyyy/dsh-TUI', stars: 443, language: 'TypeScript', updatedAt: '2026-08-14T04:10:00Z', topics: ['dsh-plugin', 'tui', 'terminal'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['plugin'] },
+  { id: 4, fullName: 'omdsh-dev/DSH-better-sidebar', name: 'DSH-better-sidebar', owner: 'omdsh-dev', description: '支持文件、终端、Git 和子代理的侧边栏工作台。', url: 'https://github.com/omdsh-dev/DSH-better-sidebar', stars: 337, language: 'TypeScript', updatedAt: '2026-08-13T21:30:00Z', topics: ['dsh-plugin', 'sidebar'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['plugin'] },
+  { id: 101, fullName: 'TohsakaRIN521/dsh-academic-skill', name: 'dsh-academic-skill', owner: 'TohsakaRIN521', description: 'Academic writing and verification skills for DSH.', url: 'https://github.com/TohsakaRIN521/dsh-academic-skill', stars: 210, language: 'Python', updatedAt: '2026-08-15T03:20:00Z', topics: ['dsh-skill', 'academic'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['skill'] },
+  { id: 102, fullName: 'v587d/dsh-multimodal-skill', name: 'dsh-multimodal-skill', owner: 'v587d', description: 'Multimodal image and audio workflows.', url: 'https://github.com/v587d/dsh-multimodal-skill', stars: 96, language: 'Python', updatedAt: '2026-08-14T23:10:00Z', topics: ['dsh-skill', 'multimodal'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['skill'] },
+  { id: 103, fullName: '2BingLing/dsh-market', name: 'dsh-market', owner: '2BingLing', description: '同时提供 Plugin 与 Skill 的 DSH 生态市场。', url: 'https://github.com/2BingLing/dsh-market', stars: 350, language: 'TypeScript', updatedAt: '2026-08-15T02:10:00Z', topics: ['dsh-plugin', 'dsh-skill', 'market'], defaultBranch: 'master', kind: 'repository', candidateTypes: ['plugin', 'skill'] },
+  { id: 104, fullName: 'nexu-io/open-design', name: 'open-design', owner: 'nexu-io', description: '普通应用仓库，用于演示错误 topic 的无效候选。', url: 'https://github.com/nexu-io/open-design', stars: 28, sizeKb: 1_788_202, language: 'TypeScript', updatedAt: '2026-08-13T12:10:00Z', topics: ['dsh-plugin'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['plugin'] },
 ]
 
 let demoInstalledSkills: InstalledSkill[] = []
@@ -152,6 +149,12 @@ function renumber(plugins: ManagedPlugin[]): ManagedPlugin[] {
 
 function demoAnalysis(fullName: string, defaultBranch: string): RepositoryAnalysis {
   const repo = demoRepositories.find(item => item.fullName === fullName)
+  if (fullName === 'nexu-io/open-design') {
+    return { repository: fullName, defaultBranch, installability: 'application', summary: '这是独立应用，不是可加载的 DSH Plugin。', targets: [] }
+  }
+  if (repo?.candidateTypes.length === 1 && repo.candidateTypes[0] === 'skill') {
+    return { repository: fullName, defaultBranch, installability: 'invalid', summary: '没有找到 Cordis Bundle 清单。', targets: [] }
+  }
   const packageName = fullName === 'liustack/modlens'
     ? '@liustack/modlens'
     : fullName === 'ccch1mneyyy/dsh-TUI'
@@ -181,10 +184,15 @@ function demoAnalysis(fullName: string, defaultBranch: string): RepositoryAnalys
 }
 
 function demoSkillAnalysis(fullName: string, defaultBranch: string): SkillRepositoryAnalysis {
-  if (fullName === '2BingLing/dsh-market') {
+  const repo = demoRepositories.find(item => item.fullName === fullName)
+  if (!repo?.candidateTypes.includes('skill')) {
     return { repository: fullName, defaultBranch, installability: 'invalid', summary: '没有找到符合 DSH 规范的 SKILL.md 或单文件 Skill。', targets: [] }
   }
-  const names = fullName.includes('academic') ? ['academic-paper-completion', 'skill-optimizer'] : ['multimodal-workflow']
+  const names = fullName.includes('academic')
+    ? ['academic-paper-completion', 'skill-optimizer']
+    : fullName === '2BingLing/dsh-market'
+      ? ['dsh-market-guide']
+      : ['multimodal-workflow']
   return {
     repository: fullName,
     defaultBranch,
@@ -200,6 +208,40 @@ function demoSkillAnalysis(fullName: string, defaultBranch: string): SkillReposi
       modelInvocable: true,
       userInvocable: true,
     })),
+  }
+}
+
+function demoCatalogAnalysis(fullName: string, defaultBranch: string): CatalogRepositoryAnalysis {
+  if (fullName === 'deepseek-ai/deepseek-harness') {
+    return {
+      repository: fullName,
+      defaultBranch,
+      kind: 'dsh',
+      summary: '这是 DeepSeek Harness 官方仓库，将作为 DSH 本体安装。',
+      pluginAnalysis: null,
+      skillAnalysis: null,
+      warnings: [],
+    }
+  }
+  const pluginAnalysis = demoAnalysis(fullName, defaultBranch)
+  const skillAnalysis = demoSkillAnalysis(fullName, defaultBranch)
+  const plugin = ['ready', 'choice', 'dynamic'].includes(pluginAnalysis.installability)
+  const skill = ['ready', 'choice'].includes(skillAnalysis.installability)
+  const kind = plugin && skill ? 'hybrid' : plugin ? 'plugin' : skill ? 'skill' : 'invalid'
+  return {
+    repository: fullName,
+    defaultBranch,
+    kind,
+    summary: kind === 'hybrid'
+      ? `确认包含 ${pluginAnalysis.targets.length} 个 Plugin 组件和 ${skillAnalysis.targets.length} 个 Skill 组件。`
+      : kind === 'plugin'
+        ? pluginAnalysis.summary
+        : kind === 'skill'
+          ? skillAnalysis.summary
+          : '没有找到符合 DSH 规范的 Plugin 或 Skill 组件。',
+    pluginAnalysis,
+    skillAnalysis,
+    warnings: [],
   }
 }
 
@@ -233,7 +275,7 @@ export const demoApi: LauncherApi = {
     demoPlugins = renumber([...active, ...inactive])
     return profile()
   },
-  discoverPlugins: async (query, sort, page): Promise<DiscoveryResult> => {
+  discoverCatalog: async (query, sort, page): Promise<CatalogDiscoveryResult> => {
     const needle = query.trim().toLowerCase()
     const matchingRepositories = demoRepositories
       .filter(repo => !needle || `${repo.fullName} ${repo.description}`.toLowerCase().includes(needle))
@@ -242,20 +284,24 @@ export const demoApi: LauncherApi = {
     const repositories = matchingRepositories.slice(start, start + 30)
     return {
       repositories,
-      totalCount: 916,
+      topicTotals: { plugin: 3_257, skill: 15 },
+      page: Math.max(1, page),
+      pageCount: 67,
       rateRemaining: 9,
+      warnings: [],
       dshInstallation: demoDshInstallation,
       installedRepositories: demoPlugins.map(plugin => plugin.repositoryFullName).filter((value): value is string => Boolean(value)),
+      installedSkills: demoInstalledSkills,
     }
   },
-  analyzePlugin: async (fullName, defaultBranch) => demoAnalysis(fullName, defaultBranch),
+  analyzeCatalogRepository: async (fullName, defaultBranch) => demoCatalogAnalysis(fullName, defaultBranch),
   installPlugin: async request => {
     const fullName = typeof request === 'string' ? request : request.repository
     const repo = demoRepositories.find(item => item.fullName === fullName)
-    const kind = repo?.kind ?? 'plugin'
+    const kind = repo?.kind === 'dsh' ? 'dsh' : 'plugin'
     installProgressListeners.forEach(listener => listener({ repository: fullName, kind, phase: 'resolving', percent: 18, message: kind === 'dsh' ? '正在解析 DSH 安装包' : '正在解析插件仓库' }))
     await wait(350)
-    installProgressListeners.forEach(listener => listener({ repository: fullName, kind, phase: 'downloading', percent: 28, message: kind === 'dsh' ? '正在下载并安装 DSH' : '正在下载并安装插件', indeterminate: true }))
+    installProgressListeners.forEach(listener => listener({ repository: fullName, kind, phase: 'downloading', percent: 28, message: kind === 'dsh' ? '正在下载并安装 DSH' : '正在下载并安装插件', indeterminate: true, downloadedBytes: 19_341_312 }))
     await wait(900)
     installProgressListeners.forEach(listener => listener({ repository: fullName, kind, phase: 'configuring', percent: 90, message: kind === 'dsh' ? '正在切换本地启动命令' : '正在更新插件配置' }))
     await wait(350)
@@ -292,16 +338,6 @@ export const demoApi: LauncherApi = {
     demoPlugins = renumber(demoPlugins.filter(plugin => plugin.packageName !== packageName))
     return profile()
   },
-  discoverSkills: async (query, sort, page): Promise<SkillDiscoveryResult> => {
-    const needle = query.trim().toLowerCase()
-    const matchingRepositories = demoSkillRepositories
-      .filter(repo => !needle || `${repo.fullName} ${repo.description}`.toLowerCase().includes(needle))
-      .sort((left, right) => sort === 'stars' ? right.stars - left.stars : right.updatedAt.localeCompare(left.updatedAt))
-    const start = (Math.max(1, page) - 1) * 30
-    const repositories = matchingRepositories.slice(start, start + 30)
-    return { repositories, totalCount: demoSkillRepositories.length, rateRemaining: 32, installedSkills: demoInstalledSkills }
-  },
-  analyzeSkill: async (fullName, defaultBranch) => demoSkillAnalysis(fullName, defaultBranch),
   installSkill: async request => {
     const analysis = demoSkillAnalysis(request.repository, request.defaultBranch)
     const target = analysis.targets.find(item => item.id === request.targetId)

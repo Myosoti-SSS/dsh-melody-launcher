@@ -14,11 +14,11 @@ import { useAiInstall } from './hooks/use-ai-install'
 import { BUSY } from './hooks/use-async-action'
 import { useLauncherStore } from './hooks/use-launcher-store'
 import { useNavigation } from './hooks/use-navigation'
-import type { ManagedPlugin, RepositoryAnalysis, SkillRepositoryAnalysis } from './types'
+import { isInstallProgressActive } from './lib/install-progress'
+import type { CatalogRepositoryAnalysis, ManagedPlugin } from './types'
 import { DiscoverView } from './views/DiscoverView'
 import { PluginsView } from './views/PluginsView'
 import { RuntimeView } from './views/RuntimeView'
-import { SkillHubView } from './views/SkillHubView'
 
 /**
  * 应用根。
@@ -46,10 +46,10 @@ function LauncherShell() {
   const [credentialOpen, setCredentialOpen] = useState(false)
   const [confirmingRemoval, setConfirmingRemoval] = useState<ManagedPlugin | null>(null)
   // 仓库结构检测结果由各视图发起，App 统一持有，避免切页后丢失。
-  const [repositoryAnalyses, setRepositoryAnalyses] = useState<Record<string, RepositoryAnalysis>>({})
-  const [skillRepositoryAnalyses, setSkillRepositoryAnalyses] = useState<Record<string, SkillRepositoryAnalysis>>({})
+  const [repositoryAnalyses, setRepositoryAnalyses] = useState<Record<string, CatalogRepositoryAnalysis>>({})
 
   const installingDsh = store.busy === BUSY.dshInstall
+    || (isInstallProgressActive(store.installProgress) && store.installProgress.kind === 'dsh')
   const runtimeBusy = store.busy === BUSY.runtime || installingDsh
 
   const toggleRuntime = async () => {
@@ -135,11 +135,17 @@ function LauncherShell() {
                 <DiscoverView
                   profile={profile}
                   analyses={repositoryAnalyses}
+                  installProgress={store.installProgress}
+                  installedRepositories={store.installedRepositories}
+                  installedSkills={store.installedSkills}
                   onAnalysis={(repository, analysis) => {
                     setRepositoryAnalyses(current => ({ ...current, [repository]: analysis }))
                   }}
-                  onInstalled={result => {
-                    store.applyInstallResult(result)
+                  onInstallationState={store.adoptCatalogInstallationState}
+                  onInstallStarted={store.beginInstall}
+                  onInstallFinished={store.finishInstall}
+                  onPluginInstalled={(repository, result) => {
+                    store.applyCatalogPluginInstall(repository, result)
                     store.showToast({
                       kind: 'success',
                       message: result.kind === 'dsh'
@@ -147,22 +153,15 @@ function LauncherShell() {
                         : `${result.packageName ?? '插件'} 已安装到 ${result.installedProfileName ?? settings.profileName} Profile。`,
                     })
                   }}
+                  onSkillInstalled={result => {
+                    store.applyCatalogSkillInstall(result)
+                    store.showToast({ kind: 'success', message: `${result.installedSkill.name} 已安装到本地 Skill 目录。` })
+                  }}
                   onError={message => store.showToast({ kind: 'error', message })}
                   onOpenRepository={url => void api.openExternal(url)}
                   onAiInstall={repo => { void ai.start(repo.fullName, repo.defaultBranch) }}
                   aiRepository={ai.active ? ai.status.repository : null}
                   aiActive={ai.active}
-                />
-              )}
-              {navigation.view === 'skills' && (
-                <SkillHubView
-                  analyses={skillRepositoryAnalyses}
-                  onAnalysis={(repository, analysis) => {
-                    setSkillRepositoryAnalyses(current => ({ ...current, [repository]: analysis }))
-                  }}
-                  onInstalled={skill => store.showToast({ kind: 'success', message: `${skill.name} 已安装到本地 Skill 目录。` })}
-                  onError={message => store.showToast({ kind: 'error', message })}
-                  onOpenRepository={url => void api.openExternal(url)}
                 />
               )}
               {navigation.view === 'runtime' && (

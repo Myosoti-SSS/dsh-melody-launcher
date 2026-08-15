@@ -4,7 +4,7 @@ import { IPC } from '../src/constants'
 import type { AppSettings, PluginInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
-import { searchPluginRepositories, searchSkillRepositories, type DiscoverySort } from './discovery'
+import { searchCatalogRepositories, type DiscoverySort } from './discovery'
 import type { Installer } from './installer'
 import type { AiInstaller } from './ai-install'
 import {
@@ -81,19 +81,25 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     return reorderPlugins(current.dshHome, current.profileName, packageNames)
   })
 
-  ipcMain.handle(IPC.pluginsDiscover, async (_event, payload: { query: string; sort: DiscoverySort; page: number }) => {
+  ipcMain.handle(IPC.catalogDiscover, async (_event, payload: { query: string; sort: DiscoverySort; page: number }) => {
     const sort: DiscoverySort = payload.sort === 'updated' ? 'updated' : 'stars'
-    const page = Math.min(34, Math.max(1, Math.floor(Number(payload.page) || 1)))
-    const found = await searchPluginRepositories(payload.query ?? '', sort, page)
+    const page = Math.max(1, Math.floor(Number(payload.page) || 1))
+    const [found, dshInstallation, installedRepositories, installedSkills] = await Promise.all([
+      searchCatalogRepositories(payload.query ?? '', sort, page),
+      installer.detectDsh(),
+      installer.listInstalledRepositories(),
+      installer.readInstalledSkills(),
+    ])
     return {
       ...found,
-      dshInstallation: await installer.detectDsh(),
-      installedRepositories: await installer.listInstalledRepositories(),
+      dshInstallation,
+      installedRepositories,
+      installedSkills,
     }
   })
-  ipcMain.handle(IPC.pluginsAnalyze, async (_event, payload: { fullName: string; defaultBranch: string }) => {
+  ipcMain.handle(IPC.catalogAnalyze, async (_event, payload: { fullName: string; defaultBranch: string }) => {
     if (!isSafeRepositoryName(payload.fullName)) throw new Error('GitHub 仓库名称无效。')
-    return installer.analyzePlugin(payload.fullName, payload.defaultBranch)
+    return installer.analyzeCatalogRepository(payload.fullName, payload.defaultBranch)
   })
   ipcMain.handle(IPC.pluginsInstall, async (_event, request: string | PluginInstallRequest) => {
     const fullName = typeof request === 'string' ? request : request.repository
@@ -110,16 +116,6 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     return installer.remove(packageName)
   })
 
-  ipcMain.handle(IPC.skillsDiscover, async (_event, payload: { query: string; sort: DiscoverySort; page: number }) => {
-    const sort: DiscoverySort = payload.sort === 'updated' ? 'updated' : 'stars'
-    const page = Math.min(34, Math.max(1, Math.floor(Number(payload.page) || 1)))
-    const found = await searchSkillRepositories(payload.query ?? '', sort, page)
-    return { ...found, installedSkills: await installer.readInstalledSkills() }
-  })
-  ipcMain.handle(IPC.skillsAnalyze, async (_event, payload: { fullName: string; defaultBranch: string }) => {
-    if (!isSafeRepositoryName(payload.fullName)) throw new Error('GitHub 仓库名称无效。')
-    return installer.analyzeSkill(payload.fullName, payload.defaultBranch)
-  })
   ipcMain.handle(IPC.skillsInstall, async (_event, request: SkillInstallRequest) => {
     if (!isSafeRepositoryName(request.repository)) throw new Error('GitHub 仓库名称无效。')
     return installer.installSkill(request)

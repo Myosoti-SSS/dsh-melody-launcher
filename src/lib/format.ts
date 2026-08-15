@@ -8,6 +8,16 @@ export function formatStars(value: number): string {
   return String(value)
 }
 
+/** Formats byte counts for compact progress labels. */
+export function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const unitIndex = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
+  const scaled = value / 1024 ** unitIndex
+  const digits = unitIndex === 0 ? 0 : scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2
+  return `${scaled.toFixed(digits)} ${units[unitIndex]}`
+}
+
 /** ISO 时间串 → "3 分钟前" / "2 天前" / "8月14日"。 */
 export function formatRelativeTime(value: string, now: number = Date.now()): string {
   const diff = now - new Date(value).getTime()

@@ -8,11 +8,13 @@ import type {
   CredentialStatus,
   DshInstallationStatus,
   InstallProgress,
+  InstalledSkill,
   ManagedPlugin,
   ProfileState,
   RepositoryInstallResult,
   RuntimeOutput,
   RuntimeState,
+  SkillInstallResult,
 } from '../types'
 import { BUSY, useAsyncAction } from './use-async-action'
 import { useToast } from './use-toast'
@@ -35,6 +37,8 @@ export function useLauncherStore() {
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME_STATE)
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
   const [installProgress, setInstallProgress] = useState<InstallProgress | null>(null)
+  const [installedRepositories, setInstalledRepositories] = useState<Set<string>>(new Set())
+  const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([])
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>({ configured: false })
   const [logs, setLogs] = useState<RuntimeOutput[]>([])
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null)
@@ -89,6 +93,28 @@ export function useLauncherStore() {
     adoptProfile(result.profile)
     setDshInstallation(result.dshInstallation)
   }, [adoptProfile])
+
+  const adoptCatalogInstallationState = useCallback((repositories: string[], skills: InstalledSkill[]) => {
+    setInstalledRepositories(new Set(repositories.map(repository => repository.toLowerCase())))
+    setInstalledSkills(skills)
+  }, [])
+
+  const applyCatalogPluginInstall = useCallback((repository: string, result: RepositoryInstallResult) => {
+    applyInstallResult(result)
+    setInstalledRepositories(current => new Set(current).add(repository.toLowerCase()))
+  }, [applyInstallResult])
+
+  const applyCatalogSkillInstall = useCallback((result: SkillInstallResult) => {
+    setInstalledSkills(result.installedSkills)
+  }, [])
+
+  const beginInstall = useCallback((progress: InstallProgress) => {
+    setInstallProgress(progress)
+  }, [])
+
+  const finishInstall = useCallback((repository: string) => {
+    setInstallProgress(current => current?.repository === repository ? null : current)
+  }, [])
 
   /**
    * 首页主按钮。尚未安装 DSH 时先完成部署，之后才是启动/停止。
@@ -186,6 +212,8 @@ export function useLauncherStore() {
     runtime,
     dshInstallation,
     installProgress,
+    installedRepositories,
+    installedSkills,
     credentialStatus,
     logs,
     selectedPlugin,
@@ -200,6 +228,11 @@ export function useLauncherStore() {
     showToast,
     refreshProfile,
     applyInstallResult,
+    adoptCatalogInstallationState,
+    applyCatalogPluginInstall,
+    applyCatalogSkillInstall,
+    beginInstall,
+    finishInstall,
     toggleRuntime,
     saveSettings,
     saveApiKey,
