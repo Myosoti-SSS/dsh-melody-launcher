@@ -6,7 +6,7 @@ import {
   Clock3,
   Download,
   ExternalLink,
-  Github,
+  FolderGit2,
   Layers3,
   LoaderCircle,
   PackageCheck,
@@ -277,7 +277,7 @@ export function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onErr
           return (
             <article className={`repository-row ${repo.kind === 'dsh' ? 'dsh-core-row' : ''}`} key={repo.id}>
               <div className="repo-main">
-                <div className={`repo-icon ${repo.kind === 'dsh' ? 'dsh-core-icon' : ''}`}>{repo.kind === 'dsh' ? <Layers3 size={18} /> : <Github size={18} />}</div>
+                <div className={`repo-icon ${repo.kind === 'dsh' ? 'dsh-core-icon' : ''}`}>{repo.kind === 'dsh' ? <Layers3 size={18} /> : <FolderGit2 size={18} />}</div>
                 <div>
                   <div className="repo-title-line">
                     <button type="button" className="repo-title" onClick={() => onOpenRepository(repo.url)}><span>{repo.owner}/</span><strong>{repo.name}</strong><ExternalLink size={13} /></button>
