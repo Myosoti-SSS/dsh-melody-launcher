@@ -40,7 +40,7 @@ describe('plugin source download progress', () => {
       'owner/repository',
       target,
       update => progress.push(update),
-      async () => new Response(archive),
+      async () => new Response(new Uint8Array(archive)),
     )
 
     expect(JSON.parse(await readFile(path.join(packageDirectory, 'package.json'), 'utf8'))).toEqual({ name: 'example' })
