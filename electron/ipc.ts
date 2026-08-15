@@ -6,6 +6,7 @@ import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
 import { searchCatalogRepositories, type DiscoverySort } from './discovery'
 import type { Installer } from './installer'
+import type { AiInstaller } from './ai-install'
 import {
   isSafePackageName,
   isSafeRepositoryName,
@@ -25,12 +26,13 @@ export interface IpcDependencies {
   settings: SettingsStore
   runtime: RuntimeController
   installer: Installer
+  aiInstaller: AiInstaller
   getWindow: () => BrowserWindow | null
   setWindowMode: (mode: WindowMode) => void
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, runtime, installer } = deps
+  const { settings, runtime, installer, aiInstaller } = deps
 
   ipcMain.handle(IPC.settingsGet, () => settings.read())
   ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => settings.save(next))
@@ -119,6 +121,23 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     return installer.installSkill(request)
   })
   ipcMain.handle(IPC.skillsReadInstalled, () => installer.readInstalledSkills())
+
+  ipcMain.handle(IPC.aiStatus, () => aiInstaller.status())
+  ipcMain.handle(IPC.aiHasSnapshot, () => aiInstaller.hasSnapshot())
+  ipcMain.handle(IPC.aiInstall, async (_event, input: { repository: string; defaultBranch: string }) => {
+    if (!input || !isSafeRepositoryName(input.repository)) throw new Error('GitHub 仓库名称无效。')
+    if (typeof input.defaultBranch !== 'string' || input.defaultBranch.length === 0 || input.defaultBranch.length > 200) {
+      throw new Error('分支无效。')
+    }
+    // 主进程内 aiInstaller.start 会重算 analysis，不信任渲染层传入的分类。
+    return aiInstaller.start({ repository: input.repository, defaultBranch: input.defaultBranch })
+  })
+  ipcMain.handle(IPC.aiApprove, async (_event, requestId: string, allow: boolean) => {
+    if (typeof requestId !== 'string' || requestId.length === 0) throw new Error('审批请求无效。')
+    return aiInstaller.approve(requestId, Boolean(allow))
+  })
+  ipcMain.handle(IPC.aiCancel, () => aiInstaller.cancel())
+  ipcMain.handle(IPC.aiRollback, () => aiInstaller.rollback())
 
   ipcMain.handle(IPC.runtimeState, () => runtime.state())
   ipcMain.handle(IPC.runtimeStart, () => runtime.start())

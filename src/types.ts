@@ -188,10 +188,44 @@ export interface RuntimeState {
 }
 
 export interface RuntimeOutput {
-  channel: 'runtime' | 'plugin'
+  channel: 'runtime' | 'plugin' | 'ai'
   level: 'info' | 'error' | 'success'
   text: string
   timestamp: string
+}
+
+export type AiInstallPhase = 'idle' | 'preparing' | 'running' | 'done' | 'cancelled' | 'error'
+
+export interface AiInstallStatus {
+  phase: AiInstallPhase
+  repository: string | null
+  startedAt: string | null
+  sessionId: string | null
+  message: string
+}
+
+/** 渲染层看到的待审批请求（args 已脱敏截断）。 */
+export interface AiApprovalRequest {
+  id: string
+  toolName: string
+  toolKind: string | null
+  args: string
+  reason: string
+}
+
+export type AiInstallEvent =
+  | { kind: 'status'; status: AiInstallStatus }
+  | { kind: 'log'; text: string }
+  | { kind: 'auto-approved'; toolName: string; reason: string }
+  | { kind: 'approval'; request: AiApprovalRequest }
+  | { kind: 'snapshot'; snapshotId: string }
+  | { kind: 'done'; message: string }
+  | { kind: 'cancelled'; message: string }
+  | { kind: 'error'; message: string }
+
+export interface AiInstallResult {
+  ok: boolean
+  message: string
 }
 
 export interface LauncherApi {
@@ -218,9 +252,16 @@ export interface LauncherApi {
   openPath(path: string): Promise<void>
   setWindowMode(mode: WindowMode): Promise<void>
   closeWindow(): Promise<void>
+  aiInstall(input: { repository: string; defaultBranch: string }): Promise<AiInstallResult>
+  aiApprove(requestId: string, allow: boolean): Promise<boolean>
+  aiCancel(): Promise<void>
+  aiRollback(): Promise<{ restored: number; profileName: string }>
+  aiStatus(): Promise<AiInstallStatus>
+  aiHasSnapshot(): Promise<boolean>
   onRuntimeOutput(listener: (output: RuntimeOutput) => void): () => void
   onRuntimeState(listener: (state: RuntimeState) => void): () => void
   onInstallProgress(listener: (progress: InstallProgress) => void): () => void
+  onAiInstallEvent(listener: (event: AiInstallEvent) => void): () => void
 }
 
 declare global {
