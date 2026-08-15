@@ -6,7 +6,7 @@ import {
   Download,
   ExternalLink,
   Folder,
-  Github,
+  FolderGit2,
   GripVertical,
   LoaderCircle,
   PackageCheck,
@@ -287,7 +287,7 @@ function PluginDetails({ plugin, onOpenRepository, onUninstall }: {
         <p>{plugin.enabled ? '本层会按当前优先级参与下一次 DSH 启动。' : '插件文件仍保留在本机，可随时重新启用。'}</p>
       </div>
       <div className="detail-actions">
-        {plugin.repository && <button type="button" className="secondary-button full" onClick={() => onOpenRepository(plugin.repository!)}><Github size={16} />查看仓库<ExternalLink size={14} /></button>}
+        {plugin.repository && <button type="button" className="secondary-button full" onClick={() => onOpenRepository(plugin.repository!)}><FolderGit2 size={16} />查看仓库<ExternalLink size={14} /></button>}
         {!plugin.builtin && <button type="button" className="danger-button full" onClick={() => onUninstall(plugin)}><Trash2 size={16} />从此配置卸载</button>}
       </div>
     </aside>

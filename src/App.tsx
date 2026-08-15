@@ -5,10 +5,12 @@ import { AppHeader } from './components/AppHeader'
 import { LauncherHome } from './components/LauncherHome'
 import { SideNavigation } from './components/SideNavigation'
 import { Toast } from './components/Toast'
+import { AiInstallDialog } from './components/dialogs/AiInstallDialog'
 import { ConfirmDialog } from './components/dialogs/ConfirmDialog'
 import { CredentialDialog } from './components/dialogs/CredentialDialog'
 import { SettingsDialog } from './components/dialogs/SettingsDialog'
 import { DSH_REPOSITORY } from './constants'
+import { useAiInstall } from './hooks/use-ai-install'
 import { BUSY } from './hooks/use-async-action'
 import { useLauncherStore } from './hooks/use-launcher-store'
 import { useNavigation } from './hooks/use-navigation'
@@ -36,6 +38,8 @@ function LauncherShell() {
   const api = useLauncherApi()
   const store = useLauncherStore()
   const navigation = useNavigation(message => store.showToast({ kind: 'error', message }))
+  // AI 可能改 profile（安装组件），任务结束时刷新一次；toast 复用 store 的唯一实例。
+  const ai = useAiInstall(() => { void store.refreshProfile() }, store.showToast)
 
   // 对话框开关是纯展示状态，不进 store。
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -157,6 +161,9 @@ function LauncherShell() {
                   }}
                   onError={message => store.showToast({ kind: 'error', message })}
                   onOpenRepository={url => void api.openExternal(url)}
+                  onAiInstall={repo => { void ai.start(repo.fullName, repo.defaultBranch) }}
+                  aiRepository={ai.active ? ai.status.repository : null}
+                  aiActive={ai.active}
                 />
               )}
               {navigation.view === 'runtime' && (
@@ -202,6 +209,19 @@ function LauncherShell() {
             setConfirmingRemoval(null)
             void store.uninstallPlugin(plugin)
           }}
+        />
+      )}
+      {(ai.active || ai.settled) && (
+        <AiInstallDialog
+          status={ai.status}
+          logs={ai.logs}
+          pendingApproval={ai.pendingApproval}
+          hasSnapshot={ai.hasSnapshot}
+          busy={ai.busy !== null}
+          onApprove={ai.approve}
+          onCancel={ai.cancel}
+          onRollback={() => void ai.rollback()}
+          onClose={ai.reset}
         />
       )}
       {store.toast && <Toast toast={store.toast} onClose={store.dismissToast} />}

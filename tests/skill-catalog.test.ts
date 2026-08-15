@@ -8,7 +8,10 @@ function archiveResponse(files: Record<string, string>, root = 'skill-pack-main'
     zip.addFile(`${root}/${filePath}`, Buffer.from(contents))
   }
   const archive = zip.toBuffer()
-  return new Response(archive, {
+  // Response 只接受 BodyInit；较新的 @types/node 把 Buffer 变成了泛型
+  // Buffer<ArrayBufferLike>，不再匹配该联合类型。转成 Uint8Array 后
+  // 字节完全一致，且无需类型断言。
+  return new Response(new Uint8Array(archive), {
     status: 200,
     headers: { 'content-length': String(archive.byteLength) },
   })

@@ -3,7 +3,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AppSettings, RuntimeOutput, WindowMode } from '../src/types'
+import { ACP_RUNTIME_DIRNAME, CREDENTIALS_LOCK_DIRNAME, createAiInstaller, healCredentialsLock, type AiInstaller } from './ai-install'
 import { applyWindowMode, createMainWindow, createRendererChannel } from './app-window'
+import { readDeepSeekApiKey } from './credentials'
 import { findInstalledDsh } from './dsh-install'
 import { createInstaller, type Installer } from './installer'
 import { registerIpcHandlers } from './ipc'
@@ -34,6 +36,7 @@ interface Services {
   settings: SettingsStore
   runtime: RuntimeController
   installer: Installer
+  aiInstaller: AiInstaller
 }
 
 // app.getPath 依赖 app 就绪，因此服务在 whenReady 之后才装配。
@@ -102,7 +105,27 @@ function createServices(): Services {
     isRuntimeRunning: () => runtime.isRunning(),
   })
 
-  return { settings, runtime, installer }
+  const aiInstaller = createAiInstaller({
+    readSettings: () => settings.read(),
+    prepareNodeRuntime: () => prepareNodeRuntime('ai'),
+    acpRuntimeRoot: path.join(userData, ACP_RUNTIME_DIRNAME),
+    snapshotRoot: path.join(userData, 'ai-snapshots'),
+    emitOutput: (level, text) => events.output('ai', level, text),
+    emitEvent: event => events.aiInstallEvent(event),
+    isRuntimeRunning: () => runtime.isRunning(),
+    isInstallerBusy: () => installer.isBusy(),
+    analyzePlugin: (repository, defaultBranch) => installer.analyzePlugin(repository, defaultBranch),
+    readApiKey: dshHome => readDeepSeekApiKey(dshHome),
+  })
+
+  // 启动自愈：上次 AI 会话若在凭据锁期间崩溃（进程被杀、finally 未跑），
+  // .credentials.yaml 会滞留在锁目录，这里把它还原回 dshHome。
+  void settings
+    .read()
+    .then(current => healCredentialsLock(current.dshHome, path.join(userData, CREDENTIALS_LOCK_DIRNAME)))
+    .catch(() => { /* 设置未就绪可忽略，锁会在下次 AI 会话前置处理 */ })
+
+  return { settings, runtime, installer, aiInstaller }
 }
 
 function openMainWindow(): void {
@@ -132,12 +155,16 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// 退出前先结束 DSH，否则子进程会留在后台。
+// 退出前先结束 DSH 运行时与 AI 任务，否则子进程会留在后台。
 app.on('before-quit', event => {
   const runtime = services?.runtime
-  if (quitAfterRuntimeStops || !runtime?.isRunning()) return
+  const aiInstaller = services?.aiInstaller
+  const hasWork = Boolean(runtime?.isRunning() || aiInstaller?.isBusy())
+  if (quitAfterRuntimeStops || !hasWork) return
   event.preventDefault()
-  void runtime.stop().finally(() => {
+  const waitRuntime = runtime?.isRunning() ? runtime.stop() : Promise.resolve()
+  const waitAi = aiInstaller?.isBusy() ? aiInstaller.cancel() : Promise.resolve()
+  void Promise.allSettled([waitRuntime, waitAi]).finally(() => {
     quitAfterRuntimeStops = true
     app.quit()
   })
