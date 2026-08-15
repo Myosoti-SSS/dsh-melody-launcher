@@ -664,7 +664,8 @@ async function installRepository(request: string | PluginInstallRequest): Promis
   }
 }
 
-async function discoverPlugins(query: string, sort: 'stars' | 'updated'): Promise<DiscoveryResult> {
+async function discoverPlugins(query: string, sort: 'stars' | 'updated', page: number): Promise<DiscoveryResult> {
+  const normalizedPage = Math.min(34, Math.max(1, Math.floor(Number(page) || 1)))
   const normalizedQuery = query.trim().replace(/[^\p{L}\p{N}._ -]/gu, ' ').slice(0, 80)
   const searchQuery = `topic:dsh-plugin${normalizedQuery ? ` ${normalizedQuery} in:name,description` : ''}`
   const url = new URL('https://api.github.com/search/repositories')
@@ -672,6 +673,7 @@ async function discoverPlugins(query: string, sort: 'stars' | 'updated'): Promis
   url.searchParams.set('sort', sort)
   url.searchParams.set('order', 'desc')
   url.searchParams.set('per_page', '30')
+  url.searchParams.set('page', String(normalizedPage))
   const response = await fetch(url, {
     headers: {
       Accept: 'application/vnd.github+json',
@@ -731,7 +733,8 @@ async function discoverPlugins(query: string, sort: 'stars' | 'updated'): Promis
   }
 }
 
-async function discoverSkills(query: string, sort: 'stars' | 'updated'): Promise<SkillDiscoveryResult> {
+async function discoverSkills(query: string, sort: 'stars' | 'updated', page: number): Promise<SkillDiscoveryResult> {
+  const normalizedPage = Math.min(34, Math.max(1, Math.floor(Number(page) || 1)))
   const normalizedQuery = query.trim().replace(/[^\p{L}\p{N}._ -]/gu, ' ').slice(0, 80)
   const searchQuery = `topic:dsh-skill${normalizedQuery ? ` ${normalizedQuery} in:name,description` : ''}`
   const url = new URL('https://api.github.com/search/repositories')
@@ -739,6 +742,7 @@ async function discoverSkills(query: string, sort: 'stars' | 'updated'): Promise
   url.searchParams.set('sort', sort)
   url.searchParams.set('order', 'desc')
   url.searchParams.set('per_page', '30')
+  url.searchParams.set('page', String(normalizedPage))
   const response = await fetch(url, {
     headers: {
       Accept: 'application/vnd.github+json',
@@ -893,8 +897,8 @@ function registerHandlers(): void {
     const settings = await getSettings()
     return reorderPlugins(settings.dshHome, settings.profileName, packageNames)
   })
-  ipcMain.handle('plugins:discover', (_event, payload: { query: string; sort: 'stars' | 'updated' }) => {
-    return discoverPlugins(payload.query ?? '', payload.sort === 'updated' ? 'updated' : 'stars')
+  ipcMain.handle('plugins:discover', (_event, payload: { query: string; sort: 'stars' | 'updated'; page: number }) => {
+    return discoverPlugins(payload.query ?? '', payload.sort === 'updated' ? 'updated' : 'stars', payload.page)
   })
   ipcMain.handle('plugins:analyze', async (_event, payload: { fullName: string; defaultBranch: string }) => {
     if (!isSafeRepositoryName(payload.fullName)) throw new Error('GitHub 仓库名称无效。')
@@ -913,8 +917,8 @@ function registerHandlers(): void {
     await removePluginReceipt(pluginReceiptsPath(), settings.profileName, packageName)
     return readProfile(settings.dshHome, settings.profileName)
   })
-  ipcMain.handle('skills:discover', (_event, payload: { query: string; sort: 'stars' | 'updated' }) => {
-    return discoverSkills(payload.query ?? '', payload.sort === 'updated' ? 'updated' : 'stars')
+  ipcMain.handle('skills:discover', (_event, payload: { query: string; sort: 'stars' | 'updated'; page: number }) => {
+    return discoverSkills(payload.query ?? '', payload.sort === 'updated' ? 'updated' : 'stars', payload.page)
   })
   ipcMain.handle('skills:analyze', async (_event, payload: { fullName: string; defaultBranch: string }) => {
     if (!isSafeRepositoryName(payload.fullName)) throw new Error('GitHub 仓库名称无效。')

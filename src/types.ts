@@ -204,11 +204,11 @@ export interface LauncherApi {
   readProfile(): Promise<ProfileState>
   togglePlugin(packageName: string, enabled: boolean): Promise<ProfileState>
   reorderPlugins(packageNames: string[]): Promise<ProfileState>
-  discoverPlugins(query: string, sort: 'stars' | 'updated'): Promise<DiscoveryResult>
+  discoverPlugins(query: string, sort: 'stars' | 'updated', page: number): Promise<DiscoveryResult>
   analyzePlugin(fullName: string, defaultBranch: string): Promise<RepositoryAnalysis>
   installPlugin(request: string | PluginInstallRequest): Promise<RepositoryInstallResult>
   uninstallPlugin(packageName: string): Promise<ProfileState>
-  discoverSkills(query: string, sort: 'stars' | 'updated'): Promise<SkillDiscoveryResult>
+  discoverSkills(query: string, sort: 'stars' | 'updated', page: number): Promise<SkillDiscoveryResult>
   analyzeSkill(fullName: string, defaultBranch: string): Promise<SkillRepositoryAnalysis>
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
   readInstalledSkills(): Promise<InstalledSkill[]>

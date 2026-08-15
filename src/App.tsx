@@ -6,6 +6,7 @@ import {
   BookOpenCheck,
   Box,
   Check,
+  ChevronLeft,
   ChevronRight,
   CircleAlert,
   CircleCheck,
@@ -62,6 +63,8 @@ const api: LauncherApi = window.launcher ?? demoApi
 const EMPTY_RUNTIME: RuntimeState = { running: false, pid: null, startedAt: null, url: null }
 const EMPTY_DSH_INSTALLATION: DshInstallationStatus = { installed: false, version: null, executable: null, source: null }
 const DSH_REPOSITORY = 'deepseek-ai/deepseek-harness'
+const CATALOG_PAGE_SIZE = 30
+const GITHUB_SEARCH_RESULT_LIMIT = 1000
 
 function formatStars(value: number): string {
   if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 1 : 1)}k`
@@ -77,6 +80,34 @@ function formatDate(value: string): string {
   const days = Math.floor(hours / 24)
   if (days < 30) return `${days} 天前`
   return new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(new Date(value))
+}
+
+function CatalogPagination({ page, total, loading, disabled, onPageChange }: {
+  page: number
+  total: number
+  loading: boolean
+  disabled: boolean
+  onPageChange: (page: number) => void
+}) {
+  const accessibleTotal = Math.min(total, GITHUB_SEARCH_RESULT_LIMIT)
+  const pageCount = Math.max(1, Math.ceil(accessibleTotal / CATALOG_PAGE_SIZE))
+  const rangeStart = accessibleTotal === 0 ? 0 : (page - 1) * CATALOG_PAGE_SIZE + 1
+  const rangeEnd = Math.min(page * CATALOG_PAGE_SIZE, accessibleTotal)
+  const controlsDisabled = loading || disabled
+
+  return (
+    <div className="catalog-pagination" role="navigation" aria-label="仓库分页">
+      <p>
+        当前显示 {rangeStart}-{rangeEnd}，可浏览 {accessibleTotal.toLocaleString('zh-CN')} 个仓库
+        {total > GITHUB_SEARCH_RESULT_LIMIT && <>；GitHub 搜索最多开放前 {GITHUB_SEARCH_RESULT_LIMIT.toLocaleString('zh-CN')} 个</>}
+      </p>
+      <div className="catalog-page-controls">
+        <button type="button" disabled={controlsDisabled || page <= 1} onClick={() => onPageChange(page - 1)} aria-label="上一页" title="上一页"><ChevronLeft size={17} /></button>
+        <span aria-live="polite">第 {page} / {pageCount} 页</span>
+        <button type="button" disabled={controlsDisabled || page >= pageCount} onClick={() => onPageChange(page + 1)} aria-label="下一页" title="下一页"><ChevronRight size={17} /></button>
+      </div>
+    </div>
+  )
 }
 
 function pluginInitial(plugin: ManagedPlugin): string {
@@ -857,6 +888,7 @@ function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onError, onO
   const [sort, setSort] = useState<'stars' | 'updated'>('stars')
   const [repositories, setRepositories] = useState<RepositoryResult[]>([])
   const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState<string | null>(null)
   const [checking, setChecking] = useState<string | null>(null)
@@ -867,12 +899,16 @@ function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onError, onO
   const [targetDialog, setTargetDialog] = useState<{ repo: RepositoryResult; analysis: RepositoryAnalysis } | null>(null)
   const batchRunRef = useRef(0)
 
-  const search = useCallback(async (searchQuery = query, searchSort = sort) => {
+  const search = useCallback(async (searchQuery = query, searchSort = sort, searchPage = page) => {
+    batchRunRef.current += 1
+    setBatchScan(null)
+    setTargetDialog(null)
     setLoading(true)
     try {
-      const result = await api.discoverPlugins(searchQuery, searchSort)
+      const result = await api.discoverPlugins(searchQuery, searchSort, searchPage)
       setRepositories(result.repositories)
       setTotal(result.totalCount)
+      setPage(searchPage)
       setDshInstallation(result.dshInstallation)
       setInstalledRepositories(new Set(result.installedRepositories.map(name => name.toLowerCase())))
     } catch (error) {
@@ -880,9 +916,9 @@ function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onError, onO
     } finally {
       setLoading(false)
     }
-  }, [onError, query, sort])
+  }, [onError, page, query, sort])
 
-  useEffect(() => { void search('', 'stars') }, [])
+  useEffect(() => { void search('', 'stars', 1) }, [])
   useEffect(() => api.onInstallProgress(setInstallProgress), [])
   useEffect(() => () => { batchRunRef.current += 1 }, [])
 
@@ -899,6 +935,10 @@ function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onError, onO
     [repositories],
   )
   const batchRunning = batchScan?.phase === 'running'
+
+  const changePage = (nextPage: number) => {
+    void search(query, sort, nextPage)
+  }
 
   const inspect = async (repo: RepositoryResult) => {
     setChecking(repo.fullName)
@@ -985,26 +1025,26 @@ function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onError, onO
     <div className="page discover-page">
       <PageHeading eyebrow="GITHUB CATALOG" title="发现 DSH 插件" description={`从 GitHub dsh-plugin 主题中浏览 ${total ? total.toLocaleString('zh-CN') : ''} 个公开仓库。安装前请检查仓库说明与来源。`} />
       <div className="discovery-controls">
-        <form className="search-field large" onSubmit={event => { event.preventDefault(); void search() }}>
+        <form className="search-field large" onSubmit={event => { event.preventDefault(); void search(query, sort, 1) }}>
           <Search size={18} />
           <input value={query} disabled={batchRunning} onChange={event => setQuery(event.target.value)} placeholder="搜索名称、作者或说明" aria-label="搜索插件" />
-          {query && <button type="button" disabled={batchRunning} onClick={() => { setQuery(''); void search('', sort) }} aria-label="清除搜索"><X size={16} /></button>}
+          {query && <button type="button" disabled={batchRunning} onClick={() => { setQuery(''); void search('', sort, 1) }} aria-label="清除搜索"><X size={16} /></button>}
           <button type="submit" className="search-submit" disabled={batchRunning}>搜索</button>
         </form>
         <div className="discovery-actions">
           <div className="segmented-control" aria-label="插件排序方式">
-            <button type="button" disabled={batchRunning} className={sort === 'stars' ? 'active' : ''} onClick={() => { setSort('stars'); void search(query, 'stars') }}><Star size={15} />热门</button>
-            <button type="button" disabled={batchRunning} className={sort === 'updated' ? 'active' : ''} onClick={() => { setSort('updated'); void search(query, 'updated') }}><Clock3 size={15} />最近更新</button>
+            <button type="button" disabled={batchRunning} className={sort === 'stars' ? 'active' : ''} onClick={() => { setSort('stars'); void search(query, 'stars', 1) }}><Star size={15} />热门</button>
+            <button type="button" disabled={batchRunning} className={sort === 'updated' ? 'active' : ''} onClick={() => { setSort('updated'); void search(query, 'updated', 1) }}><Clock3 size={15} />最近更新</button>
           </div>
           <button
             type="button"
             className="secondary-button catalog-scan-button"
             disabled={loading || batchRunning || checking !== null || installing !== null || pluginRepositories.length === 0}
             onClick={() => void inspectAll()}
-            title="检测当前目录中的全部第三方插件候选"
+            title="检测当前页中的全部第三方插件候选"
           >
             {batchRunning ? <LoaderCircle className="spin" size={15} /> : <ScanSearch size={15} />}
-            {batchRunning ? `检测 ${batchScan.completed}/${batchScan.total}` : batchScan ? '再次检测全部' : '一键检测全部'}
+            {batchRunning ? `检测 ${batchScan.completed}/${batchScan.total}` : batchScan ? '再次检测当前页' : '检测当前页'}
           </button>
         </div>
       </div>
@@ -1014,7 +1054,7 @@ function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onError, onO
           {batchRunning ? <LoaderCircle className="spin" size={15} /> : batchScan.phase === 'complete' ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
           <span>
             {batchRunning
-              ? `正在检测全部插件候选：${batchScan.completed}/${batchScan.total}`
+              ? `正在检测当前页插件候选：${batchScan.completed}/${batchScan.total}`
               : batchScan.phase === 'complete'
                 ? `检测完成：${batchScan.total} 个候选中有 ${batchScan.available} 个包含可安装组件${batchScan.failed ? `，${batchScan.failed} 个检测失败` : ''}`
                 : `检测已暂停：完成 ${batchScan.completed}/${batchScan.total}，发现 ${batchScan.available} 个可安装组件，${batchScan.failed} 个请求失败`}
@@ -1024,6 +1064,7 @@ function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onError, onO
       )}
 
       <div className="catalog-note"><CircleAlert size={16} /><span>GitHub 主题表示仓库自我声明为 DSH 插件；官方 <code>deepseek-ai/deepseek-harness</code> 会作为 DSH 本体安装到启动器的本地运行目录。</span></div>
+      <CatalogPagination page={page} total={total} loading={loading} disabled={batchRunning || checking !== null || installing !== null} onPageChange={changePage} />
       <section className="repository-list" aria-busy={loading}>
         <div className="repository-headings" aria-hidden="true"><span>仓库</span><span>语言</span><span>活跃度</span><span /></div>
         {loading ? (
@@ -1135,6 +1176,7 @@ function SkillHubView({ analyses, onAnalysis, onInstalled, onError, onOpenReposi
   const [sort, setSort] = useState<'stars' | 'updated'>('stars')
   const [repositories, setRepositories] = useState<SkillRepositoryResult[]>([])
   const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [checking, setChecking] = useState<string | null>(null)
   const [installing, setInstalling] = useState<string | null>(null)
@@ -1144,21 +1186,25 @@ function SkillHubView({ analyses, onAnalysis, onInstalled, onError, onOpenReposi
   const [batchScan, setBatchScan] = useState<BatchScanState | null>(null)
   const batchRunRef = useRef(0)
 
-  const search = useCallback(async (searchQuery = query, searchSort = sort) => {
+  const search = useCallback(async (searchQuery = query, searchSort = sort, searchPage = page) => {
+    batchRunRef.current += 1
+    setBatchScan(null)
+    setTargetDialog(null)
     setLoading(true)
     try {
-      const result = await api.discoverSkills(searchQuery, searchSort)
+      const result = await api.discoverSkills(searchQuery, searchSort, searchPage)
       setRepositories(result.repositories)
       setTotal(result.totalCount)
+      setPage(searchPage)
       setInstalledSkills(result.installedSkills)
     } catch (error) {
       onError(errorText(error))
     } finally {
       setLoading(false)
     }
-  }, [onError, query, sort])
+  }, [onError, page, query, sort])
 
-  useEffect(() => { void search('', 'stars') }, [])
+  useEffect(() => { void search('', 'stars', 1) }, [])
   useEffect(() => {
     const unsubscribe = api.onInstallProgress(progress => {
       if (progress.kind === 'skill') setInstallProgress(progress)
@@ -1169,6 +1215,10 @@ function SkillHubView({ analyses, onAnalysis, onInstalled, onError, onOpenReposi
 
   const installedNames = useMemo(() => new Set(installedSkills.map(skill => skill.name)), [installedSkills])
   const batchRunning = batchScan?.phase === 'running'
+
+  const changePage = (nextPage: number) => {
+    void search(query, sort, nextPage)
+  }
 
   const inspect = async (repo: SkillRepositoryResult) => {
     setChecking(repo.fullName)
@@ -1246,20 +1296,20 @@ function SkillHubView({ analyses, onAnalysis, onInstalled, onError, onOpenReposi
     <div className="page discover-page skill-hub-page">
       <PageHeading eyebrow="SKILL HUB" title="发现 DSH Skills" description={`从 GitHub dsh-skill 主题中浏览 ${total ? total.toLocaleString('zh-CN') : ''} 个公开仓库。只有通过 DSH 格式检查的内容才能安装。`} />
       <div className="discovery-controls">
-        <form className="search-field large" onSubmit={event => { event.preventDefault(); void search() }}>
+        <form className="search-field large" onSubmit={event => { event.preventDefault(); void search(query, sort, 1) }}>
           <Search size={18} />
           <input value={query} disabled={batchRunning} onChange={event => setQuery(event.target.value)} placeholder="搜索名称、作者或说明" aria-label="搜索 Skills" />
-          {query && <button type="button" disabled={batchRunning} onClick={() => { setQuery(''); void search('', sort) }} aria-label="清除搜索"><X size={16} /></button>}
+          {query && <button type="button" disabled={batchRunning} onClick={() => { setQuery(''); void search('', sort, 1) }} aria-label="清除搜索"><X size={16} /></button>}
           <button type="submit" className="search-submit" disabled={batchRunning}>搜索</button>
         </form>
         <div className="discovery-actions">
           <div className="segmented-control" aria-label="Skill 排序方式">
-            <button type="button" disabled={batchRunning} className={sort === 'stars' ? 'active' : ''} onClick={() => { setSort('stars'); void search(query, 'stars') }}><Star size={15} />热门</button>
-            <button type="button" disabled={batchRunning} className={sort === 'updated' ? 'active' : ''} onClick={() => { setSort('updated'); void search(query, 'updated') }}><Clock3 size={15} />最近更新</button>
+            <button type="button" disabled={batchRunning} className={sort === 'stars' ? 'active' : ''} onClick={() => { setSort('stars'); void search(query, 'stars', 1) }}><Star size={15} />热门</button>
+            <button type="button" disabled={batchRunning} className={sort === 'updated' ? 'active' : ''} onClick={() => { setSort('updated'); void search(query, 'updated', 1) }}><Clock3 size={15} />最近更新</button>
           </div>
-          <button type="button" className="secondary-button catalog-scan-button" disabled={loading || batchRunning || checking !== null || installing !== null || repositories.length === 0} onClick={() => void inspectAll()} title="检测当前目录中的全部 Skill 候选">
+          <button type="button" className="secondary-button catalog-scan-button" disabled={loading || batchRunning || checking !== null || installing !== null || repositories.length === 0} onClick={() => void inspectAll()} title="检测当前页中的全部 Skill 候选">
             {batchRunning ? <LoaderCircle className="spin" size={15} /> : <ScanSearch size={15} />}
-            {batchRunning ? `检测 ${batchScan.completed}/${batchScan.total}` : batchScan ? '再次检测全部' : '一键检测全部'}
+            {batchRunning ? `检测 ${batchScan.completed}/${batchScan.total}` : batchScan ? '再次检测当前页' : '检测当前页'}
           </button>
         </div>
       </div>
@@ -1268,7 +1318,7 @@ function SkillHubView({ analyses, onAnalysis, onInstalled, onError, onOpenReposi
         <div className={`batch-scan-status ${batchScan.phase}`} role="status" aria-live="polite">
           {batchRunning ? <LoaderCircle className="spin" size={15} /> : batchScan.phase === 'complete' ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
           <span>{batchRunning
-            ? `正在检测全部 Skill 候选：${batchScan.completed}/${batchScan.total}`
+            ? `正在检测当前页 Skill 候选：${batchScan.completed}/${batchScan.total}`
             : batchScan.phase === 'complete'
               ? `检测完成：${batchScan.total} 个候选中有 ${batchScan.available} 个包含有效 Skill${batchScan.failed ? `，${batchScan.failed} 个检测失败` : ''}`
               : `检测已暂停：完成 ${batchScan.completed}/${batchScan.total}，发现 ${batchScan.available} 个有效 Skill 仓库，${batchScan.failed} 个请求失败`}</span>
@@ -1277,6 +1327,7 @@ function SkillHubView({ analyses, onAnalysis, onInstalled, onError, onOpenReposi
       )}
 
       <div className="catalog-note skill-hub-note"><BookOpenCheck size={16} /><span>检测会核对 <code>SKILL.md</code> 或单文件 Markdown 的 YAML frontmatter：必须包含 kebab-case 的 <code>name</code> 与 <code>description</code>。通过后安装到 <code>DSH_HOME/skills</code>。</span></div>
+      <CatalogPagination page={page} total={total} loading={loading} disabled={batchRunning || checking !== null || installing !== null} onPageChange={changePage} />
       <section className="repository-list" aria-busy={loading}>
         <div className="repository-headings" aria-hidden="true"><span>仓库</span><span>语言</span><span>活跃度</span><span /></div>
         {loading ? (

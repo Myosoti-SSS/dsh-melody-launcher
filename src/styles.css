@@ -1488,6 +1488,62 @@ input:focus-visible {
   font-family: Consolas, monospace;
 }
 
+.catalog-pagination {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 0 3px;
+  gap: 16px;
+}
+
+.catalog-pagination p {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.catalog-page-controls {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: 34px minmax(88px, auto) 34px;
+  align-items: center;
+  gap: 6px;
+}
+
+.catalog-page-controls span {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 750;
+  text-align: center;
+}
+
+.catalog-page-controls button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--muted);
+  background: #fff;
+  cursor: pointer;
+}
+
+.catalog-page-controls button:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-strong);
+}
+
+.catalog-page-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .repository-list {
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -2674,6 +2730,12 @@ input:focus-visible {
 
   .batch-scan-track {
     display: none;
+  }
+
+  .catalog-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
   }
 
   .repository-list {

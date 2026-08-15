@@ -218,11 +218,13 @@ export const demoApi: LauncherApi = {
     demoPlugins = renumber([...active, ...inactive])
     return profile()
   },
-  discoverPlugins: async (query, sort): Promise<DiscoveryResult> => {
+  discoverPlugins: async (query, sort, page): Promise<DiscoveryResult> => {
     const needle = query.trim().toLowerCase()
-    const repositories = demoRepositories
+    const matchingRepositories = demoRepositories
       .filter(repo => !needle || `${repo.fullName} ${repo.description}`.toLowerCase().includes(needle))
       .sort((a, b) => sort === 'stars' ? b.stars - a.stars : b.updatedAt.localeCompare(a.updatedAt))
+    const start = (Math.max(1, page) - 1) * 30
+    const repositories = matchingRepositories.slice(start, start + 30)
     return {
       repositories,
       totalCount: 916,
@@ -275,11 +277,13 @@ export const demoApi: LauncherApi = {
     demoPlugins = renumber(demoPlugins.filter(plugin => plugin.packageName !== packageName))
     return profile()
   },
-  discoverSkills: async (query, sort): Promise<SkillDiscoveryResult> => {
+  discoverSkills: async (query, sort, page): Promise<SkillDiscoveryResult> => {
     const needle = query.trim().toLowerCase()
-    const repositories = demoSkillRepositories
+    const matchingRepositories = demoSkillRepositories
       .filter(repo => !needle || `${repo.fullName} ${repo.description}`.toLowerCase().includes(needle))
       .sort((left, right) => sort === 'stars' ? right.stars - left.stars : right.updatedAt.localeCompare(left.updatedAt))
+    const start = (Math.max(1, page) - 1) * 30
+    const repositories = matchingRepositories.slice(start, start + 30)
     return { repositories, totalCount: demoSkillRepositories.length, rateRemaining: 32, installedSkills: demoInstalledSkills }
   },
   analyzeSkill: async (fullName, defaultBranch) => demoSkillAnalysis(fullName, defaultBranch),
