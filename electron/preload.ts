@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, IPC_EVENTS } from '../src/constants'
-import type { AppSettings, InstallProgress, LauncherApi, RuntimeOutput, RuntimeState, WindowMode } from '../src/types'
+import type {
+  AiInstallEvent,
+  AppSettings,
+  InstallProgress,
+  LauncherApi,
+  RuntimeOutput,
+  RuntimeState,
+  WindowMode,
+} from '../src/types'
 
 /**
  * 渲染层与主进程之间唯一的桥。
@@ -25,12 +33,10 @@ const api: LauncherApi = {
   readProfile: () => ipcRenderer.invoke(IPC.profileRead),
   togglePlugin: (packageName, enabled) => ipcRenderer.invoke(IPC.profileToggle, { packageName, enabled }),
   reorderPlugins: packageNames => ipcRenderer.invoke(IPC.profileReorder, packageNames),
-  discoverPlugins: (query, sort, page) => ipcRenderer.invoke(IPC.pluginsDiscover, { query, sort, page }),
-  analyzePlugin: (fullName, defaultBranch) => ipcRenderer.invoke(IPC.pluginsAnalyze, { fullName, defaultBranch }),
+  discoverCatalog: (query, sort, page) => ipcRenderer.invoke(IPC.catalogDiscover, { query, sort, page }),
+  analyzeCatalogRepository: (fullName, defaultBranch) => ipcRenderer.invoke(IPC.catalogAnalyze, { fullName, defaultBranch }),
   installPlugin: request => ipcRenderer.invoke(IPC.pluginsInstall, request),
   uninstallPlugin: packageName => ipcRenderer.invoke(IPC.pluginsUninstall, packageName),
-  discoverSkills: (query, sort, page) => ipcRenderer.invoke(IPC.skillsDiscover, { query, sort, page }),
-  analyzeSkill: (fullName, defaultBranch) => ipcRenderer.invoke(IPC.skillsAnalyze, { fullName, defaultBranch }),
   installSkill: request => ipcRenderer.invoke(IPC.skillsInstall, request),
   readInstalledSkills: () => ipcRenderer.invoke(IPC.skillsReadInstalled),
   getRuntimeState: () => ipcRenderer.invoke(IPC.runtimeState),
@@ -40,9 +46,16 @@ const api: LauncherApi = {
   openPath: path => ipcRenderer.invoke(IPC.openPath, path),
   setWindowMode: (mode: WindowMode) => ipcRenderer.invoke(IPC.windowSetMode, mode),
   closeWindow: () => ipcRenderer.invoke(IPC.windowClose),
+  aiInstall: input => ipcRenderer.invoke(IPC.aiInstall, input),
+  aiApprove: (requestId, allow) => ipcRenderer.invoke(IPC.aiApprove, requestId, allow),
+  aiCancel: () => ipcRenderer.invoke(IPC.aiCancel),
+  aiRollback: () => ipcRenderer.invoke(IPC.aiRollback),
+  aiStatus: () => ipcRenderer.invoke(IPC.aiStatus),
+  aiHasSnapshot: () => ipcRenderer.invoke(IPC.aiHasSnapshot),
   onRuntimeOutput: listener => subscribe<RuntimeOutput>(IPC_EVENTS.runtimeOutput, listener),
   onRuntimeState: listener => subscribe<RuntimeState>(IPC_EVENTS.runtimeStateChanged, listener),
   onInstallProgress: listener => subscribe<InstallProgress>(IPC_EVENTS.installProgress, listener),
+  onAiInstallEvent: listener => subscribe<AiInstallEvent>(IPC_EVENTS.aiInstallEvent, listener),
 }
 
 contextBridge.exposeInMainWorld('launcher', api)

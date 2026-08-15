@@ -28,12 +28,12 @@ jobs:
         run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.meta.outputs.tag }}
 
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: npm
@@ -51,7 +51,7 @@ jobs:
           echo "版本校验通过：$version"
 
       - name: 缓存 Electron 二进制
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~\AppData\Local\electron\Cache
@@ -93,7 +93,7 @@ jobs:
           fi
 
       - name: 上传产物副本
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: DSH-Launcher-${{ steps.meta.outputs.tag }}
           path: release/*.exe

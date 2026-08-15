@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { errorText, formatRelativeTime, formatStars, pluginInitial } from '../src/lib/format'
+import { errorText, formatBytes, formatRelativeTime, formatStars, pluginInitial } from '../src/lib/format'
 import type { ManagedPlugin } from '../src/types'
 
 const plugin = (displayName: string): ManagedPlugin => ({
@@ -24,6 +24,15 @@ describe('formatStars', () => {
     expect(formatStars(1000)).toBe('1.0k')
     expect(formatStars(1234)).toBe('1.2k')
     expect(formatStars(45678)).toBe('45.7k')
+  })
+})
+
+describe('formatBytes', () => {
+  it('formats downloaded byte counts compactly', () => {
+    expect(formatBytes(0)).toBe('0 B')
+    expect(formatBytes(1024)).toBe('1.00 KB')
+    expect(formatBytes(75_475_520)).toBe('72.0 MB')
+    expect(formatBytes(1_746.29 * 1024 ** 2)).toBe('1.71 GB')
   })
 })
 

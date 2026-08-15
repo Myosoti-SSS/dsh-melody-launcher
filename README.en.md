@@ -82,9 +82,12 @@ The problems it removes:
 - **Process lifecycle management** — start, stop, and stream live logs (stdout/stderr, leveled); the DSH process is shut down cleanly when the launcher exits
 - **Auto-open the web UI** — detects the local service URL from the log stream and opens it in your browser (optional)
 
-### Plugin Management
+### Unified Resource Market and Plugin Management
 
-- **Plugin discovery** — queries the GitHub Search API for the [`dsh-plugin`](https://github.com/topics/dsh-plugin) topic, sortable by stars or last update
+- **Unified discovery** — searches both [`dsh-plugin`](https://github.com/topics/dsh-plugin) and [`dsh-skill`](https://github.com/topics/dsh-skill) and combines them in one catalog
+- **Content-based classification** — topics are candidate sources only; repository inspection labels each result as `Plugin`, `Skill`, `Plugin + Skill`, `DSH core`, or `Invalid`
+- **Type-routed installation** — plugins go to a DSH profile, skills go to `$DSH_HOME/skills`, and hybrid repositories always require explicit component selection
+- **Strict Skill validation** — validates directory `SKILL.md` bundles and flat Markdown skills, including required YAML frontmatter
 - **Staged install progress** — `preparing → resolving → downloading → configuring → complete`, with percentage and live status text
 - **Load order control** — reads and writes the official DSH profile directly to toggle plugins and reorder bundles
 - **Disable ≠ uninstall** — disabling only removes a plugin from the ordered load list; local dependencies stay on disk and can be re-enabled at any time. Only an explicit uninstall deletes files
@@ -119,9 +122,9 @@ The whole flow requires **no pre-installed DSH, Node.js, npm, or npx** — the l
 
 Enter your DeepSeek API key on the launch page. It is written to the official DSH credentials file at `$DSH_HOME/.credentials.yaml`.
 
-### 4. Install plugins (optional)
+### 4. Install Plugins or Skills (optional)
 
-Open the **Discover** view to search for and install third-party plugins, then use **Load Order** to toggle and reorder them.
+Open **Resource Market**, inspect a repository to identify its real type, and install the selected Plugin or Skill. Installed Plugins remain configurable under **Load Order**.
 
 ### 5. Launch
 

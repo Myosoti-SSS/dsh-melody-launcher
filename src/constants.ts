@@ -13,6 +13,12 @@ export const DEFAULT_PROFILE_NAME = 'web'
 /** 渲染层保留的最大日志条数，超出后丢弃最旧的记录。 */
 export const MAX_LOG_LINES = 500
 
+/**
+ * AI 尝试安装功能的开关。DSH ACP 相关包均为 rc 预览版，若接口漂移或出现问题，
+ * 关掉这里即可隐藏入口，不影响普通安装。
+ */
+export const AI_INSTALL_ENABLED = true
+
 /** 尚未取到主进程状态时的占位值。 */
 export const EMPTY_RUNTIME_STATE = { running: false, pid: null, startedAt: null, url: null } as const
 export const EMPTY_DSH_INSTALLATION = { installed: false, version: null, executable: null, source: null } as const
@@ -32,12 +38,16 @@ export const IPC = {
   profileRead: 'profile:read',
   profileToggle: 'profile:toggle',
   profileReorder: 'profile:reorder',
-  pluginsDiscover: 'plugins:discover',
-  pluginsAnalyze: 'plugins:analyze',
+  catalogDiscover: 'catalog:discover',
+  catalogAnalyze: 'catalog:analyze',
   pluginsInstall: 'plugins:install',
   pluginsUninstall: 'plugins:uninstall',
-  skillsDiscover: 'skills:discover',
-  skillsAnalyze: 'skills:analyze',
+  aiInstall: 'ai:install',
+  aiApprove: 'ai:approve',
+  aiCancel: 'ai:cancel',
+  aiRollback: 'ai:rollback',
+  aiStatus: 'ai:status',
+  aiHasSnapshot: 'ai:has-snapshot',
   skillsInstall: 'skills:install',
   skillsReadInstalled: 'skills:read-installed',
   runtimeState: 'runtime:state',
@@ -54,4 +64,5 @@ export const IPC_EVENTS = {
   runtimeOutput: 'runtime:output',
   runtimeStateChanged: 'runtime:state-changed',
   installProgress: 'plugins:install-progress',
+  aiInstallEvent: 'ai:install-event',
 } as const

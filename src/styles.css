@@ -1488,6 +1488,12 @@ input:focus-visible {
   font-family: Consolas, monospace;
 }
 
+.catalog-note.catalog-warning {
+  color: var(--danger);
+  border-color: #e5c8c2;
+  background: var(--danger-soft);
+}
+
 .catalog-pagination {
   display: flex;
   min-height: 38px;
@@ -1623,6 +1629,12 @@ input:focus-visible {
   background: #edf7f8;
 }
 
+.repo-icon.hybrid-icon {
+  color: #795b1c;
+  border-color: #e2d3a4;
+  background: #fbf6e8;
+}
+
 .repo-main > div:last-child {
   min-width: 0;
 }
@@ -1670,10 +1682,29 @@ input:focus-visible {
 }
 
 .repository-analysis-badge.ready,
-.repository-analysis-badge.choice {
+.repository-analysis-badge.choice,
+.repository-analysis-badge.plugin {
   color: var(--accent);
   border-color: #bfd8ca;
   background: #eef7f2;
+}
+
+.repository-analysis-badge.skill {
+  color: #236a76;
+  border-color: #bddae0;
+  background: #edf7f8;
+}
+
+.repository-analysis-badge.hybrid {
+  color: #795b1c;
+  border-color: #e2d3a4;
+  background: #fbf6e8;
+}
+
+.repository-analysis-badge.pending {
+  color: var(--quiet);
+  border-style: dashed;
+  background: #fafbfa;
 }
 
 .repository-analysis-badge.dynamic {
@@ -1738,6 +1769,17 @@ input:focus-visible {
 
 .repository-analysis-note.invalid {
   color: var(--danger);
+}
+
+.repository-analysis-note .analysis-warning {
+  width: 100%;
+  color: #8b5c15;
+}
+
+.topic-list span.candidate-topic {
+  color: #365b49;
+  border: 1px solid #d4e0d9;
+  background: #f4f8f5;
 }
 
 .topic-list {
@@ -1879,6 +1921,16 @@ input:focus-visible {
 .install-progress > div:first-child strong {
   font-family: Consolas, monospace;
   font-size: 9px;
+}
+
+.install-progress-size {
+  overflow: hidden;
+  color: var(--quiet);
+  font-family: Consolas, monospace;
+  font-size: 9px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .install-progress.error > div:first-child {
@@ -2179,6 +2231,43 @@ input:focus-visible {
   color: var(--muted);
   font-size: 11px;
   line-height: 17px;
+}
+
+.catalog-target-dialog .modal-content {
+  max-height: min(66vh, 620px);
+  overflow-y: auto;
+}
+
+.catalog-target-section + .catalog-target-section {
+  margin-top: 16px;
+}
+
+.catalog-target-section > h3 {
+  display: flex;
+  align-items: center;
+  margin: 0 0 7px;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.catalog-target-unavailable {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  padding: 8px 10px;
+  gap: 7px;
+  border: 1px solid #ead9bb;
+  border-radius: 6px;
+  color: #75521d;
+  background: #fbf6eb;
+  font-size: 10px;
+}
+
+.plugin-target-icon.skill-icon {
+  color: #236a76;
+  border-color: #bddae0;
+  background: #edf7f8;
 }
 
 .plugin-target-list {
@@ -2819,4 +2908,199 @@ input:focus-visible {
     margin-bottom: 10px;
     gap: 5px;
   }
+}
+
+/* ---- AI 尝试安装 ---- */
+
+.ai-ready-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ai-ready-actions .ai-try-button {
+  min-width: 78px;
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.ai-install-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, calc(100vw - 32px));
+}
+
+.ai-install-dialog > header {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ai-install-dialog > header > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.ai-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.ai-phase-badge {
+  padding: 2px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+  background: var(--surface-strong);
+}
+
+.ai-phase-badge.preparing,
+.ai-phase-badge.running {
+  color: var(--blue);
+  border-color: #b7cfdd;
+  background: var(--blue-soft);
+}
+
+.ai-phase-badge.done {
+  color: var(--accent);
+  border-color: #b9d7c7;
+  background: var(--accent-soft);
+}
+
+.ai-phase-badge.error {
+  color: var(--danger);
+  border-color: #e4bcbc;
+  background: var(--danger-soft);
+}
+
+.ai-install-content {
+  display: flex;
+  min-height: 320px;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.ai-install-subject {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.ai-install-subject small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 450;
+  line-height: 16px;
+}
+
+.ai-install-logs {
+  flex: 1;
+  min-height: 200px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+
+.ai-log-empty {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--quiet);
+  font-size: 12px;
+}
+
+.ai-log-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 3px 0;
+  color: #3c4841;
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.ai-log-entry svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.ai-log-entry.auto-approved {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.ai-log-entry.error {
+  color: var(--danger);
+}
+
+.ai-approval-card {
+  padding: 12px 13px;
+  border: 1px solid #e3c98e;
+  border-radius: 7px;
+  background: #fffdf5;
+}
+
+.ai-approval-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--amber);
+}
+
+.ai-approval-head code {
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #5d4a1c;
+  background: var(--amber-soft);
+}
+
+.ai-approval-args {
+  margin: 8px 0 6px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: #f6f1e3;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-approval-card p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ai-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ai-approval-actions .danger-button,
+.ai-approval-actions .primary-command {
+  min-height: 32px;
+  padding: 0 14px;
+  font-size: 12px;
 }

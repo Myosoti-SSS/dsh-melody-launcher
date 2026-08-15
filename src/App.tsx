@@ -5,18 +5,20 @@ import { AppHeader } from './components/AppHeader'
 import { LauncherHome } from './components/LauncherHome'
 import { SideNavigation } from './components/SideNavigation'
 import { Toast } from './components/Toast'
+import { AiInstallDialog } from './components/dialogs/AiInstallDialog'
 import { ConfirmDialog } from './components/dialogs/ConfirmDialog'
 import { CredentialDialog } from './components/dialogs/CredentialDialog'
 import { SettingsDialog } from './components/dialogs/SettingsDialog'
 import { DSH_REPOSITORY } from './constants'
+import { useAiInstall } from './hooks/use-ai-install'
 import { BUSY } from './hooks/use-async-action'
 import { useLauncherStore } from './hooks/use-launcher-store'
 import { useNavigation } from './hooks/use-navigation'
-import type { ManagedPlugin, RepositoryAnalysis, SkillRepositoryAnalysis } from './types'
+import { isInstallProgressActive } from './lib/install-progress'
+import type { CatalogRepositoryAnalysis, ManagedPlugin } from './types'
 import { DiscoverView } from './views/DiscoverView'
 import { PluginsView } from './views/PluginsView'
 import { RuntimeView } from './views/RuntimeView'
-import { SkillHubView } from './views/SkillHubView'
 
 /**
  * 应用根。
@@ -36,16 +38,18 @@ function LauncherShell() {
   const api = useLauncherApi()
   const store = useLauncherStore()
   const navigation = useNavigation(message => store.showToast({ kind: 'error', message }))
+  // AI 可能改 profile（安装组件），任务结束时刷新一次；toast 复用 store 的唯一实例。
+  const ai = useAiInstall(() => { void store.refreshProfile() }, store.showToast)
 
   // 对话框开关是纯展示状态，不进 store。
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [credentialOpen, setCredentialOpen] = useState(false)
   const [confirmingRemoval, setConfirmingRemoval] = useState<ManagedPlugin | null>(null)
   // 仓库结构检测结果由各视图发起，App 统一持有，避免切页后丢失。
-  const [repositoryAnalyses, setRepositoryAnalyses] = useState<Record<string, RepositoryAnalysis>>({})
-  const [skillRepositoryAnalyses, setSkillRepositoryAnalyses] = useState<Record<string, SkillRepositoryAnalysis>>({})
+  const [repositoryAnalyses, setRepositoryAnalyses] = useState<Record<string, CatalogRepositoryAnalysis>>({})
 
   const installingDsh = store.busy === BUSY.dshInstall
+    || (isInstallProgressActive(store.installProgress) && store.installProgress.kind === 'dsh')
   const runtimeBusy = store.busy === BUSY.runtime || installingDsh
 
   const toggleRuntime = async () => {
@@ -131,11 +135,17 @@ function LauncherShell() {
                 <DiscoverView
                   profile={profile}
                   analyses={repositoryAnalyses}
+                  installProgress={store.installProgress}
+                  installedRepositories={store.installedRepositories}
+                  installedSkills={store.installedSkills}
                   onAnalysis={(repository, analysis) => {
                     setRepositoryAnalyses(current => ({ ...current, [repository]: analysis }))
                   }}
-                  onInstalled={result => {
-                    store.applyInstallResult(result)
+                  onInstallationState={store.adoptCatalogInstallationState}
+                  onInstallStarted={store.beginInstall}
+                  onInstallFinished={store.finishInstall}
+                  onPluginInstalled={(repository, result) => {
+                    store.applyCatalogPluginInstall(repository, result)
                     store.showToast({
                       kind: 'success',
                       message: result.kind === 'dsh'
@@ -143,19 +153,15 @@ function LauncherShell() {
                         : `${result.packageName ?? '插件'} 已安装到 ${result.installedProfileName ?? settings.profileName} Profile。`,
                     })
                   }}
-                  onError={message => store.showToast({ kind: 'error', message })}
-                  onOpenRepository={url => void api.openExternal(url)}
-                />
-              )}
-              {navigation.view === 'skills' && (
-                <SkillHubView
-                  analyses={skillRepositoryAnalyses}
-                  onAnalysis={(repository, analysis) => {
-                    setSkillRepositoryAnalyses(current => ({ ...current, [repository]: analysis }))
+                  onSkillInstalled={result => {
+                    store.applyCatalogSkillInstall(result)
+                    store.showToast({ kind: 'success', message: `${result.installedSkill.name} 已安装到本地 Skill 目录。` })
                   }}
-                  onInstalled={skill => store.showToast({ kind: 'success', message: `${skill.name} 已安装到本地 Skill 目录。` })}
                   onError={message => store.showToast({ kind: 'error', message })}
                   onOpenRepository={url => void api.openExternal(url)}
+                  onAiInstall={repo => { void ai.start(repo.fullName, repo.defaultBranch) }}
+                  aiRepository={ai.active ? ai.status.repository : null}
+                  aiActive={ai.active}
                 />
               )}
               {navigation.view === 'runtime' && (
@@ -201,6 +207,19 @@ function LauncherShell() {
             setConfirmingRemoval(null)
             void store.uninstallPlugin(plugin)
           }}
+        />
+      )}
+      {(ai.active || ai.settled) && (
+        <AiInstallDialog
+          status={ai.status}
+          logs={ai.logs}
+          pendingApproval={ai.pendingApproval}
+          hasSnapshot={ai.hasSnapshot}
+          busy={ai.busy !== null}
+          onApprove={ai.approve}
+          onCancel={ai.cancel}
+          onRollback={() => void ai.rollback()}
+          onClose={ai.reset}
         />
       )}
       {store.toast && <Toast toast={store.toast} onClose={store.dismissToast} />}

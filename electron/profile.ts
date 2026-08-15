@@ -159,7 +159,7 @@ async function updateBundles(
 ): Promise<ProfileState> {
   const { profileDir, manifestPath } = profilePaths(dshHome, profileName)
   const manifest = await readJson<PackageManifest>(manifestPath)
-  if (!manifest) throw new Error('此配置尚未初始化。请先启动 DSH，或从“发现插件”安装一个插件。')
+  if (!manifest) throw new Error('此配置尚未初始化。请先启动 DSH，或从“资源市场”安装一个 Plugin。')
 
   const existing = [...(manifest.dsh?.profile?.bundles ?? [])]
   const next = transform(existing, manifest)

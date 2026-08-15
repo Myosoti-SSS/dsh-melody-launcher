@@ -1,4 +1,4 @@
-export type ViewName = 'plugins' | 'discover' | 'skills' | 'runtime'
+export type ViewName = 'plugins' | 'discover' | 'runtime'
 export type WindowMode = 'launcher' | 'manager'
 
 export interface AppSettings {
@@ -39,7 +39,10 @@ export interface ProfileState {
   disabledCount: number
 }
 
-export interface RepositoryResult {
+export type CatalogCandidateType = 'plugin' | 'skill'
+export type CatalogKind = 'plugin' | 'skill' | 'hybrid' | 'dsh' | 'invalid'
+
+export interface CatalogRepositoryResult {
   id: number
   fullName: string
   name: string
@@ -47,11 +50,14 @@ export interface RepositoryResult {
   description: string
   url: string
   stars: number
+  /** GitHub Search API reports repository size in kilobytes. */
+  sizeKb?: number
   language: string | null
   updatedAt: string
   topics: string[]
   defaultBranch: string
-  kind: 'plugin' | 'dsh'
+  kind: 'repository' | 'dsh'
+  candidateTypes: CatalogCandidateType[]
 }
 
 export type PluginInstallability = 'ready' | 'choice' | 'dynamic' | 'application' | 'invalid'
@@ -93,28 +99,6 @@ export interface DshInstallationStatus {
   source: 'launcher' | 'system' | null
 }
 
-export interface DiscoveryResult {
-  repositories: RepositoryResult[]
-  totalCount: number
-  rateRemaining?: number
-  dshInstallation: DshInstallationStatus
-  installedRepositories: string[]
-}
-
-export interface SkillRepositoryResult {
-  id: number
-  fullName: string
-  name: string
-  owner: string
-  description: string
-  url: string
-  stars: number
-  language: string | null
-  updatedAt: string
-  topics: string[]
-  defaultBranch: string
-}
-
 export interface SkillInstallTarget {
   id: string
   name: string
@@ -143,13 +127,6 @@ export interface InstalledSkill {
   userInvocable: boolean
 }
 
-export interface SkillDiscoveryResult {
-  repositories: SkillRepositoryResult[]
-  totalCount: number
-  rateRemaining?: number
-  installedSkills: InstalledSkill[]
-}
-
 export interface SkillInstallRequest {
   repository: string
   defaultBranch: string
@@ -161,6 +138,28 @@ export interface SkillInstallResult {
   installedSkills: InstalledSkill[]
 }
 
+export interface CatalogRepositoryAnalysis {
+  repository: string
+  defaultBranch: string
+  kind: CatalogKind
+  summary: string
+  pluginAnalysis: RepositoryAnalysis | null
+  skillAnalysis: SkillRepositoryAnalysis | null
+  warnings: string[]
+}
+
+export interface CatalogDiscoveryResult {
+  repositories: CatalogRepositoryResult[]
+  topicTotals: Record<CatalogCandidateType, number>
+  page: number
+  pageCount: number
+  rateRemaining?: number
+  warnings: string[]
+  dshInstallation: DshInstallationStatus
+  installedRepositories: string[]
+  installedSkills: InstalledSkill[]
+}
+
 export interface InstallProgress {
   repository: string
   kind: 'plugin' | 'dsh' | 'skill'
@@ -168,6 +167,8 @@ export interface InstallProgress {
   percent: number
   message: string
   indeterminate?: boolean
+  downloadedBytes?: number
+  totalBytes?: number
 }
 
 export interface RepositoryInstallResult {
@@ -187,10 +188,44 @@ export interface RuntimeState {
 }
 
 export interface RuntimeOutput {
-  channel: 'runtime' | 'plugin'
+  channel: 'runtime' | 'plugin' | 'ai'
   level: 'info' | 'error' | 'success'
   text: string
   timestamp: string
+}
+
+export type AiInstallPhase = 'idle' | 'preparing' | 'running' | 'done' | 'cancelled' | 'error'
+
+export interface AiInstallStatus {
+  phase: AiInstallPhase
+  repository: string | null
+  startedAt: string | null
+  sessionId: string | null
+  message: string
+}
+
+/** 渲染层看到的待审批请求（args 已脱敏截断）。 */
+export interface AiApprovalRequest {
+  id: string
+  toolName: string
+  toolKind: string | null
+  args: string
+  reason: string
+}
+
+export type AiInstallEvent =
+  | { kind: 'status'; status: AiInstallStatus }
+  | { kind: 'log'; text: string }
+  | { kind: 'auto-approved'; toolName: string; reason: string }
+  | { kind: 'approval'; request: AiApprovalRequest }
+  | { kind: 'snapshot'; snapshotId: string }
+  | { kind: 'done'; message: string }
+  | { kind: 'cancelled'; message: string }
+  | { kind: 'error'; message: string }
+
+export interface AiInstallResult {
+  ok: boolean
+  message: string
 }
 
 export interface LauncherApi {
@@ -204,12 +239,10 @@ export interface LauncherApi {
   readProfile(): Promise<ProfileState>
   togglePlugin(packageName: string, enabled: boolean): Promise<ProfileState>
   reorderPlugins(packageNames: string[]): Promise<ProfileState>
-  discoverPlugins(query: string, sort: 'stars' | 'updated', page: number): Promise<DiscoveryResult>
-  analyzePlugin(fullName: string, defaultBranch: string): Promise<RepositoryAnalysis>
+  discoverCatalog(query: string, sort: 'stars' | 'updated', page: number): Promise<CatalogDiscoveryResult>
+  analyzeCatalogRepository(fullName: string, defaultBranch: string): Promise<CatalogRepositoryAnalysis>
   installPlugin(request: string | PluginInstallRequest): Promise<RepositoryInstallResult>
   uninstallPlugin(packageName: string): Promise<ProfileState>
-  discoverSkills(query: string, sort: 'stars' | 'updated', page: number): Promise<SkillDiscoveryResult>
-  analyzeSkill(fullName: string, defaultBranch: string): Promise<SkillRepositoryAnalysis>
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
   readInstalledSkills(): Promise<InstalledSkill[]>
   getRuntimeState(): Promise<RuntimeState>
@@ -219,9 +252,16 @@ export interface LauncherApi {
   openPath(path: string): Promise<void>
   setWindowMode(mode: WindowMode): Promise<void>
   closeWindow(): Promise<void>
+  aiInstall(input: { repository: string; defaultBranch: string }): Promise<AiInstallResult>
+  aiApprove(requestId: string, allow: boolean): Promise<boolean>
+  aiCancel(): Promise<void>
+  aiRollback(): Promise<{ restored: number; profileName: string }>
+  aiStatus(): Promise<AiInstallStatus>
+  aiHasSnapshot(): Promise<boolean>
   onRuntimeOutput(listener: (output: RuntimeOutput) => void): () => void
   onRuntimeState(listener: (state: RuntimeState) => void): () => void
   onInstallProgress(listener: (progress: InstallProgress) => void): () => void
+  onAiInstallEvent(listener: (event: AiInstallEvent) => void): () => void
 }
 
 declare global {

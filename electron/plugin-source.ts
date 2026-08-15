@@ -6,6 +6,16 @@ import AdmZip from 'adm-zip'
 import type { PluginInstallTarget } from '../src/types'
 import { isSafeRepositoryName } from './profile'
 
+export interface PluginSourceProgress {
+  percent: number
+  message: string
+  indeterminate?: boolean
+  downloadedBytes?: number
+  totalBytes?: number
+}
+
+type ProgressListener = (progress: PluginSourceProgress) => void
+
 function assertInside(root: string, target: string): void {
   const resolvedRoot = path.resolve(root)
   const resolvedTarget = path.resolve(target)
@@ -26,14 +36,15 @@ async function downloadArchive(
   repository: string,
   commit: string,
   destination: string,
-  onProgress: (percent: number, message: string) => void,
+  onProgress: ProgressListener,
   fetchImpl: typeof fetch,
 ): Promise<void> {
   const response = await fetchImpl(`https://codeload.github.com/${repository}/zip/${commit}`, {
     headers: { 'User-Agent': 'DSH-Launcher' },
   })
   if (!response.ok || !response.body) throw new Error(`下载插件仓库失败（HTTP ${response.status}）。`)
-  const total = Number(response.headers.get('content-length'))
+  const declaredTotal = Number(response.headers.get('content-length'))
+  const total = Number.isFinite(declaredTotal) && declaredTotal > 0 ? declaredTotal : undefined
   const writer = createWriteStream(destination, { flags: 'wx' })
   const reader = response.body.getReader()
   let received = 0
@@ -43,10 +54,16 @@ async function downloadArchive(
       if (chunk.done) break
       received += chunk.value.byteLength
       if (!writer.write(Buffer.from(chunk.value))) await once(writer, 'drain')
-      if (Number.isFinite(total) && total > 0) {
-        const percent = 22 + Math.round(Math.min(1, received / total) * 38)
-        onProgress(percent, `正在下载仓库 ${Math.round(received / total * 100)}%`)
-      }
+      const percent = total == null
+        ? 20
+        : 22 + Math.round(Math.min(1, received / total) * 38)
+      onProgress({
+        percent,
+        message: total == null ? '正在下载仓库' : `正在下载仓库 ${Math.round(received / total * 100)}%`,
+        indeterminate: total == null,
+        downloadedBytes: received,
+        totalBytes: total,
+      })
     }
     writer.end()
     await once(writer, 'finish')
@@ -60,7 +77,7 @@ export async function prepareSubdirectoryPlugin(
   cacheRoot: string,
   repository: string,
   target: PluginInstallTarget,
-  onProgress: (percent: number, message: string) => void,
+  onProgress: ProgressListener,
   fetchImpl: typeof fetch = fetch,
 ): Promise<string> {
   if (!isSafeRepositoryName(repository) || !/^[a-f0-9]{40}$/i.test(target.commit)) {
@@ -86,9 +103,9 @@ export async function prepareSubdirectoryPlugin(
   assertInside(cacheRoot, extractPath)
 
   try {
-    onProgress(20, '正在下载包含插件组件的仓库')
+    onProgress({ percent: 20, message: '正在下载包含插件组件的仓库', indeterminate: true })
     await downloadArchive(repository, target.commit, zipPath, onProgress, fetchImpl)
-    onProgress(64, '正在解压插件组件')
+    onProgress({ percent: 64, message: '正在解压插件组件' })
     await mkdir(extractPath, { recursive: true })
     new AdmZip(zipPath).extractAllTo(extractPath, true)
     const roots = (await readdir(extractPath, { withFileTypes: true })).filter(entry => entry.isDirectory())
@@ -99,7 +116,7 @@ export async function prepareSubdirectoryPlugin(
     if (!await exists(path.join(extractedPackage, 'package.json'))) throw new Error('仓库子目录中没有找到 package.json。')
     if (await exists(destination)) await rm(destination, { recursive: true, force: true })
     await rename(extractedRoot, destination)
-    onProgress(68, '插件组件已准备完成')
+    onProgress({ percent: 68, message: '插件组件已准备完成' })
     return packageDirectory
   } finally {
     await rm(zipPath, { force: true }).catch(() => undefined)
