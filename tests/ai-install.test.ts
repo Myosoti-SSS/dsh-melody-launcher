@@ -266,7 +266,8 @@ describe('renderAcpComposition', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildAcpServerCommand', () => {
-  it('Windows 下解析出 .cmd 包装器', () => {
+  // .cmd 包装器与 path.join 断言都跟随宿主机平台，只在 Windows 上运行（项目约定：平台感知断言）。
+  it.skipIf(process.platform !== 'win32')('Windows 下解析出 .cmd 包装器', () => {
     const command = buildAcpServerCommand('C:\\appdata\\acp-runtime', 'C:\\tmp\\cordis.yml', 'win32')
     expect(command.executable).toBe(path.join('C:', 'appdata', 'acp-runtime', 'node_modules', '.bin', 'dsh-acp-demo.cmd'))
     expect(command.args).toEqual(['--config', 'C:\\tmp\\cordis.yml'])
