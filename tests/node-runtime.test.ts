@@ -41,7 +41,10 @@ describe('node runtime', () => {
 
   it('keeps the managed pnpm executable in the launcher runtime directory', () => {
     const root = path.join('C:', 'dsh-launcher', 'pnpm-runtime')
-    expect(pnpmExecutable(root)).toBe(path.join(root, 'node_modules', '.bin', 'pnpm.cmd'))
+    // .cmd 后缀只在 Windows 上存在；在 POSIX 上断言无扩展名的 pnpm，
+    // 否则这条断言在 Linux CI 上必然失败。
+    const executable = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+    expect(pnpmExecutable(root)).toBe(path.join(root, 'node_modules', '.bin', executable))
   })
 
   it('uses the current pnpm store format for managed plugin operations', () => {
