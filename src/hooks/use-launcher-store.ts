@@ -59,13 +59,15 @@ export function useLauncherStore() {
       api.getRuntimeState(),
       api.getDeepSeekCredentialStatus(),
       api.detectDshInstallation(),
+      api.readInstalledSkills(),
     ])
-      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextDshInstallation]) => {
+      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextDshInstallation, nextInstalledSkills]) => {
         setSettings(nextSettings)
         setProfile(nextProfile)
         setRuntime(nextRuntime)
         setCredentialStatus(nextCredentialStatus)
         setDshInstallation(nextDshInstallation)
+        setInstalledSkills(nextInstalledSkills)
         setSelectedPlugin(nextProfile.plugins[0]?.packageName ?? null)
       })
       .catch(error => showToast({ kind: 'error', message: errorText(error) }))
@@ -181,6 +183,13 @@ export function useLauncherStore() {
     if (next) setProfile(next)
   }, [api, run])
 
+  const toggleSkill = useCallback(async (skill: InstalledSkill, enabled: boolean) => {
+    const next = await run(`skill:${skill.name}`, () => api.toggleSkill(skill.name, enabled), {
+      success: enabled ? `Skill「${skill.name}」已启用。` : `Skill「${skill.name}」已停用。`,
+    })
+    if (next) setInstalledSkills(next)
+  }, [api, run])
+
   /** 先本地重排让拖拽有即时反馈，主进程写盘失败再回滚。 */
   const reorderPlugins = useCallback(async (packageNames: string[]) => {
     if (!profile) return
@@ -238,6 +247,7 @@ export function useLauncherStore() {
     saveApiKey,
     clearApiKey,
     togglePlugin,
+    toggleSkill,
     reorderPlugins,
     uninstallPlugin,
   }

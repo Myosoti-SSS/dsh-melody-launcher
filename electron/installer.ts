@@ -33,7 +33,7 @@ import { readPluginReceipts, recordPluginInstall } from './plugin-receipts'
 import { readProfile } from './profile'
 import { withExecutableDirectoryOnPath } from './process'
 import { analyzeSkillRepository } from './skill-catalog'
-import { readInstalledSkills as readLocalSkills } from './skill-format'
+import { readInstalledSkills as readLocalSkills, toggleInstalledSkill } from './skill-format'
 import { installSkillFromRepository } from './skill-install'
 
 /**
@@ -92,6 +92,8 @@ export interface Installer {
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
   /** 读取已安装的 Skill 列表。 */
   readInstalledSkills(): Promise<InstalledSkill[]>
+  /** 启用或停用一个本地 Skill。 */
+  toggleSkill(name: string, enabled: boolean): Promise<InstalledSkill[]>
   /** 汇总当前 Profile 与安装凭据里已安装的仓库，用于在列表中标记「已安装」。 */
   listInstalledRepositories(): Promise<string[]>
   /** 从当前 Profile 中卸载一个插件。 */
@@ -419,6 +421,11 @@ export function createInstaller(options: InstallerOptions): Installer {
     async readInstalledSkills(): Promise<InstalledSkill[]> {
       const settings = await options.readSettings()
       return readLocalSkills(settings.dshHome)
+    },
+
+    async toggleSkill(name: string, enabled: boolean): Promise<InstalledSkill[]> {
+      const settings = await options.readSettings()
+      return toggleInstalledSkill(settings.dshHome, name, Boolean(enabled))
     },
 
     async listInstalledRepositories(): Promise<string[]> {

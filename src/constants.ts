@@ -50,6 +50,7 @@ export const IPC = {
   aiHasSnapshot: 'ai:has-snapshot',
   skillsInstall: 'skills:install',
   skillsReadInstalled: 'skills:read-installed',
+  skillsToggle: 'skills:toggle',
   runtimeState: 'runtime:state',
   runtimeStart: 'runtime:start',
   runtimeStop: 'runtime:stop',

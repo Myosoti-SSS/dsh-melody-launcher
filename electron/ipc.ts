@@ -121,6 +121,12 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     return installer.installSkill(request)
   })
   ipcMain.handle(IPC.skillsReadInstalled, () => installer.readInstalledSkills())
+  ipcMain.handle(IPC.skillsToggle, async (_event, payload: { name: string; enabled: boolean }) => {
+    if (!payload || typeof payload.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.name)) {
+      throw new Error('Skill 名称无效。')
+    }
+    return installer.toggleSkill(payload.name, Boolean(payload.enabled))
+  })
 
   ipcMain.handle(IPC.aiStatus, () => aiInstaller.status())
   ipcMain.handle(IPC.aiHasSnapshot, () => aiInstaller.hasSnapshot())

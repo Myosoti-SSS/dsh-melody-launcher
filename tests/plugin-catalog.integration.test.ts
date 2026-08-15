@@ -9,7 +9,7 @@ integrationTest('classifies representative live dsh-plugin repositories', async 
   const desktop = await analyzeRepository('anywhere-labs/deepseek-harness-desktop', 'master', 'web')
   const dynamic = await analyzeRepository('mervyn-teo/dsh-plugin-qr-connect', 'main', 'web')
 
-  expect(tui.targets[0]).toMatchObject({ packageName: 'dsh-cc-tui', source: 'npm', profileName: 'cc-tui' })
+  expect(tui.targets[0]).toMatchObject({ packageName: '@deepseek-harness-tui/dsh-tui', source: 'npm', profileName: 'cc-tui' })
   expect(skin.targets[0]).toMatchObject({
     packageName: '@dsh-external/dsh-client-ui-skin-maid-atelier',
     source: 'archive-subdirectory',

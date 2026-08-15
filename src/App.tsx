@@ -119,10 +119,12 @@ function LauncherShell() {
               {navigation.view === 'plugins' && (
                 <PluginsView
                   profile={profile}
+                  installedSkills={store.installedSkills}
                   selected={store.selected}
                   busy={store.busy}
                   onSelect={plugin => store.selectPlugin(plugin.packageName)}
                   onToggle={store.togglePlugin}
+                  onToggleSkill={store.toggleSkill}
                   onReorder={store.reorderPlugins}
                   onRefresh={store.refreshProfile}
                   onBrowse={() => navigation.setView('discover')}

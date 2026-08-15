@@ -78,7 +78,7 @@ let demoPlugins: ManagedPlugin[] = [
     order: 4,
   },
   {
-    packageName: '@ccch1mneyyy/dsh-tui',
+    packageName: '@deepseek-harness-tui/dsh-tui',
     displayName: 'DSH TUI',
     version: '2.3.0',
     description: 'Claude Code 风格的全屏终端交互界面。',
@@ -158,7 +158,7 @@ function demoAnalysis(fullName: string, defaultBranch: string): RepositoryAnalys
   const packageName = fullName === 'liustack/modlens'
     ? '@liustack/modlens'
     : fullName === 'ccch1mneyyy/dsh-TUI'
-      ? 'dsh-cc-tui'
+      ? '@deepseek-harness-tui/dsh-tui'
       : fullName === 'omdsh-dev/DSH-better-sidebar'
         ? 'dsh-better-sidebar'
         : `@${repo?.owner ?? 'demo'}/${(repo?.name ?? 'plugin').toLowerCase()}`
@@ -172,8 +172,8 @@ function demoAnalysis(fullName: string, defaultBranch: string): RepositoryAnalys
       packageName,
       version: '1.0.0',
       source: 'npm',
-      profileName: packageName === 'dsh-cc-tui' ? 'cc-tui' : 'web',
-      platform: packageName === 'dsh-cc-tui' ? 'terminal' : 'web',
+      profileName: packageName === '@deepseek-harness-tui/dsh-tui' ? 'cc-tui' : 'web',
+      platform: packageName === '@deepseek-harness-tui/dsh-tui' ? 'terminal' : 'web',
       subdirectory: null,
       commit: 'a'.repeat(40),
       requiresBuild: false,
@@ -349,6 +349,7 @@ export const demoApi: LauncherApi = {
       description: target.description,
       path: `${demoSettings.dshHome}\\skills\\${target.name}`,
       format: target.format,
+      enabled: true,
       modelInvocable: target.modelInvocable,
       userInvocable: target.userInvocable,
     }
@@ -357,6 +358,10 @@ export const demoApi: LauncherApi = {
     return { installedSkill, installedSkills: demoInstalledSkills }
   },
   readInstalledSkills: async () => demoInstalledSkills,
+  toggleSkill: async (name, enabled) => {
+    demoInstalledSkills = demoInstalledSkills.map(skill => skill.name === name ? { ...skill, enabled } : skill)
+    return demoInstalledSkills
+  },
   getRuntimeState: async () => demoRuntime,
   startRuntime: async () => {
     demoRuntime = { running: true, pid: 18420, startedAt: new Date().toISOString(), url: 'http://127.0.0.1:3080' }
