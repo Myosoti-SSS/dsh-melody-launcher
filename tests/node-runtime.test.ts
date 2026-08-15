@@ -1,12 +1,46 @@
-import { describe, expect, it } from 'vitest'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   NODE_RUNTIME_VERSION,
+  findManagedNodeRuntime,
+  findSystemNodeRuntime,
   nodeArchiveName,
   parseNodeArchiveChecksum,
   requiresNodeRuntime,
   resolveNodeExecutable,
 } from '../electron/node-runtime'
+
+/** 当前平台上 node / npm / npx 的可执行文件名。 */
+const EXECUTABLES = process.platform === 'win32'
+  ? ['node.exe', 'npm.cmd', 'npx.cmd']
+  : ['node', 'npm', 'npx']
+
+/**
+ * POSIX 的官方发行包把可执行文件放在 bin/ 下，Windows 的 zip 直接平铺在根目录。
+ * 测试要按各自平台的真实布局造目录，否则测不出东西。
+ */
+const DISTRIBUTION_BIN = process.platform === 'win32' ? '.' : 'bin'
+
+let temporaryDirectory = ''
+
+async function makeTemporaryDirectory(): Promise<string> {
+  temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'dsh-node-runtime-'))
+  return temporaryDirectory
+}
+
+async function createExecutables(directory: string): Promise<void> {
+  await mkdir(directory, { recursive: true })
+  for (const name of EXECUTABLES) {
+    await writeFile(path.join(directory, name), '', 'utf8')
+  }
+}
+
+afterEach(async () => {
+  if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true })
+  temporaryDirectory = ''
+})
 
 describe('node runtime', () => {
   it('selects the official Windows archive for the current architecture', () => {
@@ -41,5 +75,82 @@ describe('node runtime', () => {
     expect(requiresNodeRuntime('npx.cmd', ['--yes', '@deepseek-ai/dsh', 'web'])).toBe(true)
     expect(requiresNodeRuntime(path.join('C:', 'runtime', 'dsh.cmd'), ['web'])).toBe(true)
     expect(requiresNodeRuntime('custom.exe', ['serve'])).toBe(false)
+  })
+})
+
+/**
+ * PATH 里的每一项本身就是 bin 目录，官方发行包的根目录在 POSIX 上还多一层 bin/。
+ * 这两种布局曾经混用同一套拼接逻辑，导致 findSystemNodeRuntime
+ * 在任何 POSIX 系统上都必然返回 null。
+ */
+describe('node runtime discovery', () => {
+  it('finds a system runtime in a directory listed on PATH', async () => {
+    const binDirectory = await makeTemporaryDirectory()
+    await createExecutables(binDirectory)
+
+    const found = findSystemNodeRuntime({
+      PATH: binDirectory,
+      // Windows 会优先看 Program Files\nodejs，指向不存在的位置以保证结果确定。
+      ProgramFiles: path.join(binDirectory, 'absent'),
+    })
+
+    expect(found).not.toBeNull()
+    expect(found?.managed).toBe(false)
+    expect(found?.node).toBe(path.join(binDirectory, EXECUTABLES[0]))
+    expect(found?.npm).toBe(path.join(binDirectory, EXECUTABLES[1]))
+    expect(found?.npx).toBe(path.join(binDirectory, EXECUTABLES[2]))
+  })
+
+  it('skips PATH entries that only have some of the executables', async () => {
+    const root = await makeTemporaryDirectory()
+    const partial = path.join(root, 'partial')
+    await mkdir(partial, { recursive: true })
+    await writeFile(path.join(partial, EXECUTABLES[0]), '', 'utf8')
+
+    expect(findSystemNodeRuntime({
+      PATH: partial,
+      ProgramFiles: path.join(root, 'absent'),
+    })).toBeNull()
+  })
+
+  it('returns null when no PATH entry has a runtime', async () => {
+    const root = await makeTemporaryDirectory()
+    expect(findSystemNodeRuntime({
+      PATH: path.join(root, 'nowhere'),
+      ProgramFiles: path.join(root, 'absent'),
+    })).toBeNull()
+  })
+
+  it('finds a managed runtime laid out as an extracted distribution', async () => {
+    const runtimeRoot = await makeTemporaryDirectory()
+    const distribution = path.join(runtimeRoot, `node-${NODE_RUNTIME_VERSION}-win-x64`)
+    await createExecutables(path.join(distribution, DISTRIBUTION_BIN))
+
+    const found = await findManagedNodeRuntime(runtimeRoot)
+
+    expect(found).not.toBeNull()
+    expect(found?.managed).toBe(true)
+    expect(found?.root).toBe(distribution)
+    expect(found?.npm).toBe(path.join(distribution, DISTRIBUTION_BIN, EXECUTABLES[1]))
+  })
+
+  it('prefers the newest managed distribution', async () => {
+    const runtimeRoot = await makeTemporaryDirectory()
+    for (const version of ['node-v20.0.0-win-x64', 'node-v24.19.0-win-x64']) {
+      await createExecutables(path.join(runtimeRoot, version, DISTRIBUTION_BIN))
+    }
+
+    const found = await findManagedNodeRuntime(runtimeRoot)
+
+    expect(found?.root).toBe(path.join(runtimeRoot, 'node-v24.19.0-win-x64'))
+  })
+
+  it('ignores an incomplete managed distribution', async () => {
+    const runtimeRoot = await makeTemporaryDirectory()
+    const distribution = path.join(runtimeRoot, 'node-v24.19.0-win-x64', DISTRIBUTION_BIN)
+    await mkdir(distribution, { recursive: true })
+    await writeFile(path.join(distribution, EXECUTABLES[0]), '', 'utf8')
+
+    expect(await findManagedNodeRuntime(runtimeRoot)).toBeNull()
   })
 })

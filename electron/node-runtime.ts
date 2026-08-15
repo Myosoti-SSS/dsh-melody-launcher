@@ -23,7 +23,18 @@ type ProgressListener = (progress: NodeRuntimeProgress) => void
 
 let installationPromise: Promise<NodeRuntime> | null = null
 
-function runtimePaths(root: string, managed: boolean): NodeRuntime {
+/**
+ * 可执行文件相对于 root 的两种摆放方式。
+ *
+ * - `bin-directory`：root 本身就是存放可执行文件的目录，例如 PATH 里的 `/usr/bin`。
+ * - `distribution-root`：root 是官方发行包解压后的根目录，例如 `node-v24.19.0-linux-x64/`。
+ *
+ * Windows 上两者一致（zip 与 PATH 目录都是三个文件平铺）；
+ * POSIX 上发行包把可执行文件放在 `bin/` 子目录里，差一层。
+ */
+type RuntimeLayout = 'bin-directory' | 'distribution-root'
+
+function runtimePaths(root: string, managed: boolean, layout: RuntimeLayout): NodeRuntime {
   if (process.platform === 'win32') {
     return {
       root,
@@ -33,11 +44,12 @@ function runtimePaths(root: string, managed: boolean): NodeRuntime {
       managed,
     }
   }
+  const binary = layout === 'distribution-root' ? path.join(root, 'bin') : root
   return {
     root,
-    node: path.join(root, 'node'),
-    npm: path.join(root, 'bin', 'npm'),
-    npx: path.join(root, 'bin', 'npx'),
+    node: path.join(binary, 'node'),
+    npm: path.join(binary, 'npm'),
+    npx: path.join(binary, 'npx'),
     managed,
   }
 }
@@ -54,7 +66,8 @@ export function findSystemNodeRuntime(environment: NodeJS.ProcessEnv = process.e
     entries.unshift(path.join(environment.ProgramFiles ?? 'C:\\Program Files', 'nodejs'))
   }
   for (const entry of entries) {
-    const runtime = runtimePaths(entry.replace(/^"|"$/g, ''), false)
+    // PATH 里的每一项本身就是可执行文件所在的目录。
+    const runtime = runtimePaths(entry.replace(/^"|"$/g, ''), false, 'bin-directory')
     if (isCompleteRuntime(runtime)) return runtime
   }
   return null
@@ -81,7 +94,7 @@ export async function findManagedNodeRuntime(runtimeRoot: string): Promise<NodeR
     .map(entry => entry.name)
     .sort((a, b) => b.localeCompare(a, 'en'))
   for (const directory of directories) {
-    const runtime = runtimePaths(path.join(runtimeRoot, directory), true)
+    const runtime = runtimePaths(path.join(runtimeRoot, directory), true, 'distribution-root')
     if (isCompleteRuntime(runtime)) return runtime
   }
   return null
@@ -137,7 +150,7 @@ async function installManagedNodeRuntime(runtimeRoot: string, onProgress?: Progr
   const archiveName = nodeArchiveName()
   const extractedName = archiveName.slice(0, -4)
   const finalRoot = path.join(runtimeRoot, extractedName)
-  const existing = runtimePaths(finalRoot, true)
+  const existing = runtimePaths(finalRoot, true, 'distribution-root')
   if (isCompleteRuntime(existing)) return existing
 
   const nonce = `${process.pid}-${Date.now()}`
@@ -190,11 +203,11 @@ async function installManagedNodeRuntime(runtimeRoot: string, onProgress?: Progr
     if (exitCode !== 0) throw new Error(`解压 Node.js 运行环境失败：${extractionError.trim() || `代码 ${exitCode}`}`)
 
     const stagedRoot = path.join(stagingRoot, extractedName)
-    const stagedRuntime = runtimePaths(stagedRoot, true)
+    const stagedRuntime = runtimePaths(stagedRoot, true, 'distribution-root')
     if (!isCompleteRuntime(stagedRuntime)) throw new Error('Node.js 运行环境解压后文件不完整。')
     await rm(finalRoot, { recursive: true, force: true })
     await rename(stagedRoot, finalRoot)
-    const installed = runtimePaths(finalRoot, true)
+    const installed = runtimePaths(finalRoot, true, 'distribution-root')
     await rm(archivePath, { force: true })
     onProgress?.({ percent: 100, message: `Node.js ${NODE_RUNTIME_VERSION} 已就绪` })
     return installed
