@@ -1374,6 +1374,13 @@ input:focus-visible {
   gap: 14px;
 }
 
+.discovery-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
 .segmented-control {
   display: flex;
   flex: 0 0 auto;
@@ -1401,6 +1408,62 @@ input:focus-visible {
   color: var(--ink);
   background: #fff;
   box-shadow: 0 1px 2px rgba(26, 38, 30, 0.09);
+}
+
+.segmented-control button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.catalog-scan-button {
+  min-width: 122px;
+  min-height: 36px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.batch-scan-status {
+  display: grid;
+  min-height: 35px;
+  grid-template-columns: 18px minmax(0, 1fr) 120px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 7px 10px;
+  gap: 8px;
+  border: 1px solid #c8ddd1;
+  border-radius: 6px;
+  color: #466154;
+  background: #f2f8f4;
+  font-size: 11px;
+}
+
+.batch-scan-status.partial {
+  color: #75521d;
+  border-color: #ead9bb;
+  background: #fbf6eb;
+}
+
+.batch-scan-status > svg {
+  color: var(--accent);
+}
+
+.batch-scan-status.partial > svg {
+  color: #a97016;
+}
+
+.batch-scan-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: #dce8e1;
+}
+
+.batch-scan-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 180ms ease;
 }
 
 .catalog-note {
@@ -1498,6 +1561,12 @@ input:focus-visible {
   background: var(--accent-soft);
 }
 
+.repo-icon.skill-icon {
+  color: #236a76;
+  border-color: #bddae0;
+  background: #edf7f8;
+}
+
 .repo-main > div:last-child {
   min-width: 0;
 }
@@ -1533,6 +1602,36 @@ input:focus-visible {
   font-weight: 750;
 }
 
+.repository-analysis-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid #cbd5cf;
+  border-radius: 4px;
+  color: #526158;
+  background: #f4f7f5;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.repository-analysis-badge.ready,
+.repository-analysis-badge.choice {
+  color: var(--accent);
+  border-color: #bfd8ca;
+  background: #eef7f2;
+}
+
+.repository-analysis-badge.dynamic {
+  color: var(--blue);
+  border-color: #c7d7e5;
+  background: #f2f7fb;
+}
+
+.repository-analysis-badge.invalid {
+  color: var(--danger);
+  border-color: #e5c8c2;
+  background: var(--danger-soft);
+}
+
 .repo-title span,
 .repo-title strong {
   overflow: hidden;
@@ -1564,6 +1663,25 @@ input:focus-visible {
   line-height: 17px;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.repository-analysis-note {
+  display: flex;
+  max-width: 620px;
+  margin: 0 0 7px;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  color: #526158;
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.repository-analysis-note > span {
+  color: var(--quiet);
+}
+
+.repository-analysis-note.invalid {
+  color: var(--danger);
 }
 
 .topic-list {
@@ -1644,7 +1762,7 @@ input:focus-visible {
 }
 
 .install-button {
-  min-width: 78px;
+  min-width: 88px;
   min-height: 32px;
   color: var(--accent);
   border-color: #b9d5c6;
@@ -1978,7 +2096,8 @@ input:focus-visible {
 }
 
 .settings-dialog > header,
-.credential-dialog > header {
+.credential-dialog > header,
+.plugin-target-dialog > header {
   display: flex;
   min-height: 56px;
   align-items: center;
@@ -1988,10 +2107,82 @@ input:focus-visible {
 }
 
 .settings-dialog > header > div,
-.credential-dialog > header > div {
+.credential-dialog > header > div,
+.plugin-target-dialog > header > div {
   display: flex;
   align-items: center;
   gap: 9px;
+}
+
+.plugin-target-dialog {
+  width: min(680px, calc(100vw - 32px));
+}
+
+.target-dialog-summary {
+  margin: 0 0 13px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.plugin-target-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.plugin-target-row {
+  display: grid;
+  min-height: 78px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 11px 12px;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.plugin-target-row:last-child {
+  border-bottom: 0;
+}
+
+.plugin-target-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--accent);
+  background: var(--surface-soft);
+}
+
+.plugin-target-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.plugin-target-copy strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-target-copy span,
+.plugin-target-copy small {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.plugin-target-copy small {
+  color: var(--quiet);
 }
 
 .credential-dialog {
@@ -2471,6 +2662,18 @@ input:focus-visible {
   .discovery-controls {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .discovery-actions {
+    justify-content: space-between;
+  }
+
+  .batch-scan-status {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .batch-scan-track {
+    display: none;
   }
 
   .repository-list {

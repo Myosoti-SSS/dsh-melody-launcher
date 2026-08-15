@@ -4,15 +4,21 @@ import type {
   DshInstallationStatus,
   DiscoveryResult,
   InstallProgress,
+  InstalledSkill,
   LauncherApi,
   ManagedPlugin,
   ProfileState,
+  RepositoryAnalysis,
   RepositoryResult,
   RuntimeOutput,
   RuntimeState,
+  SkillDiscoveryResult,
+  SkillRepositoryAnalysis,
+  SkillRepositoryResult,
 } from './types'
 
 let demoSettings: AppSettings = {
+  dshInstallPath: 'C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\dsh-runtime',
   dshHome: 'C:\\Users\\demo\\.dsh',
   profileName: 'web',
   workspace: 'C:\\Users\\demo\\Projects',
@@ -93,6 +99,14 @@ const demoRepositories: RepositoryResult[] = [
   { id: 4, fullName: 'omdsh-dev/DSH-better-sidebar', name: 'DSH-better-sidebar', owner: 'omdsh-dev', description: '支持文件、终端、Git 和子代理的侧边栏工作台。', url: 'https://github.com/omdsh-dev/DSH-better-sidebar', stars: 337, language: 'TypeScript', updatedAt: '2026-08-13T21:30:00Z', topics: ['dsh-plugin', 'sidebar'], defaultBranch: 'main', kind: 'plugin' },
 ]
 
+const demoSkillRepositories: SkillRepositoryResult[] = [
+  { id: 101, fullName: 'TohsakaRIN521/dsh-academic-skill', name: 'dsh-academic-skill', owner: 'TohsakaRIN521', description: 'Academic writing and verification skills for DSH.', url: 'https://github.com/TohsakaRIN521/dsh-academic-skill', stars: 210, language: 'Python', updatedAt: '2026-08-15T03:20:00Z', topics: ['dsh-skill', 'academic'], defaultBranch: 'main' },
+  { id: 102, fullName: 'v587d/dsh-multimodal-skill', name: 'dsh-multimodal-skill', owner: 'v587d', description: 'Multimodal image and audio workflows.', url: 'https://github.com/v587d/dsh-multimodal-skill', stars: 96, language: 'Python', updatedAt: '2026-08-14T23:10:00Z', topics: ['dsh-skill', 'multimodal'], defaultBranch: 'main' },
+  { id: 103, fullName: '2BingLing/dsh-market', name: 'dsh-market', owner: '2BingLing', description: 'DSH ecosystem index.', url: 'https://github.com/2BingLing/dsh-market', stars: 350, language: 'TypeScript', updatedAt: '2026-08-15T02:10:00Z', topics: ['dsh-skill', 'market'], defaultBranch: 'master' },
+]
+
+let demoInstalledSkills: InstalledSkill[] = []
+
 let demoRuntime: RuntimeState = { running: false, pid: null, startedAt: null, url: null }
 let demoCredential: CredentialStatus = { configured: false }
 let demoDshInstallation: DshInstallationStatus = { installed: false, version: null, executable: null, source: null }
@@ -121,6 +135,59 @@ function renumber(plugins: ManagedPlugin[]): ManagedPlugin[] {
   return plugins.map(plugin => ({ ...plugin, order: plugin.enabled ? ++order : null }))
 }
 
+function demoAnalysis(fullName: string, defaultBranch: string): RepositoryAnalysis {
+  const repo = demoRepositories.find(item => item.fullName === fullName)
+  const packageName = fullName === 'liustack/modlens'
+    ? '@liustack/modlens'
+    : fullName === 'ccch1mneyyy/dsh-TUI'
+      ? 'dsh-cc-tui'
+      : fullName === 'omdsh-dev/DSH-better-sidebar'
+        ? 'dsh-better-sidebar'
+        : `@${repo?.owner ?? 'demo'}/${(repo?.name ?? 'plugin').toLowerCase()}`
+  return {
+    repository: fullName,
+    defaultBranch,
+    installability: 'ready',
+    summary: `检测到可安装的 ${packageName}。`,
+    targets: [{
+      id: `${packageName}:.`,
+      packageName,
+      version: '1.0.0',
+      source: 'npm',
+      profileName: packageName === 'dsh-cc-tui' ? 'cc-tui' : 'web',
+      platform: packageName === 'dsh-cc-tui' ? 'terminal' : 'web',
+      subdirectory: null,
+      commit: 'a'.repeat(40),
+      requiresBuild: false,
+      buildScripts: [],
+      nodeRange: '>=22.19',
+    }],
+  }
+}
+
+function demoSkillAnalysis(fullName: string, defaultBranch: string): SkillRepositoryAnalysis {
+  if (fullName === '2BingLing/dsh-market') {
+    return { repository: fullName, defaultBranch, installability: 'invalid', summary: '没有找到符合 DSH 规范的 SKILL.md 或单文件 Skill。', targets: [] }
+  }
+  const names = fullName.includes('academic') ? ['academic-paper-completion', 'skill-optimizer'] : ['multimodal-workflow']
+  return {
+    repository: fullName,
+    defaultBranch,
+    installability: names.length > 1 ? 'choice' : 'ready',
+    summary: names.length > 1 ? `确认包含 ${names.length} 个有效 DSH Skills。` : `确认是 DSH Skill：${names[0]}`,
+    targets: names.map(name => ({
+      id: `${name}:${name}/SKILL.md`,
+      name,
+      description: `Reusable instructions for ${name}.`,
+      sourcePath: `${name}/SKILL.md`,
+      format: 'bundle',
+      revision: defaultBranch,
+      modelInvocable: true,
+      userInvocable: true,
+    })),
+  }
+}
+
 export const demoApi: LauncherApi = {
   getSettings: async () => demoSettings,
   saveSettings: async settings => (demoSettings = settings),
@@ -135,7 +202,11 @@ export const demoApi: LauncherApi = {
     demoCredential = { configured: false }
     return demoCredential
   },
-  chooseDirectory: async kind => kind === 'dshHome' ? 'C:\\Users\\demo\\.dsh' : 'C:\\Users\\demo\\Projects',
+  chooseDirectory: async kind => kind === 'dshInstallPath'
+    ? 'D:\\DeepSeek Harness'
+    : kind === 'dshHome'
+      ? 'C:\\Users\\demo\\.dsh'
+      : 'C:\\Users\\demo\\Projects',
   readProfile: async () => profile(),
   togglePlugin: async (packageName, enabled) => {
     demoPlugins = renumber(demoPlugins.map(plugin => plugin.packageName === packageName ? { ...plugin, enabled } : plugin))
@@ -152,9 +223,17 @@ export const demoApi: LauncherApi = {
     const repositories = demoRepositories
       .filter(repo => !needle || `${repo.fullName} ${repo.description}`.toLowerCase().includes(needle))
       .sort((a, b) => sort === 'stars' ? b.stars - a.stars : b.updatedAt.localeCompare(a.updatedAt))
-    return { repositories, totalCount: 916, rateRemaining: 9, dshInstallation: demoDshInstallation }
+    return {
+      repositories,
+      totalCount: 916,
+      rateRemaining: 9,
+      dshInstallation: demoDshInstallation,
+      installedRepositories: demoPlugins.map(plugin => plugin.repositoryFullName).filter((value): value is string => Boolean(value)),
+    }
   },
-  installPlugin: async fullName => {
+  analyzePlugin: async (fullName, defaultBranch) => demoAnalysis(fullName, defaultBranch),
+  installPlugin: async request => {
+    const fullName = typeof request === 'string' ? request : request.repository
     const repo = demoRepositories.find(item => item.fullName === fullName)
     const kind = repo?.kind ?? 'plugin'
     installProgressListeners.forEach(listener => listener({ repository: fullName, kind, phase: 'resolving', percent: 18, message: kind === 'dsh' ? '正在解析 DSH 安装包' : '正在解析插件仓库' }))
@@ -164,7 +243,7 @@ export const demoApi: LauncherApi = {
     installProgressListeners.forEach(listener => listener({ repository: fullName, kind, phase: 'configuring', percent: 90, message: kind === 'dsh' ? '正在切换本地启动命令' : '正在更新插件配置' }))
     await wait(350)
     if (kind === 'dsh') {
-      demoDshInstallation = { installed: true, version: '0.1.0-rc.6', executable: 'C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\dsh-runtime\\node_modules\\.bin\\dsh.cmd', source: 'launcher' }
+      demoDshInstallation = { installed: true, version: '0.1.0-rc.6', executable: `${demoSettings.dshInstallPath}\\node_modules\\.bin\\dsh.cmd`, source: 'launcher' }
       demoSettings = { ...demoSettings, launchExecutable: demoDshInstallation.executable!, launchArgs: ['web'] }
     } else if (repo && !demoPlugins.some(plugin => plugin.repositoryFullName === fullName)) {
       demoPlugins = renumber([...demoPlugins, {
@@ -182,12 +261,47 @@ export const demoApi: LauncherApi = {
       }])
     }
     installProgressListeners.forEach(listener => listener({ repository: fullName, kind, phase: 'complete', percent: 100, message: kind === 'dsh' ? 'DSH 已安装' : '插件安装完成' }))
-    return { kind, profile: profile(), settings: demoSettings, dshInstallation: demoDshInstallation }
+    const analysis = kind === 'plugin' ? demoAnalysis(fullName, repo?.defaultBranch ?? 'main') : null
+    return {
+      kind,
+      profile: profile(),
+      settings: demoSettings,
+      dshInstallation: demoDshInstallation,
+      installedProfileName: analysis?.targets[0].profileName,
+      packageName: analysis?.targets[0].packageName,
+    }
   },
   uninstallPlugin: async packageName => {
     demoPlugins = renumber(demoPlugins.filter(plugin => plugin.packageName !== packageName))
     return profile()
   },
+  discoverSkills: async (query, sort): Promise<SkillDiscoveryResult> => {
+    const needle = query.trim().toLowerCase()
+    const repositories = demoSkillRepositories
+      .filter(repo => !needle || `${repo.fullName} ${repo.description}`.toLowerCase().includes(needle))
+      .sort((left, right) => sort === 'stars' ? right.stars - left.stars : right.updatedAt.localeCompare(left.updatedAt))
+    return { repositories, totalCount: demoSkillRepositories.length, rateRemaining: 32, installedSkills: demoInstalledSkills }
+  },
+  analyzeSkill: async (fullName, defaultBranch) => demoSkillAnalysis(fullName, defaultBranch),
+  installSkill: async request => {
+    const analysis = demoSkillAnalysis(request.repository, request.defaultBranch)
+    const target = analysis.targets.find(item => item.id === request.targetId)
+    if (!target) throw new Error('Skill 安装目标无效。')
+    installProgressListeners.forEach(listener => listener({ repository: request.repository, kind: 'skill', phase: 'downloading', percent: 42, message: '正在下载 Skill' }))
+    await wait(500)
+    const installedSkill: InstalledSkill = {
+      name: target.name,
+      description: target.description,
+      path: `${demoSettings.dshHome}\\skills\\${target.name}`,
+      format: target.format,
+      modelInvocable: target.modelInvocable,
+      userInvocable: target.userInvocable,
+    }
+    demoInstalledSkills = [...demoInstalledSkills.filter(skill => skill.name !== target.name), installedSkill]
+    installProgressListeners.forEach(listener => listener({ repository: request.repository, kind: 'skill', phase: 'complete', percent: 100, message: `${target.name} 已安装` }))
+    return { installedSkill, installedSkills: demoInstalledSkills }
+  },
+  readInstalledSkills: async () => demoInstalledSkills,
   getRuntimeState: async () => demoRuntime,
   startRuntime: async () => {
     demoRuntime = { running: true, pid: 18420, startedAt: new Date().toISOString(), url: 'http://127.0.0.1:3080' }

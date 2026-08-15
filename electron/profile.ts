@@ -54,13 +54,36 @@ async function readJson<T>(filePath: string): Promise<T | null> {
   }
 }
 
-async function resolveDependencyManifest(profileDir: string, packageName: string): Promise<PackageManifest | null> {
-  const directPath = path.join(profileDir, 'node_modules', ...packageName.split('/'), 'package.json')
+interface ResolvedDependency {
+  manifest: PackageManifest | null
+  bundleAvailable: boolean
+}
+
+async function bundlePatchExists(packageDirectory: string, manifest: PackageManifest | null): Promise<boolean> {
+  const patchFile = manifest?.dsh?.bundle?.patch
+  if (!patchFile || path.isAbsolute(patchFile)) return false
+  const resolved = path.resolve(packageDirectory, patchFile)
+  if (resolved !== packageDirectory && !resolved.startsWith(`${packageDirectory}${path.sep}`)) return false
   try {
-    const resolved = await realpath(directPath)
-    return readJson<PackageManifest>(resolved)
+    await access(resolved)
+    return true
   } catch {
-    return readJson<PackageManifest>(directPath)
+    return false
+  }
+}
+
+async function resolveDependencyManifest(profileDir: string, packageName: string): Promise<ResolvedDependency> {
+  const directPath = path.join(profileDir, 'node_modules', ...packageName.split('/'), 'package.json')
+  let manifestPath = directPath
+  try {
+    manifestPath = await realpath(directPath)
+  } catch {
+    // Keep the direct path for nodeLinker layouts where realpath is unavailable.
+  }
+  const manifest = await readJson<PackageManifest>(manifestPath)
+  return {
+    manifest,
+    bundleAvailable: await bundlePatchExists(path.dirname(manifestPath), manifest),
   }
 }
 
@@ -82,17 +105,18 @@ export async function readProfile(dshHome: string, profileName: string): Promise
   const activeBundles = [...(manifest.dsh?.profile?.bundles ?? [])]
   const dependencies = Object.keys(manifest.dependencies ?? {})
   const allNames = [...new Set([...activeBundles, ...dependencies])]
-  const manifests = new Map<string, PackageManifest | null>()
+  const manifests = new Map<string, ResolvedDependency>()
   await Promise.all(dependencies.map(async packageName => {
     manifests.set(packageName, await resolveDependencyManifest(profileDir, packageName))
   }))
 
   const plugins: ManagedPlugin[] = allNames
     .map(packageName => {
-      const dependencyManifest = manifests.get(packageName)
+      const resolvedDependency = manifests.get(packageName)
+      const dependencyManifest = resolvedDependency?.manifest
       const enabled = activeBundles.includes(packageName)
       const builtin = !dependencies.includes(packageName)
-      const compatible = enabled || Boolean(dependencyManifest?.dsh?.bundle?.patch)
+      const compatible = builtin || enabled || Boolean(resolvedDependency?.bundleAvailable)
       const manifestRepo = repositoryUrl(dependencyManifest ?? {})
       const dependencyRepo = repositoryFullNameFromSpecifier(manifest.dependencies?.[packageName])
       const repositoryFullName = dependencyRepo ?? repositoryFullNameFromSpecifier(manifestRepo)

@@ -43,6 +43,8 @@ async function seedProfile(): Promise<string> {
     version: '2.0.0',
     dsh: { bundle: { patch: './cordis.patch.yml' } },
   }))
+  await writeFile(path.join(profileDir, 'node_modules', '@demo', 'vision', 'cordis.patch.yml'), '[]\n')
+  await writeFile(path.join(profileDir, 'node_modules', '@demo', 'sidebar', 'cordis.patch.yml'), '[]\n')
   return profileDir
 }
 

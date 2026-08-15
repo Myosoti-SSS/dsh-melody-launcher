@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
-import { mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { spawnCommand, withExecutableDirectoryOnPath } from './process'
 
 export const NODE_RUNTIME_VERSION = 'v24.19.0'
+export const PNPM_VERSION = '11.21.0'
 
 export interface NodeRuntime {
   root: string
@@ -12,6 +14,11 @@ export interface NodeRuntime {
   npm: string
   npx: string
   managed: boolean
+}
+
+export interface PnpmRuntime {
+  root: string
+  executable: string
 }
 
 export interface NodeRuntimeProgress {
@@ -22,6 +29,7 @@ export interface NodeRuntimeProgress {
 type ProgressListener = (progress: NodeRuntimeProgress) => void
 
 let installationPromise: Promise<NodeRuntime> | null = null
+let pnpmInstallationPromise: Promise<PnpmRuntime> | null = null
 
 function runtimePaths(root: string, managed: boolean): NodeRuntime {
   if (process.platform === 'win32') {
@@ -44,6 +52,27 @@ function runtimePaths(root: string, managed: boolean): NodeRuntime {
 
 function isCompleteRuntime(runtime: NodeRuntime): boolean {
   return existsSync(runtime.node) && existsSync(runtime.npm) && existsSync(runtime.npx)
+}
+
+export function pnpmExecutable(runtimeRoot: string): string {
+  return process.platform === 'win32'
+    ? path.join(runtimeRoot, 'node_modules', '.bin', 'pnpm.cmd')
+    : path.join(runtimeRoot, 'node_modules', '.bin', 'pnpm')
+}
+
+function isCompletePnpmRuntime(runtime: PnpmRuntime): boolean {
+  return existsSync(runtime.executable)
+}
+
+async function hasRequiredPnpmVersion(runtime: PnpmRuntime): Promise<boolean> {
+  if (!isCompletePnpmRuntime(runtime)) return false
+  try {
+    const manifestPath = path.join(runtime.root, 'node_modules', 'pnpm', 'package.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { version?: unknown }
+    return manifest.version === PNPM_VERSION
+  } catch {
+    return false
+  }
 }
 
 export function findSystemNodeRuntime(environment: NodeJS.ProcessEnv = process.env): NodeRuntime | null {
@@ -214,6 +243,57 @@ export async function ensureNodeRuntime(runtimeRoot: string, onProgress?: Progre
     })
   }
   return installationPromise
+}
+
+async function installManagedPnpmRuntime(
+  runtimeRoot: string,
+  nodeRuntime: NodeRuntime,
+  onProgress?: ProgressListener,
+): Promise<PnpmRuntime> {
+  const runtime = { root: runtimeRoot, executable: pnpmExecutable(runtimeRoot) }
+  if (await hasRequiredPnpmVersion(runtime)) return runtime
+
+  await mkdir(runtimeRoot, { recursive: true })
+  onProgress?.({ percent: 10, message: '正在准备 pnpm 插件运行环境' })
+  const child = spawnCommand(nodeRuntime.npm, [
+    'install',
+    '--prefix', runtimeRoot,
+    '--save-exact',
+    '--no-audit',
+    '--no-fund',
+    '--ignore-scripts',
+    `pnpm@${PNPM_VERSION}`,
+  ], {
+    cwd: runtimeRoot,
+    env: withExecutableDirectoryOnPath(nodeRuntime.node, {
+      ...process.env,
+      FORCE_COLOR: '0',
+      NPM_CONFIG_UPDATE_NOTIFIER: 'false',
+    }),
+  })
+  let diagnostics = ''
+  child.stderr.on('data', chunk => { diagnostics = `${diagnostics}${chunk.toString('utf8')}`.slice(-8_000) })
+  const exitCode = await waitForExit(child)
+  if (exitCode !== 0 || !await hasRequiredPnpmVersion(runtime)) {
+    throw new Error(`pnpm 插件运行环境准备失败${diagnostics ? `：${diagnostics.trim()}` : `（代码 ${exitCode}）`}`)
+  }
+  onProgress?.({ percent: 100, message: `pnpm ${PNPM_VERSION} 已就绪` })
+  return runtime
+}
+
+export async function ensurePnpmRuntime(
+  runtimeRoot: string,
+  nodeRuntime: NodeRuntime,
+  onProgress?: ProgressListener,
+): Promise<PnpmRuntime> {
+  const existing = { root: runtimeRoot, executable: pnpmExecutable(runtimeRoot) }
+  if (await hasRequiredPnpmVersion(existing)) return existing
+  if (!pnpmInstallationPromise) {
+    pnpmInstallationPromise = installManagedPnpmRuntime(runtimeRoot, nodeRuntime, onProgress).finally(() => {
+      pnpmInstallationPromise = null
+    })
+  }
+  return pnpmInstallationPromise
 }
 
 export function resolveNodeExecutable(executable: string, runtime: NodeRuntime): string {

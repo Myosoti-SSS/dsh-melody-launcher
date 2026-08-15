@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { parse } from 'yaml'
 import { afterEach, describe, expect, it } from 'vitest'
-import { approveIgnoredGitHubBuilds } from '../electron/plugin-install'
+import { approveBuildKeys, approveIgnoredGitHubBuilds, ignoredBuildKeys } from '../electron/plugin-install'
 
 let temporaryDirectory = ''
 
@@ -46,5 +46,20 @@ describe('plugin build approval', () => {
 
     expect(approved).toEqual([])
     expect(await readFile(workspacePath, 'utf8')).toBe(before)
+  })
+
+  it('extracts registry and GitHub build keys and approves only the selected entries', async () => {
+    temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'dsh-launcher-builds-'))
+    const workspacePath = path.join(temporaryDirectory, 'pnpm-workspace.yaml')
+    await writeFile(workspacePath, 'packages:\n  - .\n', 'utf8')
+    const githubKey = 'plugin@https://codeload.github.com/owner/plugin/tar.gz/abc123'
+    const registryKey = 'node-pty@1.1.0'
+    const output = `[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: ${githubKey}, ${registryKey}\n`
+
+    expect(ignoredBuildKeys(output)).toEqual([githubKey, registryKey])
+    await approveBuildKeys(workspacePath, [registryKey])
+
+    const workspace = parse(await readFile(workspacePath, 'utf8'))
+    expect(workspace.allowBuilds).toEqual({ [registryKey]: true })
   })
 })

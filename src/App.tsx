@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowDown,
   ArrowUp,
+  BookOpenCheck,
   Box,
   Check,
   ChevronRight,
@@ -23,6 +24,7 @@ import {
   PackageCheck,
   Play,
   RefreshCw,
+  ScanSearch,
   Search,
   Settings,
   SlidersHorizontal,
@@ -39,13 +41,19 @@ import type {
   CredentialStatus,
   DshInstallationStatus,
   InstallProgress,
+  InstalledSkill,
   LauncherApi,
   ManagedPlugin,
+  PluginInstallTarget,
   ProfileState,
+  RepositoryAnalysis,
   RepositoryResult,
   RepositoryInstallResult,
   RuntimeOutput,
   RuntimeState,
+  SkillInstallTarget,
+  SkillRepositoryAnalysis,
+  SkillRepositoryResult,
   ViewName,
 } from './types'
 
@@ -84,6 +92,14 @@ interface ToastState {
   message: string
 }
 
+interface BatchScanState {
+  phase: 'running' | 'complete' | 'partial'
+  total: number
+  completed: number
+  available: number
+  failed: number
+}
+
 export default function App() {
   const [surface, setSurface] = useState<'launcher' | 'manager'>('launcher')
   const [view, setView] = useState<ViewName>('plugins')
@@ -101,6 +117,8 @@ export default function App() {
   const [busy, setBusy] = useState<string | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
   const [confirmingRemoval, setConfirmingRemoval] = useState<ManagedPlugin | null>(null)
+  const [repositoryAnalyses, setRepositoryAnalyses] = useState<Record<string, RepositoryAnalysis>>({})
+  const [skillRepositoryAnalyses, setSkillRepositoryAnalyses] = useState<Record<string, SkillRepositoryAnalysis>>({})
 
   const showToast = useCallback((next: ToastState) => {
     setToast(next)
@@ -342,15 +360,32 @@ export default function App() {
               {view === 'discover' && (
                 <DiscoverView
                   profile={profile}
+                  analyses={repositoryAnalyses}
+                  onAnalysis={(repository, analysis) => {
+                    setRepositoryAnalyses(current => ({ ...current, [repository]: analysis }))
+                  }}
                   onInstalled={result => {
                     setProfile(result.profile)
                     setSettings(result.settings)
                     setDshInstallation(result.dshInstallation)
                     showToast({
                       kind: 'success',
-                      message: result.kind === 'dsh' ? `本地 DSH ${result.dshInstallation.version ?? ''} 已安装。` : '插件已安装并加入加载顺序。',
+                      message: result.kind === 'dsh'
+                        ? `本地 DSH ${result.dshInstallation.version ?? ''} 已安装。`
+                        : `${result.packageName ?? '插件'} 已安装到 ${result.installedProfileName ?? settings.profileName} Profile。`,
                     })
                   }}
+                  onError={message => showToast({ kind: 'error', message })}
+                  onOpenRepository={url => void api.openExternal(url)}
+                />
+              )}
+              {view === 'skills' && (
+                <SkillHubView
+                  analyses={skillRepositoryAnalyses}
+                  onAnalysis={(repository, analysis) => {
+                    setSkillRepositoryAnalyses(current => ({ ...current, [repository]: analysis }))
+                  }}
+                  onInstalled={skill => showToast({ kind: 'success', message: `${skill.name} 已安装到本地 Skill 目录。` })}
                   onError={message => showToast({ kind: 'error', message })}
                   onOpenRepository={url => void api.openExternal(url)}
                 />
@@ -551,6 +586,7 @@ function SideNavigation({ view, profile, runtime, profileName, onChange }: {
   const entries: Array<{ id: ViewName; label: string; icon: typeof Box; count?: number }> = [
     { id: 'plugins', label: '插件顺序', icon: Layers3, count: profile.plugins.length },
     { id: 'discover', label: '发现插件', icon: Sparkles },
+    { id: 'skills', label: 'Skill Hub', icon: BookOpenCheck },
     { id: 'runtime', label: '运行与日志', icon: SquareTerminal },
   ]
   return (
@@ -809,8 +845,10 @@ function EmptyProfile({ onBrowse }: { onBrowse: () => void }) {
   )
 }
 
-function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
+function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onError, onOpenRepository }: {
   profile: ProfileState
+  analyses: Record<string, RepositoryAnalysis>
+  onAnalysis: (repository: string, analysis: RepositoryAnalysis) => void
   onInstalled: (result: RepositoryInstallResult) => void
   onError: (message: string) => void
   onOpenRepository: (url: string) => void
@@ -821,8 +859,13 @@ function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState<string | null>(null)
+  const [checking, setChecking] = useState<string | null>(null)
+  const [batchScan, setBatchScan] = useState<BatchScanState | null>(null)
   const [installProgress, setInstallProgress] = useState<InstallProgress | null>(null)
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>({ installed: false, version: null, executable: null, source: null })
+  const [installedRepositories, setInstalledRepositories] = useState<Set<string>>(new Set())
+  const [targetDialog, setTargetDialog] = useState<{ repo: RepositoryResult; analysis: RepositoryAnalysis } | null>(null)
+  const batchRunRef = useRef(0)
 
   const search = useCallback(async (searchQuery = query, searchSort = sort) => {
     setLoading(true)
@@ -831,6 +874,7 @@ function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
       setRepositories(result.repositories)
       setTotal(result.totalCount)
       setDshInstallation(result.dshInstallation)
+      setInstalledRepositories(new Set(result.installedRepositories.map(name => name.toLowerCase())))
     } catch (error) {
       onError(errorText(error))
     } finally {
@@ -840,15 +884,95 @@ function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
 
   useEffect(() => { void search('', 'stars') }, [])
   useEffect(() => api.onInstallProgress(setInstallProgress), [])
+  useEffect(() => () => { batchRunRef.current += 1 }, [])
 
-  const installedRepos = useMemo(() => new Set(profile.plugins.map(plugin => plugin.repositoryFullName?.toLowerCase()).filter(Boolean)), [profile.plugins])
+  const installedRepos = useMemo(() => {
+    const result = new Set(installedRepositories)
+    for (const plugin of profile.plugins) {
+      if (plugin.repositoryFullName) result.add(plugin.repositoryFullName.toLowerCase())
+    }
+    return result
+  }, [installedRepositories, profile.plugins])
 
-  const install = async (repo: RepositoryResult) => {
-    setInstalling(repo.fullName)
-    setInstallProgress({ repository: repo.fullName, kind: repo.kind, phase: 'preparing', percent: 0, message: repo.kind === 'dsh' ? '正在准备本地 DSH' : '正在准备安装插件' })
+  const pluginRepositories = useMemo(
+    () => repositories.filter(repository => repository.kind === 'plugin'),
+    [repositories],
+  )
+  const batchRunning = batchScan?.phase === 'running'
+
+  const inspect = async (repo: RepositoryResult) => {
+    setChecking(repo.fullName)
     try {
-      const result = await api.installPlugin(repo.fullName)
+      const analysis = await api.analyzePlugin(repo.fullName, repo.defaultBranch)
+      onAnalysis(repo.fullName, analysis)
+      if (analysis.installability === 'choice') setTargetDialog({ repo, analysis })
+    } catch (error) {
+      onError(errorText(error))
+    } finally {
+      setChecking(null)
+    }
+  }
+
+  const inspectAll = async () => {
+    if (pluginRepositories.length === 0 || batchRunning) return
+
+    const runId = batchRunRef.current + 1
+    batchRunRef.current = runId
+    const total = pluginRepositories.length
+    let completed = 0
+    let available = 0
+    let failed = 0
+    let consecutiveFailures = 0
+    let stopped = false
+    setTargetDialog(null)
+    setBatchScan({ phase: 'running', total, completed, available, failed })
+
+    for (const repo of pluginRepositories) {
+      if (batchRunRef.current !== runId) return
+      setChecking(repo.fullName)
+      try {
+        const analysis = await api.analyzePlugin(repo.fullName, repo.defaultBranch)
+        if (batchRunRef.current !== runId) return
+        onAnalysis(repo.fullName, analysis)
+        if (analysis.installability === 'ready' || analysis.installability === 'choice') available += 1
+        consecutiveFailures = 0
+      } catch (error) {
+        if (batchRunRef.current !== runId) return
+        failed += 1
+        consecutiveFailures += 1
+        const message = errorText(error)
+        stopped = /403|rate.?limit|请求额度|请求频率/i.test(message) || consecutiveFailures >= 3
+      }
+
+      completed += 1
+      setBatchScan({ phase: 'running', total, completed, available, failed })
+      if (stopped) break
+    }
+
+    setChecking(null)
+    setBatchScan({
+      phase: stopped || completed < total ? 'partial' : 'complete',
+      total,
+      completed,
+      available,
+      failed,
+    })
+  }
+
+  const install = async (repo: RepositoryResult, target?: PluginInstallTarget) => {
+    setInstalling(repo.fullName)
+    setTargetDialog(null)
+    setInstallProgress({ repository: repo.fullName, kind: repo.kind, phase: 'preparing', percent: 0, message: repo.kind === 'dsh' ? '正在准备本地 DSH' : '正在检查插件组件' })
+    try {
+      const result = await api.installPlugin(repo.kind === 'dsh'
+        ? repo.fullName
+        : {
+            repository: repo.fullName,
+            defaultBranch: repo.defaultBranch,
+            targetId: target?.id ?? '',
+          })
       setDshInstallation(result.dshInstallation)
+      setInstalledRepositories(current => new Set(current).add(repo.fullName.toLowerCase()))
       onInstalled(result)
     } catch (error) {
       onError(errorText(error))
@@ -863,15 +987,41 @@ function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
       <div className="discovery-controls">
         <form className="search-field large" onSubmit={event => { event.preventDefault(); void search() }}>
           <Search size={18} />
-          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索名称、作者或说明" aria-label="搜索插件" />
-          {query && <button type="button" onClick={() => { setQuery(''); void search('', sort) }} aria-label="清除搜索"><X size={16} /></button>}
-          <button type="submit" className="search-submit">搜索</button>
+          <input value={query} disabled={batchRunning} onChange={event => setQuery(event.target.value)} placeholder="搜索名称、作者或说明" aria-label="搜索插件" />
+          {query && <button type="button" disabled={batchRunning} onClick={() => { setQuery(''); void search('', sort) }} aria-label="清除搜索"><X size={16} /></button>}
+          <button type="submit" className="search-submit" disabled={batchRunning}>搜索</button>
         </form>
-        <div className="segmented-control" aria-label="插件排序方式">
-          <button type="button" className={sort === 'stars' ? 'active' : ''} onClick={() => { setSort('stars'); void search(query, 'stars') }}><Star size={15} />热门</button>
-          <button type="button" className={sort === 'updated' ? 'active' : ''} onClick={() => { setSort('updated'); void search(query, 'updated') }}><Clock3 size={15} />最近更新</button>
+        <div className="discovery-actions">
+          <div className="segmented-control" aria-label="插件排序方式">
+            <button type="button" disabled={batchRunning} className={sort === 'stars' ? 'active' : ''} onClick={() => { setSort('stars'); void search(query, 'stars') }}><Star size={15} />热门</button>
+            <button type="button" disabled={batchRunning} className={sort === 'updated' ? 'active' : ''} onClick={() => { setSort('updated'); void search(query, 'updated') }}><Clock3 size={15} />最近更新</button>
+          </div>
+          <button
+            type="button"
+            className="secondary-button catalog-scan-button"
+            disabled={loading || batchRunning || checking !== null || installing !== null || pluginRepositories.length === 0}
+            onClick={() => void inspectAll()}
+            title="检测当前目录中的全部第三方插件候选"
+          >
+            {batchRunning ? <LoaderCircle className="spin" size={15} /> : <ScanSearch size={15} />}
+            {batchRunning ? `检测 ${batchScan.completed}/${batchScan.total}` : batchScan ? '再次检测全部' : '一键检测全部'}
+          </button>
         </div>
       </div>
+
+      {batchScan && (
+        <div className={`batch-scan-status ${batchScan.phase}`} role="status" aria-live="polite">
+          {batchRunning ? <LoaderCircle className="spin" size={15} /> : batchScan.phase === 'complete' ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
+          <span>
+            {batchRunning
+              ? `正在检测全部插件候选：${batchScan.completed}/${batchScan.total}`
+              : batchScan.phase === 'complete'
+                ? `检测完成：${batchScan.total} 个候选中有 ${batchScan.available} 个包含可安装组件${batchScan.failed ? `，${batchScan.failed} 个检测失败` : ''}`
+                : `检测已暂停：完成 ${batchScan.completed}/${batchScan.total}，发现 ${batchScan.available} 个可安装组件，${batchScan.failed} 个请求失败`}
+          </span>
+          <div className="batch-scan-track" aria-hidden="true"><i style={{ width: `${Math.round(batchScan.completed / batchScan.total * 100)}%` }} /></div>
+        </div>
+      )}
 
       <div className="catalog-note"><CircleAlert size={16} /><span>GitHub 主题表示仓库自我声明为 DSH 插件；官方 <code>deepseek-ai/deepseek-harness</code> 会作为 DSH 本体安装到启动器的本地运行目录。</span></div>
       <section className="repository-list" aria-busy={loading}>
@@ -882,8 +1032,33 @@ function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
           <div className="list-loading"><Search size={21} />没有找到匹配的仓库</div>
         ) : repositories.map(repo => {
           const installed = repo.kind === 'dsh' ? dshInstallation.installed : installedRepos.has(repo.fullName.toLowerCase())
+          const analysis = analyses[repo.fullName]
           const progress = installing === repo.fullName && installProgress?.repository === repo.fullName ? installProgress : null
           const indeterminate = progress?.indeterminate === true && progress.phase !== 'error'
+          const isChecking = checking === repo.fullName
+          const target = analysis?.targets.length === 1 ? analysis.targets[0] : undefined
+          const actionLabel = repo.kind === 'dsh'
+            ? installed ? '更新 DSH' : '安装 DSH'
+            : !analysis
+              ? installed ? '检测更新' : '检测'
+              : analysis.installability === 'choice'
+                ? '选择组件'
+                : analysis.installability === 'ready'
+                  ? installed ? '更新' : '安装'
+                  : analysis.installability === 'dynamic'
+                    ? '动态插件'
+                    : analysis.installability === 'application'
+                      ? '非插件'
+                      : '不可安装'
+          const actionDisabled = installing !== null
+            || checking !== null
+            || Boolean(analysis && !['ready', 'choice'].includes(analysis.installability))
+          const runAction = () => {
+            if (repo.kind === 'dsh') return void install(repo)
+            if (!analysis) return void inspect(repo)
+            if (analysis.installability === 'choice') return setTargetDialog({ repo, analysis })
+            if (target) void install(repo, target)
+          }
           return (
             <article className={`repository-row ${repo.kind === 'dsh' ? 'dsh-core-row' : ''}`} key={repo.id}>
               <div className="repo-main">
@@ -892,8 +1067,13 @@ function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
                   <div className="repo-title-line">
                     <button type="button" className="repo-title" onClick={() => onOpenRepository(repo.url)}><span>{repo.owner}/</span><strong>{repo.name}</strong><ExternalLink size={13} /></button>
                     {repo.kind === 'dsh' && <span className="dsh-core-badge">DSH 本体</span>}
+                    {analysis && <span className={`repository-analysis-badge ${analysis.installability}`}>{analysis.installability === 'ready' ? 'Bundle' : analysis.installability === 'choice' ? `${analysis.targets.length} 个组件` : analysis.installability === 'dynamic' ? '动态' : analysis.installability === 'application' ? '应用' : '无效'}</span>}
                   </div>
                   <p>{repo.description}</p>
+                  {analysis && <div className={`repository-analysis-note ${analysis.installability}`}>
+                    {analysis.summary}
+                    {target && <span>{target.source === 'npm' ? 'npm' : target.source === 'github' ? 'GitHub' : `子目录 ${target.subdirectory}`} · {target.profileName} Profile{target.requiresBuild ? ' · 需要构建' : ''}</span>}
+                  </div>}
                   <div className="topic-list">{repo.topics.slice(0, 3).map(topic => <span key={topic}>{topic}</span>)}</div>
                 </div>
               </div>
@@ -916,20 +1096,337 @@ function DiscoverView({ profile, onInstalled, onError, onOpenRepository }: {
                 ) : installed ? (
                   <div className="installed-actions">
                     <span className="installed-label"><Check size={16} />{repo.kind === 'dsh' ? `${dshInstallation.source === 'system' ? '系统 DSH' : '本地 DSH'} ${dshInstallation.version ?? ''}` : '已下载'}</span>
-                    <button type="button" className="install-button update-button" disabled={installing !== null} onClick={() => void install(repo)} title={`检查并更新 ${repo.name}`}>
-                      <RefreshCw size={15} />更新
+                    <button type="button" className="install-button update-button" disabled={actionDisabled} onClick={runAction} title={`检查并更新 ${repo.name}`}>
+                      {isChecking ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}{actionLabel}
                     </button>
                   </div>
                 ) : (
-                  <button type="button" className="install-button" disabled={installing !== null} onClick={() => void install(repo)}>
-                    {installing === repo.fullName ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}
-                    {repo.kind === 'dsh' ? '安装 DSH' : '安装'}
+                  <button type="button" className="install-button" disabled={actionDisabled} onClick={runAction}>
+                    {isChecking || installing === repo.fullName ? <LoaderCircle className="spin" size={16} /> : analysis?.installability === 'application' ? <Box size={16} /> : analysis && !['ready', 'choice'].includes(analysis.installability) ? <CircleAlert size={16} /> : <Download size={16} />}
+                    {isChecking ? '检测中' : actionLabel}
                   </button>
                 )}
               </div>
             </article>
           )
         })}
+      </section>
+      {targetDialog && (
+        <PluginTargetDialog
+          repo={targetDialog.repo}
+          analysis={targetDialog.analysis}
+          busy={installing !== null}
+          onClose={() => setTargetDialog(null)}
+          onInstall={target => void install(targetDialog.repo, target)}
+        />
+      )}
+    </div>
+  )
+}
+
+function SkillHubView({ analyses, onAnalysis, onInstalled, onError, onOpenRepository }: {
+  analyses: Record<string, SkillRepositoryAnalysis>
+  onAnalysis: (repository: string, analysis: SkillRepositoryAnalysis) => void
+  onInstalled: (skill: InstalledSkill) => void
+  onError: (message: string) => void
+  onOpenRepository: (url: string) => void
+}) {
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<'stars' | 'updated'>('stars')
+  const [repositories, setRepositories] = useState<SkillRepositoryResult[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [checking, setChecking] = useState<string | null>(null)
+  const [installing, setInstalling] = useState<string | null>(null)
+  const [installProgress, setInstallProgress] = useState<InstallProgress | null>(null)
+  const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([])
+  const [targetDialog, setTargetDialog] = useState<{ repo: SkillRepositoryResult; analysis: SkillRepositoryAnalysis } | null>(null)
+  const [batchScan, setBatchScan] = useState<BatchScanState | null>(null)
+  const batchRunRef = useRef(0)
+
+  const search = useCallback(async (searchQuery = query, searchSort = sort) => {
+    setLoading(true)
+    try {
+      const result = await api.discoverSkills(searchQuery, searchSort)
+      setRepositories(result.repositories)
+      setTotal(result.totalCount)
+      setInstalledSkills(result.installedSkills)
+    } catch (error) {
+      onError(errorText(error))
+    } finally {
+      setLoading(false)
+    }
+  }, [onError, query, sort])
+
+  useEffect(() => { void search('', 'stars') }, [])
+  useEffect(() => {
+    const unsubscribe = api.onInstallProgress(progress => {
+      if (progress.kind === 'skill') setInstallProgress(progress)
+    })
+    return unsubscribe
+  }, [])
+  useEffect(() => () => { batchRunRef.current += 1 }, [])
+
+  const installedNames = useMemo(() => new Set(installedSkills.map(skill => skill.name)), [installedSkills])
+  const batchRunning = batchScan?.phase === 'running'
+
+  const inspect = async (repo: SkillRepositoryResult) => {
+    setChecking(repo.fullName)
+    try {
+      const analysis = await api.analyzeSkill(repo.fullName, repo.defaultBranch)
+      onAnalysis(repo.fullName, analysis)
+      if (analysis.installability === 'choice') setTargetDialog({ repo, analysis })
+    } catch (error) {
+      onError(errorText(error))
+    } finally {
+      setChecking(null)
+    }
+  }
+
+  const install = async (repo: SkillRepositoryResult, target: SkillInstallTarget) => {
+    setInstalling(repo.fullName)
+    setTargetDialog(null)
+    setInstallProgress({ repository: repo.fullName, kind: 'skill', phase: 'preparing', percent: 0, message: '正在准备本地 Skill 目录' })
+    try {
+      const result = await api.installSkill({ repository: repo.fullName, defaultBranch: repo.defaultBranch, targetId: target.id })
+      setInstalledSkills(result.installedSkills)
+      onInstalled(result.installedSkill)
+    } catch (error) {
+      onError(errorText(error))
+    } finally {
+      setInstalling(null)
+    }
+  }
+
+  const inspectAll = async () => {
+    if (repositories.length === 0 || batchRunning) return
+    const runId = batchRunRef.current + 1
+    batchRunRef.current = runId
+    const totalCandidates = repositories.length
+    let completed = 0
+    let available = 0
+    let failed = 0
+    let consecutiveFailures = 0
+    let stopped = false
+    setTargetDialog(null)
+    setBatchScan({ phase: 'running', total: totalCandidates, completed, available, failed })
+
+    for (const repo of repositories) {
+      if (batchRunRef.current !== runId) return
+      setChecking(repo.fullName)
+      try {
+        const analysis = await api.analyzeSkill(repo.fullName, repo.defaultBranch)
+        if (batchRunRef.current !== runId) return
+        onAnalysis(repo.fullName, analysis)
+        if (analysis.installability !== 'invalid') available += 1
+        consecutiveFailures = 0
+      } catch (error) {
+        if (batchRunRef.current !== runId) return
+        failed += 1
+        consecutiveFailures += 1
+        const message = errorText(error)
+        stopped = /403|rate.?limit|请求额度|请求频率/i.test(message) || consecutiveFailures >= 3
+      }
+      completed += 1
+      setBatchScan({ phase: 'running', total: totalCandidates, completed, available, failed })
+      if (stopped) break
+    }
+
+    setChecking(null)
+    setBatchScan({
+      phase: stopped || completed < totalCandidates ? 'partial' : 'complete',
+      total: totalCandidates,
+      completed,
+      available,
+      failed,
+    })
+  }
+
+  return (
+    <div className="page discover-page skill-hub-page">
+      <PageHeading eyebrow="SKILL HUB" title="发现 DSH Skills" description={`从 GitHub dsh-skill 主题中浏览 ${total ? total.toLocaleString('zh-CN') : ''} 个公开仓库。只有通过 DSH 格式检查的内容才能安装。`} />
+      <div className="discovery-controls">
+        <form className="search-field large" onSubmit={event => { event.preventDefault(); void search() }}>
+          <Search size={18} />
+          <input value={query} disabled={batchRunning} onChange={event => setQuery(event.target.value)} placeholder="搜索名称、作者或说明" aria-label="搜索 Skills" />
+          {query && <button type="button" disabled={batchRunning} onClick={() => { setQuery(''); void search('', sort) }} aria-label="清除搜索"><X size={16} /></button>}
+          <button type="submit" className="search-submit" disabled={batchRunning}>搜索</button>
+        </form>
+        <div className="discovery-actions">
+          <div className="segmented-control" aria-label="Skill 排序方式">
+            <button type="button" disabled={batchRunning} className={sort === 'stars' ? 'active' : ''} onClick={() => { setSort('stars'); void search(query, 'stars') }}><Star size={15} />热门</button>
+            <button type="button" disabled={batchRunning} className={sort === 'updated' ? 'active' : ''} onClick={() => { setSort('updated'); void search(query, 'updated') }}><Clock3 size={15} />最近更新</button>
+          </div>
+          <button type="button" className="secondary-button catalog-scan-button" disabled={loading || batchRunning || checking !== null || installing !== null || repositories.length === 0} onClick={() => void inspectAll()} title="检测当前目录中的全部 Skill 候选">
+            {batchRunning ? <LoaderCircle className="spin" size={15} /> : <ScanSearch size={15} />}
+            {batchRunning ? `检测 ${batchScan.completed}/${batchScan.total}` : batchScan ? '再次检测全部' : '一键检测全部'}
+          </button>
+        </div>
+      </div>
+
+      {batchScan && (
+        <div className={`batch-scan-status ${batchScan.phase}`} role="status" aria-live="polite">
+          {batchRunning ? <LoaderCircle className="spin" size={15} /> : batchScan.phase === 'complete' ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
+          <span>{batchRunning
+            ? `正在检测全部 Skill 候选：${batchScan.completed}/${batchScan.total}`
+            : batchScan.phase === 'complete'
+              ? `检测完成：${batchScan.total} 个候选中有 ${batchScan.available} 个包含有效 Skill${batchScan.failed ? `，${batchScan.failed} 个检测失败` : ''}`
+              : `检测已暂停：完成 ${batchScan.completed}/${batchScan.total}，发现 ${batchScan.available} 个有效 Skill 仓库，${batchScan.failed} 个请求失败`}</span>
+          <div className="batch-scan-track" aria-hidden="true"><i style={{ width: `${Math.round(batchScan.completed / batchScan.total * 100)}%` }} /></div>
+        </div>
+      )}
+
+      <div className="catalog-note skill-hub-note"><BookOpenCheck size={16} /><span>检测会核对 <code>SKILL.md</code> 或单文件 Markdown 的 YAML frontmatter：必须包含 kebab-case 的 <code>name</code> 与 <code>description</code>。通过后安装到 <code>DSH_HOME/skills</code>。</span></div>
+      <section className="repository-list" aria-busy={loading}>
+        <div className="repository-headings" aria-hidden="true"><span>仓库</span><span>语言</span><span>活跃度</span><span /></div>
+        {loading ? (
+          <div className="list-loading"><LoaderCircle className="spin" size={21} />正在读取 GitHub Skill 目录</div>
+        ) : repositories.length === 0 ? (
+          <div className="list-loading"><Search size={21} />没有找到匹配的仓库</div>
+        ) : repositories.map(repo => {
+          const analysis = analyses[repo.fullName]
+          const target = analysis?.targets.length === 1 ? analysis.targets[0] : undefined
+          const installedTargetCount = analysis?.targets.filter(item => installedNames.has(item.name)).length ?? 0
+          const installed = installedTargetCount > 0
+          const progress = installing === repo.fullName && installProgress?.repository === repo.fullName ? installProgress : null
+          const indeterminate = progress?.indeterminate === true && progress.phase !== 'error'
+          const isChecking = checking === repo.fullName
+          const actionLabel = !analysis
+            ? '检测'
+            : analysis.installability === 'choice'
+              ? '选择 Skill'
+              : analysis.installability === 'ready'
+                ? installed ? '更新' : '安装'
+                : '非 Skill'
+          const actionDisabled = installing !== null || checking !== null || Boolean(analysis && analysis.installability === 'invalid')
+          const runAction = () => {
+            if (!analysis) return void inspect(repo)
+            if (analysis.installability === 'choice') return setTargetDialog({ repo, analysis })
+            if (target) void install(repo, target)
+          }
+          return (
+            <article className="repository-row skill-row" key={repo.id}>
+              <div className="repo-main">
+                <div className="repo-icon skill-icon"><BookOpenCheck size={18} /></div>
+                <div>
+                  <div className="repo-title-line">
+                    <button type="button" className="repo-title" onClick={() => onOpenRepository(repo.url)}><span>{repo.owner}/</span><strong>{repo.name}</strong><ExternalLink size={13} /></button>
+                    {analysis && <span className={`repository-analysis-badge ${analysis.installability}`}>{analysis.installability === 'ready' ? 'Skill' : analysis.installability === 'choice' ? `${analysis.targets.length} Skills` : '非 Skill'}</span>}
+                  </div>
+                  <p>{repo.description}</p>
+                  {analysis && <div className={`repository-analysis-note ${analysis.installability}`}>
+                    {analysis.summary}
+                    {target && <span>{target.format === 'bundle' ? '目录 Skill' : '单文件 Skill'} · {target.name}{target.modelInvocable ? '' : ' · 不对模型开放'}</span>}
+                  </div>}
+                  <div className="topic-list">{repo.topics.slice(0, 3).map(topic => <span key={topic}>{topic}</span>)}</div>
+                </div>
+              </div>
+              <div className="language-cell"><i className={`language-dot lang-${(repo.language ?? 'other').toLowerCase()}`} />{repo.language ?? '其他'}</div>
+              <div className="activity-cell"><span><Star size={15} fill="currentColor" />{formatStars(repo.stars)}</span><small>更新于 {formatDate(repo.updatedAt)}</small></div>
+              <div className="install-cell">
+                {progress ? (
+                  <div className={`install-progress ${progress.phase === 'error' ? 'error' : ''} ${indeterminate ? 'indeterminate' : ''}`}>
+                    <div><LoaderCircle className="spin" size={14} /><span>{progress.message}</span><strong>{indeterminate ? '进行中' : `${progress.percent}%`}</strong></div>
+                    <div className="progress-track" role="progressbar" aria-label={progress.message} aria-valuemin={0} aria-valuemax={100} aria-valuenow={indeterminate ? undefined : progress.percent} aria-valuetext={indeterminate ? '正在进行' : undefined}><span style={indeterminate ? undefined : { width: `${progress.percent}%` }} /></div>
+                  </div>
+                ) : installed ? (
+                  <div className="installed-actions">
+                    <span className="installed-label"><Check size={16} />{analysis && analysis.targets.length > 1 ? `已安装 ${installedTargetCount}/${analysis.targets.length}` : '已安装'}</span>
+                    <button type="button" className="install-button update-button" disabled={actionDisabled} onClick={runAction} title={`更新 ${target?.name ?? repo.name}`}><RefreshCw size={15} />更新</button>
+                  </div>
+                ) : (
+                  <button type="button" className="install-button" disabled={actionDisabled} onClick={runAction}>
+                    {isChecking || installing === repo.fullName ? <LoaderCircle className="spin" size={16} /> : analysis?.installability === 'invalid' ? <CircleAlert size={16} /> : <Download size={16} />}
+                    {isChecking ? '检测中' : actionLabel}
+                  </button>
+                )}
+              </div>
+            </article>
+          )
+        })}
+      </section>
+      {targetDialog && (
+        <SkillTargetDialog
+          repo={targetDialog.repo}
+          analysis={targetDialog.analysis}
+          installedNames={installedNames}
+          busy={installing !== null}
+          onClose={() => setTargetDialog(null)}
+          onInstall={target => void install(targetDialog.repo, target)}
+        />
+      )}
+    </div>
+  )
+}
+
+function SkillTargetDialog({ repo, analysis, installedNames, busy, onClose, onInstall }: {
+  repo: SkillRepositoryResult
+  analysis: SkillRepositoryAnalysis
+  installedNames: Set<string>
+  busy: boolean
+  onClose: () => void
+  onInstall: (target: SkillInstallTarget) => void
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target && !busy) onClose() }}>
+      <section className="modal plugin-target-dialog skill-target-dialog" role="dialog" aria-modal="true" aria-labelledby="skill-target-title">
+        <header>
+          <div><BookOpenCheck size={18} /><h2 id="skill-target-title">选择要安装的 Skill</h2></div>
+          <button type="button" className="icon-button" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17} /></button>
+        </header>
+        <div className="modal-content">
+          <p className="target-dialog-summary">{repo.fullName} 包含多个通过 DSH 格式检查的 Skills。安装会覆盖同名本地 Skill。</p>
+          <div className="plugin-target-list">
+            {analysis.targets.map(target => (
+              <div className="plugin-target-row" key={target.id}>
+                <div className="plugin-target-icon"><BookOpenCheck size={17} /></div>
+                <div className="plugin-target-copy">
+                  <strong>{target.name}</strong>
+                  <span>{target.description}</span>
+                  <small>{target.format === 'bundle' ? '目录 Skill' : '单文件 Skill'} · {target.sourcePath}{target.modelInvocable ? '' : ' · 不对模型开放'}</small>
+                </div>
+                <button type="button" className="install-button" disabled={busy} onClick={() => onInstall(target)}>{installedNames.has(target.name) ? <RefreshCw size={15} /> : <Download size={15} />}{installedNames.has(target.name) ? '更新' : '安装'}</button>
+              </div>
+            ))}
+          </div>
+        </div>
+        <footer><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>取消</button></footer>
+      </section>
+    </div>
+  )
+}
+
+function PluginTargetDialog({ repo, analysis, busy, onClose, onInstall }: {
+  repo: RepositoryResult
+  analysis: RepositoryAnalysis
+  busy: boolean
+  onClose: () => void
+  onInstall: (target: PluginInstallTarget) => void
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target && !busy) onClose() }}>
+      <section className="modal plugin-target-dialog" role="dialog" aria-modal="true" aria-labelledby="plugin-target-title">
+        <header>
+          <div><PackageCheck size={18} /><h2 id="plugin-target-title">选择插件组件</h2></div>
+          <button type="button" className="icon-button" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17} /></button>
+        </header>
+        <div className="modal-content">
+          <p className="target-dialog-summary">{repo.fullName} 包含多个可安装组件。每个组件会安装到它适用的 Profile。</p>
+          <div className="plugin-target-list">
+            {analysis.targets.map(target => (
+              <div className="plugin-target-row" key={target.id}>
+                <div className="plugin-target-icon">{target.platform === 'terminal' ? <SquareTerminal size={17} /> : <Box size={17} />}</div>
+                <div className="plugin-target-copy">
+                  <strong>{target.packageName}</strong>
+                  <span>{target.source === 'npm' ? `npm ${target.version ?? ''}` : target.source === 'github' ? 'GitHub 仓库根目录' : `仓库子目录：${target.subdirectory}`}</span>
+                  <small>{target.profileName} Profile{target.nodeRange ? ` · Node ${target.nodeRange}` : ''}{target.requiresBuild ? ` · 构建脚本：${target.buildScripts.join(', ')}` : ''}</small>
+                </div>
+                <button type="button" className="install-button" disabled={busy} onClick={() => onInstall(target)}><Download size={15} />安装</button>
+              </div>
+            ))}
+          </div>
+        </div>
+        <footer><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>取消</button></footer>
       </section>
     </div>
   )
@@ -1091,7 +1588,7 @@ function SettingsDialog({ settings, busy, onClose, onSave }: {
 }) {
   const [draft, setDraft] = useState(settings)
   const [argsText, setArgsText] = useState(settings.launchArgs.join(' '))
-  const chooseDirectory = async (kind: 'dshHome' | 'workspace') => {
+  const chooseDirectory = async (kind: 'dshInstallPath' | 'dshHome' | 'workspace') => {
     const chosen = await api.chooseDirectory(kind)
     if (chosen) setDraft(current => ({ ...current, [kind]: chosen }))
   }
@@ -1100,7 +1597,8 @@ function SettingsDialog({ settings, busy, onClose, onSave }: {
       <section className="modal settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header><div><Settings size={19} /><h2 id="settings-title">启动器设置</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="关闭设置"><X size={18} /></button></header>
         <div className="modal-content">
-          <div className="form-section"><h3>DSH 配置</h3><p>启动器直接读取官方 profile，修改后请刷新插件列表。</p></div>
+          <div className="form-section"><h3>DSH 配置</h3><p>本体目录存放 DSH 程序与依赖；DSH_HOME 存放 Profile、配置、插件和 Skills。</p></div>
+          <label className="form-field"><span>本体安装目录</span><div className="path-input"><input value={draft.dshInstallPath} onChange={event => setDraft({ ...draft, dshInstallPath: event.target.value })} /><button type="button" onClick={() => void chooseDirectory('dshInstallPath')} title="选择 DSH 本体安装目录"><Folder size={17} /></button></div></label>
           <label className="form-field"><span>DSH_HOME</span><div className="path-input"><input value={draft.dshHome} onChange={event => setDraft({ ...draft, dshHome: event.target.value })} /><button type="button" onClick={() => void chooseDirectory('dshHome')} title="选择 DSH_HOME"><Folder size={17} /></button></div></label>
           <label className="form-field"><span>Profile 名称</span><input value={draft.profileName} onChange={event => setDraft({ ...draft, profileName: event.target.value })} /></label>
           <div className="form-section divided"><h3>启动命令</h3><p>默认使用官方 npm 包启动 Web 工作台。</p></div>

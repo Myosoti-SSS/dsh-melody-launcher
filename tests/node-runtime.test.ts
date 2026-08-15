@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import path from 'node:path'
 import {
   NODE_RUNTIME_VERSION,
+  PNPM_VERSION,
   nodeArchiveName,
   parseNodeArchiveChecksum,
+  pnpmExecutable,
   requiresNodeRuntime,
   resolveNodeExecutable,
 } from '../electron/node-runtime'
@@ -33,6 +35,15 @@ describe('node runtime', () => {
     expect(resolveNodeExecutable('npx.cmd', runtime)).toBe(runtime.npx)
     expect(resolveNodeExecutable('C:\\old\\npm.cmd', runtime)).toBe(runtime.npm)
     expect(resolveNodeExecutable('custom.exe', runtime)).toBe('custom.exe')
+  })
+
+  it('keeps the managed pnpm executable in the launcher runtime directory', () => {
+    const root = path.join('C:', 'dsh-launcher', 'pnpm-runtime')
+    expect(pnpmExecutable(root)).toBe(path.join(root, 'node_modules', '.bin', 'pnpm.cmd'))
+  })
+
+  it('uses the current pnpm store format for managed plugin operations', () => {
+    expect(PNPM_VERSION).toMatch(/^11\./)
   })
 
   it('detects commands that need Node.js on PATH', () => {
