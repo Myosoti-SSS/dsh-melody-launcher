@@ -8,7 +8,7 @@ import {
   Clock3,
   Download,
   ExternalLink,
-  Github,
+  FolderGit2,
   Layers3,
   LoaderCircle,
   RefreshCw,
@@ -428,7 +428,7 @@ export function DiscoverView({
             <article className={`repository-row ${repo.kind === 'dsh' ? 'dsh-core-row' : ''}`} key={repo.id}>
               <div className="repo-main">
                 <div className={`repo-icon ${iconKind === 'dsh' ? 'dsh-core-icon' : iconKind === 'skill' ? 'skill-icon' : iconKind === 'hybrid' ? 'hybrid-icon' : ''}`}>
-                  {iconKind === 'dsh' ? <Layers3 size={18} /> : iconKind === 'skill' ? <BookOpenCheck size={18} /> : iconKind === 'hybrid' ? <Layers3 size={18} /> : <Github size={18} />}
+                  {iconKind === 'dsh' ? <Layers3 size={18} /> : iconKind === 'skill' ? <BookOpenCheck size={18} /> : iconKind === 'hybrid' ? <Layers3 size={18} /> : <FolderGit2 size={18} />}
                 </div>
                 <div>
                   <div className="repo-title-line">
