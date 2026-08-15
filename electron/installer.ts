@@ -4,6 +4,7 @@ import path from 'node:path'
 import { DSH_PACKAGE_NAME } from '../src/constants'
 import type {
   AppSettings,
+  CatalogRepositoryAnalysis,
   DshInstallationStatus,
   InstallProgress,
   InstalledSkill,
@@ -16,6 +17,7 @@ import type {
   SkillRepositoryAnalysis,
 } from '../src/types'
 import { runCommand, type OutputLevel } from './command'
+import { classifyCatalogRepository } from './catalog-analysis'
 import {
   findInstalledDsh,
   getManagedDshStatus,
@@ -84,6 +86,8 @@ export interface Installer {
   analyzePlugin(fullName: string, defaultBranch: string): Promise<RepositoryAnalysis>
   /** 检测一个 Skill 仓库，返回可安装组件清单（带 5 分钟缓存）。 */
   analyzeSkill(fullName: string, defaultBranch: string): Promise<SkillRepositoryAnalysis>
+  /** 同时检测 Plugin 与 Skill，返回统一资源市场分类。 */
+  analyzeCatalogRepository(fullName: string, defaultBranch: string): Promise<CatalogRepositoryAnalysis>
   /** 安装一个 Skill。 */
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
   /** 读取已安装的 Skill 列表。 */
@@ -140,6 +144,24 @@ export function createInstaller(options: InstallerOptions): Installer {
     const analysis = await analyzeSkillRepository(fullName, defaultBranch)
     skillAnalysisCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60_000, analysis })
     return analysis
+  }
+
+  const analyzeCatalogRepository = async (
+    fullName: string,
+    defaultBranch: string,
+  ): Promise<CatalogRepositoryAnalysis> => {
+    if (isDshRepository(fullName)) return classifyCatalogRepository(
+      fullName,
+      defaultBranch,
+      { status: 'rejected', reason: new Error('skipped') },
+      { status: 'rejected', reason: new Error('skipped') },
+    )
+
+    const [pluginResult, skillResult] = await Promise.allSettled([
+      analyzePlugin(fullName, defaultBranch),
+      analyzeSkill(fullName, defaultBranch),
+    ])
+    return classifyCatalogRepository(fullName, defaultBranch, pluginResult, skillResult)
   }
 
   /** 准备 Node.js，同时把下载进度折算进当前安装任务的进度条。 */
@@ -392,6 +414,8 @@ export function createInstaller(options: InstallerOptions): Installer {
 
     analyzeSkill,
 
+    analyzeCatalogRepository,
+
     async readInstalledSkills(): Promise<InstalledSkill[]> {
       const settings = await options.readSettings()
       return readLocalSkills(settings.dshHome)
@@ -428,7 +452,7 @@ export function createInstaller(options: InstallerOptions): Installer {
             options.pluginSourceRoot,
             fullName,
             target,
-            (percent, message) => emit({ repository: fullName, kind: 'plugin', phase: 'downloading', percent, message }),
+            progress => emit({ repository: fullName, kind: 'plugin', phase: 'downloading', ...progress }),
           )
           specifier = `file:${packageDirectory}`
         }

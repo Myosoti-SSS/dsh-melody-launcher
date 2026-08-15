@@ -82,21 +82,17 @@
 - **进程生命周期管理** —— 启动、停止、实时日志（stdout/stderr 分级），退出启动器时自动收尾 DSH 进程
 - **自动打开网页** —— 从日志中识别本地服务地址并自动在浏览器打开（可关闭）
 
-### 插件管理
+### 统一资源市场与插件管理
 
-- **插件发现** —— 直连 GitHub Search API，检索 [`dsh-plugin`](https://github.com/topics/dsh-plugin) Topic，支持按 Star 数或更新时间排序
+- **统一发现** —— 并行检索 [`dsh-plugin`](https://github.com/topics/dsh-plugin) 与 [`dsh-skill`](https://github.com/topics/dsh-skill)，在同一列表中浏览和搜索
+- **内容识别** —— Topic 只作为候选来源；检测后按真实仓库内容标记为 `Plugin`、`Skill`、`Plugin + Skill`、`DSH 本体` 或 `无效`
+- **按标签安装** —— Plugin 进入目标 Profile，Skill 写入 `$DSH_HOME/skills`；混合仓库由用户逐项选择组件，不会默认安装全部
+- **严格 Skill 校验** —— 检查目录型 `<name>/SKILL.md` 或单文件 `<name>.md`，YAML frontmatter 必须包含 kebab-case 的 `name` 与非空 `description`
 - **分阶段安装进度** —— `准备 → 解析 → 下载 → 配置 → 完成` 五个阶段，带百分比与实时状态文本
 - **加载顺序编排** —— 直接读写 DSH 官方 Profile，调整启用状态与 Bundle 加载顺序
 - **停用 ≠ 卸载** —— 停用只把插件移出有序加载列表，本地依赖保留，可随时恢复；只有显式卸载才删除
 - **核心 Bundle 保护** —— `@deepseek-ai/dsh-base`、`dsh-web-app`、`dsh-headless` 三个核心组合层在主进程层面禁止停用，界面上也不提供卸载入口
 - **构建脚本自动授权** —— 遇到 pnpm `ERR_PNPM_IGNORED_BUILDS` 时，仅为当前安装的仓库批准构建脚本并自动重试
-
-### Skill Hub
-
-- **Skill 发现** —— 直连 GitHub Search API，检索 [`dsh-skill`](https://github.com/topics/dsh-skill) Topic，支持按 Star 数或更新时间排序
-- **严格有效性校验** —— 不把 Topic 当作有效证明：安装前下载仓库快照，检查目录型 `<name>/SKILL.md` 或单文件 `<name>.md`，要求 YAML frontmatter 至少包含 kebab-case 的 `name` 和非空 `description`
-- **多组件选择** —— 多 Skill 仓库可选择安装其中部分组件；本地同名 Skill 显示为已安装，并可从原仓库更新
-- **写入 Skills 目录** —— 安装结果写入 `$DSH_HOME/skills`
 
 ### 界面与配置
 
@@ -126,9 +122,9 @@
 
 在启动页填入 DeepSeek API Key。启动器会写入 DSH 官方凭据文件 `$DSH_HOME/.credentials.yaml`。
 
-### 4. 安装插件（可选）
+### 4. 安装 Plugin 或 Skill（可选）
 
-进入「**发现插件**」页面搜索并安装第三方插件，然后在「**插件顺序**」中调整启用状态与加载顺序。
+进入「**资源市场**」搜索候选仓库，检测真实类型后安装 Plugin 或 Skill。Plugin 可在「**插件顺序**」中调整启用状态与加载顺序。
 
 ### 5. 启动
 
@@ -150,9 +146,11 @@
 
 > 变更在**下次启动 DSH 时生效**。
 
-### 发现插件
+### 资源市场
 
-从 GitHub 检索带 `dsh-plugin` Topic 的仓库，显示 Star 数、主语言、更新时间和描述，点击即可安装。
+从 GitHub 合并检索带 `dsh-plugin` 或 `dsh-skill` Topic 的仓库，显示 Star 数、主语言、更新时间和描述。点击检测后，启动器会同时验证 Plugin 与 Skill 结构，并按识别标签调用对应安装器。
+
+同一仓库可以同时提供 Plugin 和 Skill。此时列表显示 `Plugin + Skill`，安装按钮会打开组件选择窗口，由用户分别安装或更新。
 
 搜索使用 GitHub 匿名 API，有速率限制；额度用尽时启动器会明确提示，稍后重试即可。
 
@@ -164,7 +162,7 @@
 
 ## DSH 本体检测与安装
 
-启动器在插件发现页会**特别识别**这个仓库：
+启动器在资源市场会**特别识别**这个仓库：
 
 ```text
 deepseek-ai/deepseek-harness
@@ -320,7 +318,7 @@ dsh-melody-launcher/
 - [x] DeepSeek API Key 配置
 - [x] 插件搜索、下载进度与安装状态
 - [x] 插件结构检测、多组件选择和本地安装识别
-- [x] Skill Hub、规范检测、安装和更新
+- [x] Plugin / Skill 统一资源市场、规范检测、安装和更新
 - [x] 插件启停、排序与卸载
 - [x] DSH 本体识别与本地安装
 - [x] 系统 DSH 检测与首次部署引导

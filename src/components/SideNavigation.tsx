@@ -1,4 +1,4 @@
-import { BookOpenCheck, Box, Layers3, Sparkles, SquareTerminal } from 'lucide-react'
+import { Box, Layers3, Sparkles, SquareTerminal } from 'lucide-react'
 import type { ProfileState, RuntimeState, ViewName } from '../types'
 
 /** 管理界面左侧导航与当前 Profile 摘要。 */
@@ -21,8 +21,7 @@ interface SideNavigationProps {
 export function SideNavigation({ view, profile, runtime, profileName, onChange }: SideNavigationProps) {
   const entries: NavigationEntry[] = [
     { id: 'plugins', label: '插件顺序', icon: Layers3, count: profile.plugins.length },
-    { id: 'discover', label: '发现插件', icon: Sparkles },
-    { id: 'skills', label: 'Skill Hub', icon: BookOpenCheck },
+    { id: 'discover', label: '资源市场', icon: Sparkles },
     { id: 'runtime', label: '运行与日志', icon: SquareTerminal },
   ]
 

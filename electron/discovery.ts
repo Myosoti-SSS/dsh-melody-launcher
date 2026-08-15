@@ -1,12 +1,17 @@
-import type { RepositoryResult, SkillRepositoryResult } from '../src/types'
+import type {
+  CatalogCandidateType,
+  CatalogRepositoryResult,
+} from '../src/types'
 import { isDshRepository } from './dsh-install'
 
-/** GitHub 插件 / Skill 目录检索。解析与映射是纯函数，网络调用单独一层。 */
+/** GitHub Plugin / Skill 统一目录检索。解析与映射是纯函数，网络调用单独一层。 */
 
 const SEARCH_ENDPOINT = 'https://api.github.com/search/repositories'
 const PLUGIN_TOPIC = 'dsh-plugin'
 const SKILL_TOPIC = 'dsh-skill'
-const PAGE_SIZE = 30
+export const CATALOG_SOURCE_PAGE_SIZE = 15
+export const GITHUB_SEARCH_RESULT_LIMIT = 1000
+export const CATALOG_MAX_PAGE = Math.ceil(GITHUB_SEARCH_RESULT_LIMIT / CATALOG_SOURCE_PAGE_SIZE)
 
 export type DiscoverySort = 'stars' | 'updated'
 
@@ -19,6 +24,7 @@ export interface GitHubRepositoryItem {
   description: string | null
   html_url: string
   stargazers_count: number
+  size?: number
   language: string | null
   updated_at: string
   topics?: string[]
@@ -26,15 +32,12 @@ export interface GitHubRepositoryItem {
 }
 
 export interface DiscoveryResponse {
-  repositories: RepositoryResult[]
-  totalCount: number
+  repositories: CatalogRepositoryResult[]
+  topicTotals: Record<CatalogCandidateType, number>
+  page: number
+  pageCount: number
   rateRemaining?: number
-}
-
-export interface SkillDiscoveryResponse {
-  repositories: SkillRepositoryResult[]
-  totalCount: number
-  rateRemaining?: number
+  warnings: string[]
 }
 
 /**
@@ -47,17 +50,20 @@ export function buildSearchQuery(query: string, topic: string): string {
 }
 
 export function buildSearchUrl(query: string, sort: DiscoverySort, page: number, topic: string): URL {
-  const normalizedPage = Math.min(34, Math.max(1, Math.floor(Number(page) || 1)))
+  const normalizedPage = Math.min(CATALOG_MAX_PAGE, Math.max(1, Math.floor(Number(page) || 1)))
   const url = new URL(SEARCH_ENDPOINT)
   url.searchParams.set('q', buildSearchQuery(query, topic))
   url.searchParams.set('sort', sort)
   url.searchParams.set('order', 'desc')
-  url.searchParams.set('per_page', String(PAGE_SIZE))
+  url.searchParams.set('per_page', String(CATALOG_SOURCE_PAGE_SIZE))
   url.searchParams.set('page', String(normalizedPage))
   return url
 }
 
-export function mapRepository(item: GitHubRepositoryItem): RepositoryResult {
+export function mapCatalogRepository(
+  item: GitHubRepositoryItem,
+  candidateTypes: CatalogCandidateType[],
+): CatalogRepositoryResult {
   return {
     id: item.id,
     fullName: item.full_name,
@@ -66,27 +72,13 @@ export function mapRepository(item: GitHubRepositoryItem): RepositoryResult {
     description: item.description ?? '此仓库没有提供说明。',
     url: item.html_url,
     stars: item.stargazers_count,
+    sizeKb: item.size,
     language: item.language,
     updatedAt: item.updated_at,
     topics: item.topics ?? [],
     defaultBranch: item.default_branch,
-    kind: isDshRepository(item.full_name) ? 'dsh' : 'plugin',
-  }
-}
-
-export function mapSkillRepository(item: GitHubRepositoryItem): SkillRepositoryResult {
-  return {
-    id: item.id,
-    fullName: item.full_name,
-    name: item.name,
-    owner: item.owner.login,
-    description: item.description ?? '此仓库没有提供说明。',
-    url: item.html_url,
-    stars: item.stargazers_count,
-    language: item.language,
-    updatedAt: item.updated_at,
-    topics: item.topics ?? [],
-    defaultBranch: item.default_branch,
+    kind: isDshRepository(item.full_name) ? 'dsh' : 'repository',
+    candidateTypes: isDshRepository(item.full_name) ? [] : [...new Set(candidateTypes)],
   }
 }
 
@@ -98,8 +90,9 @@ export function describeSearchFailure(status: number): Error {
 /** 执行一次 GitHub 搜索，解析仓库列表与速率余量。 */
 async function searchRepositories(
   url: URL,
+  fetchImpl: typeof fetch,
 ): Promise<{ repositories: GitHubRepositoryItem[]; totalCount: number; rateRemaining?: number }> {
-  const response = await fetch(url, {
+  const response = await fetchImpl(url, {
     headers: {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'DSH-Launcher',
@@ -109,7 +102,8 @@ async function searchRepositories(
   if (!response.ok) throw describeSearchFailure(response.status)
 
   const data = await response.json() as { total_count: number; items: GitHubRepositoryItem[] }
-  const remaining = Number(response.headers.get('x-ratelimit-remaining'))
+  const remainingHeader = response.headers.get('x-ratelimit-remaining')
+  const remaining = remainingHeader == null ? Number.NaN : Number(remainingHeader)
   return {
     repositories: data.items,
     totalCount: data.total_count,
@@ -117,28 +111,100 @@ async function searchRepositories(
   }
 }
 
-export async function searchPluginRepositories(
-  query: string,
-  sort: DiscoverySort,
-  page: number,
-): Promise<DiscoveryResponse> {
-  const found = await searchRepositories(buildSearchUrl(query, sort, page, PLUGIN_TOPIC))
-  return {
-    repositories: found.repositories.map(mapRepository),
-    totalCount: found.totalCount,
-    rateRemaining: found.rateRemaining,
+function sourcePageCount(total: number): number {
+  return Math.max(1, Math.ceil(Math.min(total, GITHUB_SEARCH_RESULT_LIMIT) / CATALOG_SOURCE_PAGE_SIZE))
+}
+
+function mergeRepository(
+  repositories: Map<string, CatalogRepositoryResult>,
+  item: GitHubRepositoryItem,
+  candidateType: CatalogCandidateType,
+): void {
+  const key = item.full_name.toLowerCase()
+  const existing = repositories.get(key)
+  if (!existing) {
+    repositories.set(key, mapCatalogRepository(item, [candidateType]))
+    return
+  }
+  if (!existing.candidateTypes.includes(candidateType)) {
+    existing.candidateTypes = [...existing.candidateTypes, candidateType]
+  }
+  if (existing.sizeKb == null && item.size != null) existing.sizeKb = item.size
+  existing.topics = [...new Set([...existing.topics, ...(item.topics ?? [])])]
+}
+
+function repositoryOrder(sort: DiscoverySort) {
+  return (left: CatalogRepositoryResult, right: CatalogRepositoryResult): number => {
+    const primary = sort === 'stars'
+      ? right.stars - left.stars
+      : right.updatedAt.localeCompare(left.updatedAt)
+    return primary || left.fullName.localeCompare(right.fullName)
   }
 }
 
-export async function searchSkillRepositories(
+function failureWarning(type: CatalogCandidateType, reason: unknown): string {
+  const label = type === 'plugin' ? 'Plugin' : 'Skill'
+  const message = reason instanceof Error ? reason.message : String(reason)
+  return `${label} 来源检索失败：${message}`
+}
+
+/**
+ * GitHub 不支持 topic OR 搜索，因此分别拉取两个 topic 后合并。
+ * 同时带 dsh-skill 的 dsh-plugin 结果归入 Skill 流，避免它在不同页重复出现。
+ */
+export async function searchCatalogRepositories(
   query: string,
   sort: DiscoverySort,
   page: number,
-): Promise<SkillDiscoveryResponse> {
-  const found = await searchRepositories(buildSearchUrl(query, sort, page, SKILL_TOPIC))
+  fetchImpl: typeof fetch = fetch,
+): Promise<DiscoveryResponse> {
+  const normalizedPage = Math.min(CATALOG_MAX_PAGE, Math.max(1, Math.floor(Number(page) || 1)))
+  const [pluginResult, skillResult] = await Promise.allSettled([
+    searchRepositories(buildSearchUrl(query, sort, normalizedPage, PLUGIN_TOPIC), fetchImpl),
+    searchRepositories(buildSearchUrl(query, sort, normalizedPage, SKILL_TOPIC), fetchImpl),
+  ])
+
+  if (pluginResult.status === 'rejected' && skillResult.status === 'rejected') {
+    throw new Error([
+      failureWarning('plugin', pluginResult.reason),
+      failureWarning('skill', skillResult.reason),
+    ].join('；'))
+  }
+
+  const warnings: string[] = []
+  if (pluginResult.status === 'rejected') warnings.push(failureWarning('plugin', pluginResult.reason))
+  if (skillResult.status === 'rejected') warnings.push(failureWarning('skill', skillResult.reason))
+
+  const pluginFound = pluginResult.status === 'fulfilled' ? pluginResult.value : null
+  const skillFound = skillResult.status === 'fulfilled' ? skillResult.value : null
+  const repositories = new Map<string, CatalogRepositoryResult>()
+
+  for (const item of pluginFound?.repositories ?? []) {
+    if ((item.topics ?? []).some(topic => topic.toLowerCase() === SKILL_TOPIC)) continue
+    mergeRepository(repositories, item, 'plugin')
+  }
+  for (const item of skillFound?.repositories ?? []) {
+    mergeRepository(repositories, item, 'skill')
+    if ((item.topics ?? []).some(topic => topic.toLowerCase() === PLUGIN_TOPIC)) {
+      mergeRepository(repositories, item, 'plugin')
+    }
+  }
+
+  const remaining = [pluginFound?.rateRemaining, skillFound?.rateRemaining]
+    .filter((value): value is number => value !== undefined)
   return {
-    repositories: found.repositories.map(mapSkillRepository),
-    totalCount: found.totalCount,
-    rateRemaining: found.rateRemaining,
+    repositories: [...repositories.values()].sort(repositoryOrder(sort)),
+    topicTotals: {
+      plugin: pluginFound?.totalCount ?? 0,
+      skill: skillFound?.totalCount ?? 0,
+    },
+    page: normalizedPage,
+    pageCount: Math.max(
+      normalizedPage,
+      pluginFound ? sourcePageCount(pluginFound.totalCount) : 1,
+      skillFound ? sourcePageCount(skillFound.totalCount) : 1,
+    ),
+    rateRemaining: remaining.length > 0 ? Math.min(...remaining) : undefined,
+    warnings,
   }
 }
