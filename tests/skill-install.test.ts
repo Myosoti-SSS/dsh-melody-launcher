@@ -23,7 +23,8 @@ it('installs only the selected skill bundle and preserves its resources', async 
   zip.addFile('skill-pack-main/academic/references/guide.md', Buffer.from('# Guide\n'))
   zip.addFile('skill-pack-main/unrelated/file.txt', Buffer.from('do not install'))
   const archive = zip.toBuffer()
-  const fetchImpl = (async () => new Response(archive, {
+  // 见 skill-catalog.test.ts：Buffer 现在是泛型，不再是合法的 BodyInit。
+  const fetchImpl = (async () => new Response(new Uint8Array(archive), {
     status: 200,
     headers: { 'content-length': String(archive.byteLength) },
   })) as typeof fetch
