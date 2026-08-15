@@ -1,108 +1,414 @@
+<div align="center">
+
+<img src="public/launcher-icon.png" alt="dsh-旋律启动器" width="128" />
+
 # dsh-旋律启动器
 
-![dsh-旋律启动器](public/launcher-background.png)
+**面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 Windows 桌面启动器与插件管理器**
 
-一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 Windows 桌面下载/启动器和插件管理器，提供本体和插件下载/管理，整合包安装功能。界面参考我的世界忘却的旋律启动器的使用方式，在启动 DSH 前集中管理运行配置、DeepSeek API Key、插件状态和加载顺序。
+一个下载即用的启动器：管理 DSH 本体、插件、API Key 与运行配置，无需预装 Node.js。
 
-> 开发状态：整合包功能正在开发中。后续将支持将一组插件与配置保存、导入和分享为可复用的整合包。欢迎加入一起开发：QQ:1250104511
+<br />
 
-## 功能
+[![CI](https://img.shields.io/github/actions/workflow/status/rirko/dsh-melody-launcher/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI)](https://github.com/rirko/dsh-melody-launcher/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/rirko/dsh-melody-launcher?style=for-the-badge&logo=github&color=6C7BFF)](https://github.com/rirko/dsh-melody-launcher/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/rirko/dsh-melody-launcher/total?style=for-the-badge&logo=windows&logoColor=white&color=0078D6)](https://github.com/rirko/dsh-melody-launcher/releases)
+[![Stars](https://img.shields.io/github/stars/rirko/dsh-melody-launcher?style=for-the-badge&logo=github&color=FFB020)](https://github.com/rirko/dsh-melody-launcher/stargazers)
+[![Issues](https://img.shields.io/github/issues/rirko/dsh-melody-launcher?style=for-the-badge&logo=github&color=FF6B6B)](https://github.com/rirko/dsh-melody-launcher/issues)
 
-- 小型无边框启动窗口，支持拖动、启动和停止 DSH，并可直接打开 Harness 网页
-- 在软件内配置或清除 DeepSeek API Key
-- 从 GitHub [`dsh-plugin`](https://github.com/topics/dsh-plugin) Topic 搜索插件
-- 从 GitHub [`dsh-skill`](https://github.com/topics/dsh-skill) Topic 搜索并安装 Skills
-- 安装前检查插件清单或 Skill frontmatter，过滤仅添加 Topic、但并非有效组件的仓库
-- 支持一键检测当前插件或 Skill 候选列表，并区分单组件、多组件和无效仓库
-- 显示插件或 DSH 本体的下载状态、安装阶段和进度
-- 自动检测启动器安装目录、当前启动配置、PATH 和 Windows npm 全局目录中的官方 DSH
-- 未检测到本地 DSH 时，首页主按钮自动切换为“下载安装 DSH”完成首次部署
-- 未检测到 Node.js 时自动下载、校验并使用官方便携运行时，支持中断后续传
-- 当插件列表中出现 `deepseek-ai/deepseek-harness` 时，将其识别为 DSH 本体并安装到启动器本地运行目录
-- 读取 DSH 官方 Profile，启用、停用和调整插件加载顺序
-- 卸载第三方插件，同时保护 DSH Web Profile 所需的核心 Bundle
-- 自选 DSH 本体安装目录，并与保存 Profile、插件和 Skills 的 `DSH_HOME` 分开管理
-- 配置 `DSH_HOME`、Profile、工作目录、启动命令和启动后自动打开网页
-- 查看 DSH 启动状态、进程信息和实时日志
-- Windows 便携版，无需安装启动器本身
+[![Electron](https://img.shields.io/badge/Electron-33-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-6-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vite.dev/)
+[![Vitest](https://img.shields.io/badge/Vitest-2-6E9F18?style=flat-square&logo=vitest&logoColor=white)](https://vitest.dev/)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A5%2020-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20x64%20%7C%20arm64-0078D6?style=flat-square&logo=windows&logoColor=white)](https://github.com/rirko/dsh-melody-launcher/releases/latest)
 
-## 使用方法
+**简体中文** · [English](README.en.md)
 
-1. 从 [Releases](../../releases) 下载最新的 `DSH-Launcher-*-portable.exe`。
-2. 打开启动器；如果没有检测到本地 DSH，点击首页“下载安装 DSH”完成首次部署。
-3. 在启动页配置 DeepSeek API Key，然后进入“管理”页面安装第三方插件。
-4. 在“插件加载顺序”中调整启用状态和加载顺序。
-5. 返回启动页并点击“启动 DSH”。服务就绪后可直接打开 Harness 网页。
+<br />
 
-使用 Release 便携版时不要求预先安装 DSH、Node.js、npm 或 npx。首次部署 DSH 时，启动器会从 Node.js 官网下载经过 SHA-256 校验的便携运行时；请保持网络连接，下载中断后可继续。
+<img src="public/launcher-background.png" alt="dsh-旋律启动器" width="820" />
 
-Windows 便携版目前未使用商业代码签名证书。首次运行时，Windows 可能显示来源提示，请确认文件来自本仓库 Release 后继续。
+</div>
 
-## DSH 本体安装
+---
 
-启动器会在插件发现页特别识别：
+## 目录
+
+- [这是什么](#这是什么)
+- [核心特性](#核心特性)
+- [快速开始](#快速开始)
+- [使用指南](#使用指南)
+- [DSH 本体检测与安装](#dsh-本体检测与安装)
+- [Node.js 便携运行时](#nodejs-便携运行时)
+- [数据与配置](#数据与配置)
+- [安全设计](#安全设计)
+- [从源码运行](#从源码运行)
+- [项目结构](#项目结构)
+- [开发路线图](#开发路线图)
+- [常见问题](#常见问题)
+- [参与贡献](#参与贡献)
+- [许可证](#许可证)
+
+---
+
+## 这是什么
+
+**dsh-旋律启动器**是一个 Windows 桌面应用，把 DeepSeek Harness（DSH）的下载、部署、插件管理和启动流程收拢到一个图形界面里。交互方式参考《我的世界》**忘却的旋律启动器**：在真正启动之前，先在一个地方把运行配置、API Key、插件启停和加载顺序都安排妥当。
+
+它解决的是这样一类问题：
+
+| 原本要做的事 | 用启动器之后 |
+| --- | --- |
+| 装 Node.js → 装 npm → `npx @deepseek-ai/dsh` | 下载一个 exe，点「下载安装 DSH」 |
+| 手改 `.credentials.yaml` 填 API Key | 界面里输入，自动写入并设为 0600 权限 |
+| 翻 GitHub 找插件、手敲 `dsh plugin add` | 内置搜索 `dsh-plugin` Topic，一键安装 |
+| 编辑 profile 的 `package.json` 调加载顺序 | 拖动列表，直接改官方 Profile |
+| 开终端、记命令、盯输出 | 一个按钮启动，实时日志面板 |
+
+> [!NOTE]
+> **整合包（Modpack）功能正在开发中。** 后续将支持把一组插件与配置保存、导入和分享为可复用的整合包。欢迎一起开发 —— QQ：**1250104511**
+
+---
+
+## 核心特性
+
+### 部署与启动
+
+- **零依赖首次部署** —— 未检测到本地 DSH 时，首页主按钮自动切换为「下载安装 DSH」，一键完成部署
+- **自动准备 Node.js** —— 系统没有 Node.js 也能用：自动从 Node.js 官网下载便携运行时，SHA-256 校验，支持断点续传
+- **多路径 DSH 检测** —— 依次检查启动器运行目录、当前启动配置、`PATH`、`%APPDATA%\npm` 和系统 Node.js 目录
+- **进程生命周期管理** —— 启动、停止、实时日志（stdout/stderr 分级），退出启动器时自动收尾 DSH 进程
+- **自动打开网页** —— 从日志中识别本地服务地址并自动在浏览器打开（可关闭）
+
+### 插件管理
+
+- **插件发现** —— 直连 GitHub Search API，检索 [`dsh-plugin`](https://github.com/topics/dsh-plugin) Topic，支持按 Star 数或更新时间排序
+- **分阶段安装进度** —— `准备 → 解析 → 下载 → 配置 → 完成` 五个阶段，带百分比与实时状态文本
+- **加载顺序编排** —— 直接读写 DSH 官方 Profile，调整启用状态与 Bundle 加载顺序
+- **停用 ≠ 卸载** —— 停用只把插件移出有序加载列表，本地依赖保留，可随时恢复；只有显式卸载才删除
+- **核心 Bundle 保护** —— `@deepseek-ai/dsh-base`、`dsh-web-app`、`dsh-headless` 三个核心组合层在主进程层面禁止停用，界面上也不提供卸载入口
+- **构建脚本自动授权** —— 遇到 pnpm `ERR_PNPM_IGNORED_BUILDS` 时，仅为当前安装的仓库批准构建脚本并自动重试
+
+### Skill Hub
+
+- **Skill 发现** —— 直连 GitHub Search API，检索 [`dsh-skill`](https://github.com/topics/dsh-skill) Topic，支持按 Star 数或更新时间排序
+- **严格有效性校验** —— 不把 Topic 当作有效证明：安装前下载仓库快照，检查目录型 `<name>/SKILL.md` 或单文件 `<name>.md`，要求 YAML frontmatter 至少包含 kebab-case 的 `name` 和非空 `description`
+- **多组件选择** —— 多 Skill 仓库可选择安装其中部分组件；本地同名 Skill 显示为已安装，并可从原仓库更新
+- **写入 Skills 目录** —— 安装结果写入 `$DSH_HOME/skills`
+
+### 界面与配置
+
+- **双尺寸窗口** —— 无边框设计，启动模式（900×560）与管理模式（1380×860）自由切换
+- **API Key 管理** —— 在软件内配置或清除 DeepSeek API Key
+- **完整运行配置** —— `DSH_HOME`、Profile 名称、工作目录、启动命令与参数，均可在界面调整
+- **便携版** —— 启动器自身无需安装，单文件 exe
+
+---
+
+## 快速开始
+
+### 1. 下载
+
+前往 [**Releases**](https://github.com/rirko/dsh-melody-launcher/releases/latest) 下载最新的 `DSH-Launcher-*-portable.exe`。
+
+> [!IMPORTANT]
+> 便携版目前**未使用商业代码签名证书**。首次运行时 Windows SmartScreen 可能提示来源未知 —— 请确认文件确实来自本仓库 Release 页面后，选择「更多信息 → 仍要运行」。
+
+### 2. 首次部署
+
+打开启动器。如果没有检测到本地 DSH，首页主按钮会显示 **「下载安装 DSH」**，点击即可完成首次部署。
+
+整个过程**不需要预先安装 DSH、Node.js、npm 或 npx** —— 缺什么启动器就准备什么。请保持网络连接；下载中断后重新点击可继续。
+
+### 3. 配置 API Key
+
+在启动页填入 DeepSeek API Key。启动器会写入 DSH 官方凭据文件 `$DSH_HOME/.credentials.yaml`。
+
+### 4. 安装插件（可选）
+
+进入「**发现插件**」页面搜索并安装第三方插件，然后在「**插件顺序**」中调整启用状态与加载顺序。
+
+### 5. 启动
+
+回到启动页点击 **「启动 DSH」**。服务就绪后会自动打开 Harness 网页。
+
+---
+
+## 使用指南
+
+启动器有三个主要视图：
+
+### 插件顺序
+
+展示当前 Profile 中的全部 Bundle。每个插件可以：
+
+- **启用 / 停用** —— 切换开关即从有序加载列表中加入或移出，插件文件保留在本机
+- **调整顺序** —— 加载顺序影响插件之间的覆盖关系，靠后的插件后加载
+- **卸载** —— 真正从当前配置中移除插件。仅对 Profile 依赖开放；DSH 内置的核心组合层没有卸载入口
+
+> 变更在**下次启动 DSH 时生效**。
+
+### 发现插件
+
+从 GitHub 检索带 `dsh-plugin` Topic 的仓库，显示 Star 数、主语言、更新时间和描述，点击即可安装。
+
+搜索使用 GitHub 匿名 API，有速率限制；额度用尽时启动器会明确提示，稍后重试即可。
+
+### 运行与日志
+
+查看 DSH 运行状态、PID、启动时间和服务地址，以及实时日志流。日志分 `runtime`（DSH 本体）和 `plugin`（插件操作）两个通道，分 `info` / `error` / `success` 三个级别。
+
+---
+
+## DSH 本体检测与安装
+
+启动器在插件发现页会**特别识别**这个仓库：
 
 ```text
 deepseek-ai/deepseek-harness
 ```
 
-启动时会先检查启动器管理的运行目录、当前启动命令、PATH、`%APPDATA%\npm` 和系统 Node.js 目录。检测结果必须同时包含官方 `@deepseek-ai/dsh` 包清单和 `dsh` 可执行文件，避免把同名程序误认为 DSH。检测到系统安装后会直接使用它；未检测到时，首页主按钮会进入首次部署流程。
+它不会被当作普通插件处理，而是走独立的本体安装流程。
 
-安装该项目时不会把它当作普通插件处理，而是通过 npm 安装最新的 `@deepseek-ai/dsh` 到设置中选择的本体安装目录，并自动切换启动命令。本体安装目录不能是磁盘根目录或 `DSH_HOME`，也不会覆盖已有的其他 Node.js 项目。安装完成后首页按钮会从“下载安装 DSH”切换为“启动 DSH”。
+### 检测顺序
 
-## Skill Hub
+启动时按以下顺序查找已安装的 DSH：
 
-Skill Hub 会读取 GitHub `dsh-skill` Topic，但不会直接把 Topic 当作有效证明。安装前会下载仓库快照并检查目录型 `<name>/SKILL.md` 或单文件 `<name>.md`，要求 YAML frontmatter 至少包含 kebab-case 的 `name` 和非空 `description`。多 Skill 仓库可以选择组件，安装结果写入：
+1. 启动器管理的运行目录（`%APPDATA%\dsh-launcher\dsh-runtime`）
+2. 当前配置的启动命令
+3. 系统 `PATH`
+4. `%APPDATA%\npm`（Windows npm 全局目录）
+5. 系统 Node.js 安装目录
 
-```text
-$DSH_HOME/skills
-```
+> [!TIP]
+> 检测结果必须**同时**包含官方 `@deepseek-ai/dsh` 包清单**和** `dsh` 可执行文件，才会被认定为有效安装 —— 这样可以避免把同名程序误认成 DSH。
 
-本地同名 Skill 会显示为已安装，并可从原仓库更新。
+### 安装行为
+
+| 情况 | 行为 |
+| --- | --- |
+| 检测到系统安装 | 直接使用，不重复安装 |
+| 未检测到 | 首页主按钮变为「下载安装 DSH」，引导首次部署 |
+| 执行安装 | 通过 npm 将 `@deepseek-ai/dsh@latest` 装入启动器本地运行目录，并自动切换启动命令为本地可执行文件 |
+
+安装完成后，首页按钮从「下载安装 DSH」自动切换为「启动 DSH」。
+
+---
+
+## Node.js 便携运行时
+
+当系统中找不到 Node.js 时，启动器会自动准备一份便携运行时：
+
+| 环节 | 说明 |
+| --- | --- |
+| **来源** | Node.js 官网 `https://nodejs.org/dist/`，当前锁定 `v24.19.0` |
+| **架构** | 自动匹配 `win-x64` 或 `win-arm64` |
+| **校验** | 下载官方 `SHASUMS256.txt`，逐字节 SHA-256 比对；校验失败自动重下一次，仍失败则中止并报错 |
+| **续传** | 使用 HTTP `Range` 请求，网络中断后可从断点继续 |
+| **解压** | 调用 Windows 自带 `tar.exe` 解压到临时目录，校验完整性后原子重命名到最终位置 |
+| **位置** | `%APPDATA%\dsh-launcher\node-runtime\` |
+
+> [!NOTE]
+> 便携运行时的自动准备**仅支持 Windows**。若系统已安装 Node.js，启动器会直接复用，不会重复下载。
+
+---
+
+## 数据与配置
+
+启动器**直接使用 DSH 官方 Profile 结构**，不引入任何不兼容的私有插件配置格式。
+
+### 文件位置
+
+| 内容 | 路径 |
+| --- | --- |
+| 启动器设置 | `%APPDATA%\dsh-launcher\settings.json` |
+| 本地 DSH 运行目录 | `%APPDATA%\dsh-launcher\dsh-runtime\` |
+| Node.js 便携运行时 | `%APPDATA%\dsh-launcher\node-runtime\` |
+| DSH 凭据 | `$DSH_HOME\.credentials.yaml` |
+| DSH Profile 清单 | `$DSH_HOME\profiles\<profile>\package.json` |
+
+> `%APPDATA%\dsh-launcher\` 对应 Electron 的 `app.getPath('userData')`，目录名取自 `package.json` 的 `name` 字段。
+
+### 默认配置
+
+| 项 | 默认值 |
+| --- | --- |
+| `DSH_HOME` | 环境变量 `DSH_HOME`，否则 `%USERPROFILE%\.dsh` |
+| Profile 名称 | `web` |
+| 工作目录 | 系统「文档」目录 |
+| 启动命令 | `npx --yes @deepseek-ai/dsh web`（检测到本地安装后自动切换为 `dsh web`） |
+| 启动后自动打开网页 | 开启 |
+
+---
+
+## 安全设计
+
+| 措施 | 实现 |
+| --- | --- |
+| **渲染进程隔离** | `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true` |
+| **受控 IPC 面** | 渲染层只能通过 `contextBridge` 暴露的固定接口与主进程通信，无法直接访问 Node API |
+| **凭据文件权限** | `.credentials.yaml` 以 `0600` 写入，目录 `0700`；先写临时文件再原子重命名，避免写坏原文件 |
+| **外链白名单** | `shell.openExternal` 只允许 `http:` / `https:` 协议 |
+| **输入校验** | 包名、Profile 名、GitHub 仓库名在进入主进程逻辑前统一校验；目录参数必须是绝对路径 |
+| **下载完整性** | Node.js 运行时下载后强制 SHA-256 校验，不匹配即丢弃 |
+
+---
 
 ## 从源码运行
 
-环境要求：Node.js 20 或更高版本。
+### 环境要求
+
+- **Node.js ≥ 20**
+- Windows（打包便携版需要；开发调试可跨平台，但 Node 便携运行时相关功能仅 Windows 生效）
+
+### 开发
 
 ```powershell
 npm install
 npm run dev
 ```
 
-也可以在 Windows 上双击 `START-DSH-LAUNCHER.cmd`。
+Windows 上也可以直接双击 `START-DSH-LAUNCHER.cmd`，脚本会在缺少依赖时自动执行 `npm install` 再启动开发服务器。
 
-## 测试与构建
+### 命令一览
 
-```powershell
-npm test
-npm run build
-npm run package:win
+| 命令 | 作用 |
+| --- | --- |
+| `npm run dev` | 启动 Vite 开发服务器 + Electron 主进程（热更新） |
+| `npm test` | 运行 Vitest 测试套件 |
+| `npm run build` | TypeScript 类型检查（`tsc --noEmit`）+ Vite 生产构建 |
+| `npm run preview` | 预览构建产物 |
+| `npm run package:win` | 构建并用 electron-builder 打包 Windows 便携版 |
+
+打包产物输出到 `release/`，命名为 `DSH-Launcher-<version>-portable.exe`。
+
+---
+
+## 项目结构
+
+```text
+dsh-melody-launcher/
+├── electron/                 # Electron 主进程
+│   ├── main.ts               # 应用入口、窗口管理、IPC 注册
+│   ├── preload.ts            # contextBridge 安全桥接层
+│   ├── dsh-install.ts        # DSH 本体检测与安装
+│   ├── node-runtime.ts       # Node.js 便携运行时下载与校验
+│   ├── profile.ts            # DSH Profile 读写、插件启停与排序
+│   ├── plugin-install.ts     # 插件安装辅助（构建脚本授权）
+│   ├── process.ts            # 子进程封装与 PATH 处理
+│   └── credentials.ts        # DeepSeek API Key 凭据管理
+├── src/                      # React 渲染进程
+│   ├── App.tsx               # 主界面
+│   ├── main.tsx              # 渲染入口
+│   ├── types.ts              # 主进程 / 渲染进程共享类型契约
+│   ├── demo-api.ts           # 浏览器环境下的模拟 API
+│   └── styles.css            # 样式
+├── tests/                    # Vitest 测试
+├── public/                   # 静态资源（图标、背景图）
+└── build/                    # 打包资源（icon.ico）
 ```
 
-Windows 便携版输出到 `release/`。
+`src/types.ts` 中的 `LauncherApi` 接口是主进程与渲染进程之间**唯一的契约**，`preload.ts` 负责实现，两侧共享同一份类型定义。
 
-## 开发计划
+---
 
-- [x] 小型桌面启动界面
+## 开发路线图
+
+- [x] 小型无边框桌面启动界面
 - [x] DeepSeek API Key 配置
-- [x] 插件搜索、下载进度和安装状态
+- [x] 插件搜索、下载进度与安装状态
 - [x] 插件结构检测、多组件选择和本地安装识别
 - [x] Skill Hub、规范检测、安装和更新
-- [x] 插件启停、排序和卸载
+- [x] 插件启停、排序与卸载
 - [x] DSH 本体识别与本地安装
 - [x] 系统 DSH 检测与首次部署引导
 - [x] 无系统 Node.js 环境下自动准备便携运行时
 - [x] 自选 DSH 本体安装目录
-- [x] DSH 启动、停止和日志查看
-- [ ] 插件整合包创建与导入（开发中）
+- [x] DSH 启动、停止与日志查看
+- [ ] **插件整合包创建与导入**（开发中）
 - [ ] 整合包版本管理与分享
 
-## 数据与配置
+---
 
-启动器直接使用 DSH 官方 Profile 结构，不建立不兼容的插件配置格式。默认配置位于：
+## 常见问题
 
-```text
-$DSH_HOME/profiles/<profile>/package.json
+<details>
+<summary><b>Windows 提示「不受信任的应用」怎么办？</b></summary>
+
+便携版未使用商业代码签名证书，SmartScreen 会拦截未知发布者的程序。确认文件来自本仓库 [Releases](https://github.com/rirko/dsh-melody-launcher/releases) 页面后，点击「更多信息 → 仍要运行」即可。
+
+</details>
+
+<details>
+<summary><b>提示「本地端口已被其他进程占用」</b></summary>
+
+说明有旧的 DSH 服务还在运行。关闭它，或在启动配置的启动参数中指定其他端口。
+
+</details>
+
+<details>
+<summary><b>提示「GitHub 请求额度暂时用尽」</b></summary>
+
+插件搜索使用 GitHub 匿名 API，每小时有速率限制。等待一段时间后重试即可。
+
+</details>
+
+<details>
+<summary><b>停用插件后文件还在硬盘上，正常吗？</b></summary>
+
+正常。停用只是把插件移出 Profile 的有序加载列表，本地依赖会保留，方便随时重新启用。只有执行**卸载**操作才会真正移除文件。
+
+</details>
+
+<details>
+<summary><b>已经手动装过 DSH，启动器会重复安装吗？</b></summary>
+
+不会。启动器会在运行目录、启动配置、`PATH`、`%APPDATA%\npm` 和系统 Node.js 目录中检测已有安装，检测到就直接使用。
+
+</details>
+
+<details>
+<summary><b>能在 macOS 或 Linux 上用吗？</b></summary>
+
+目前只提供 Windows 便携版。源码在其他平台可以运行开发服务器，但 Node.js 便携运行时的自动准备逻辑仅实现了 Windows 分支。
+
+</details>
+
+---
+
+## 参与贡献
+
+欢迎提交 Issue 和 Pull Request。
+
+- **报告问题 / 提出建议** —— [Issues](https://github.com/rirko/dsh-melody-launcher/issues)
+- **一起开发** —— QQ：**1250104511**
+
+提交 PR 前请确保：
+
+```powershell
+npm test        # 测试通过
+npm run build   # 类型检查与构建通过
 ```
 
-第三方 Bundle 的停用只会将其移出有序加载列表，不会删除本地依赖；只有执行卸载操作时才会移除插件。
+---
+
+## 许可证
+
+> [!WARNING]
+> 本仓库目前**尚未声明开源许可证**。在补充 `LICENSE` 文件之前，依据版权法默认保留所有权利 —— 这意味着其他人在法律上没有获得复制、修改或分发本项目的授权。如果希望本项目被自由使用和贡献，建议尽快添加一个开源许可证（例如 MIT 或 Apache-2.0）。
+
+---
+
+## 致谢
+
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) —— 本启动器服务的对象
+- 界面交互参考《我的世界》**忘却的旋律启动器**
+
+<div align="center">
+<br />
+
+如果这个项目对你有帮助，欢迎点一个 ⭐
+
+</div>
