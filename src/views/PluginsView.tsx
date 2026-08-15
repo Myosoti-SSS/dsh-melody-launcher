@@ -1,6 +1,7 @@
 import {
   ArrowDown,
   ArrowUp,
+  BookOpenCheck,
   CircleAlert,
   Download,
   ExternalLink,
@@ -20,16 +21,18 @@ import { useState } from 'react'
 import { PageHeading } from '../components/PageHeading'
 import { pluginInitial } from '../lib/format'
 import { movePackage, movePackageTo } from '../lib/profile-order'
-import type { ManagedPlugin, ProfileState } from '../types'
+import type { InstalledSkill, ManagedPlugin, ProfileState } from '../types'
 
 /** 插件加载顺序页：列表、排序、启停与详情。 */
 
 interface PluginsViewProps {
   profile: ProfileState
+  installedSkills: InstalledSkill[]
   selected: ManagedPlugin | null
   busy: string | null
   onSelect: (plugin: ManagedPlugin) => void
   onToggle: (plugin: ManagedPlugin, enabled: boolean) => void
+  onToggleSkill: (skill: InstalledSkill, enabled: boolean) => void
   onReorder: (names: string[]) => void
   onRefresh: () => void
   onBrowse: () => void
@@ -40,10 +43,12 @@ interface PluginsViewProps {
 
 export function PluginsView({
   profile,
+  installedSkills,
   selected,
   busy,
   onSelect,
   onToggle,
+  onToggleSkill,
   onReorder,
   onRefresh,
   onBrowse,
@@ -107,6 +112,8 @@ export function PluginsView({
               </label>
               <span>{active.length} 个加载层</span>
             </div>
+            <div className="plugin-management-grid">
+              <div className="plugin-management-column">
             <div className="column-headings" aria-hidden="true">
               <span>优先级</span><span>插件</span><span>版本</span><span>状态</span><span />
             </div>
@@ -145,12 +152,55 @@ export function PluginsView({
                 />
               ))}
             </div>
+              </div>
+              <SkillList skills={installedSkills.filter(skill => visibleSkill(skill, filter))} busy={busy} onToggle={onToggleSkill} />
+            </div>
           </section>
           <PluginDetails
             plugin={selected}
             onOpenRepository={onOpenRepository}
             onUninstall={onUninstall}
           />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function visibleSkill(skill: InstalledSkill, filter: string): boolean {
+  return !filter || `${skill.name} ${skill.description}`.toLowerCase().includes(filter.toLowerCase())
+}
+
+function SkillList({ skills, busy, onToggle }: {
+  skills: InstalledSkill[]
+  busy: string | null
+  onToggle: (skill: InstalledSkill, enabled: boolean) => void
+}) {
+  return (
+    <div className="skill-management-column">
+      <div className="skill-column-heading"><span><BookOpenCheck size={14} />Skill</span><small>{skills.length} 个已安装</small></div>
+      {skills.length === 0 ? (
+        <div className="skill-empty">尚未安装 Skill</div>
+      ) : (
+        <div className="skill-rows">
+          {skills.map(skill => (
+            <div className={`skill-row ${skill.enabled ? '' : 'disabled'}`} key={skill.name}>
+              <div className="skill-identity">
+                <div className="skill-glyph"><BookOpenCheck size={15} /></div>
+                <div><strong>{skill.name}</strong><span>{skill.description}</span></div>
+              </div>
+              <label className="switch" title={skill.enabled ? '停用 Skill' : '启用 Skill'}>
+                <input
+                  type="checkbox"
+                  checked={skill.enabled}
+                  disabled={busy === `skill:${skill.name}`}
+                  onChange={event => onToggle(skill, event.target.checked)}
+                  aria-label={`${skill.enabled ? '停用' : '启用'} Skill ${skill.name}`}
+                />
+                <span>{busy === `skill:${skill.name}` && <LoaderCircle className="spin" size={11} />}</span>
+              </label>
+            </div>
+          ))}
         </div>
       )}
     </div>

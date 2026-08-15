@@ -38,6 +38,7 @@ export const IPC = {
   pluginsUninstall: 'plugins:uninstall',
   skillsInstall: 'skills:install',
   skillsReadInstalled: 'skills:read-installed',
+  skillsToggle: 'skills:toggle',
   runtimeState: 'runtime:state',
   runtimeStart: 'runtime:start',
   runtimeStop: 'runtime:stop',

@@ -31,6 +31,7 @@ const api: LauncherApi = {
   uninstallPlugin: packageName => ipcRenderer.invoke(IPC.pluginsUninstall, packageName),
   installSkill: request => ipcRenderer.invoke(IPC.skillsInstall, request),
   readInstalledSkills: () => ipcRenderer.invoke(IPC.skillsReadInstalled),
+  toggleSkill: (name, enabled) => ipcRenderer.invoke(IPC.skillsToggle, { name, enabled }),
   getRuntimeState: () => ipcRenderer.invoke(IPC.runtimeState),
   startRuntime: () => ipcRenderer.invoke(IPC.runtimeStart),
   stopRuntime: () => ipcRenderer.invoke(IPC.runtimeStop),

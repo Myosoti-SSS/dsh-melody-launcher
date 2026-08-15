@@ -1,4 +1,5 @@
-import { readdir, readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename } from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
 import path from 'node:path'
 import { parse } from 'yaml'
 import type { InstalledSkill } from '../src/types'
@@ -83,33 +84,68 @@ export function parseSkillDocument(raw: string): ParsedSkill | null {
 
 export async function readInstalledSkills(dshHome: string): Promise<InstalledSkill[]> {
   const root = path.join(dshHome, 'skills')
-  let entries
-  try {
-    entries = await readdir(root, { withFileTypes: true })
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw error
-  }
-
   const installed: InstalledSkill[] = []
-  for (const entry of entries) {
-    const format = entry.isDirectory() ? 'bundle' : entry.isFile() && entry.name.toLowerCase().endsWith('.md') ? 'flat' : null
-    if (!format || entry.name === '.system') continue
-    const skillPath = format === 'bundle' ? path.join(root, entry.name, 'SKILL.md') : path.join(root, entry.name)
+  const readEntries = async (sourceRoot: string, enabled: boolean): Promise<void> => {
+    let sourceEntries: Dirent<string>[]
     try {
-      const parsed = parseSkillDocument(await readFile(skillPath, 'utf8'))
-      if (!parsed) continue
-      installed.push({
-        name: parsed.name,
-        description: parsed.description,
-        path: format === 'bundle' ? path.dirname(skillPath) : skillPath,
-        format,
-        modelInvocable: parsed.modelInvocable,
-        userInvocable: parsed.userInvocable,
-      })
+      sourceEntries = await readdir(sourceRoot, { withFileTypes: true })
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    for (const entry of sourceEntries) {
+      const format = entry.isDirectory() ? 'bundle' : entry.isFile() && entry.name.toLowerCase().endsWith('.md') ? 'flat' : null
+      if (!format || entry.name === '.system') continue
+      const skillPath = format === 'bundle' ? path.join(sourceRoot, entry.name, 'SKILL.md') : path.join(sourceRoot, entry.name)
+      try {
+        const parsed = parseSkillDocument(await readFile(skillPath, 'utf8'))
+        if (!parsed) continue
+        installed.push({
+          name: parsed.name,
+          description: parsed.description,
+          path: format === 'bundle' ? path.dirname(skillPath) : skillPath,
+          format,
+          enabled,
+          modelInvocable: parsed.modelInvocable,
+          userInvocable: parsed.userInvocable,
+        })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
     }
   }
-  return installed.sort((left, right) => left.name.localeCompare(right.name))
+
+  await readEntries(root, true)
+  await readEntries(path.join(root, '.disabled'), false)
+  const unique = new Map<string, InstalledSkill>()
+  for (const skill of installed) {
+    const previous = unique.get(skill.name)
+    if (!previous || skill.enabled || !previous.enabled) unique.set(skill.name, skill)
+  }
+  return [...unique.values()].sort((left, right) => left.name.localeCompare(right.name))
+}
+
+/** Move a Skill between the DSH-visible root and the hidden disabled directory. */
+export async function toggleInstalledSkill(dshHome: string, name: string, enabled: boolean): Promise<InstalledSkill[]> {
+  const root = path.join(dshHome, 'skills')
+  const current = await readInstalledSkills(dshHome)
+  const skill = current.find(item => item.name === name)
+  if (!skill) throw new Error(`未找到本地 Skill：${name}`)
+  if (skill.enabled === enabled) return current
+
+  const disabledRoot = path.join(root, '.disabled')
+  const source = skill.path
+  const destination = enabled
+    ? path.join(root, skill.format === 'bundle' ? path.basename(source) : path.basename(source))
+    : path.join(disabledRoot, skill.format === 'bundle' ? path.basename(source) : path.basename(source))
+  await mkdir(path.dirname(destination), { recursive: true })
+  try {
+    await rename(source, destination)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST' || (error as NodeJS.ErrnoException).code === 'EPERM') {
+      throw new Error(`无法${enabled ? '启用' : '停用'} Skill「${name}」：目标位置已存在同名文件`)
+    }
+    throw error
+  }
+  return readInstalledSkills(dshHome)
 }

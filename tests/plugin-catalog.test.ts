@@ -153,4 +153,27 @@ describe('repository plugin analysis', () => {
     expect(analysis.installability).toBe('application')
     expect(analysis.targets).toEqual([])
   })
+
+  it('falls back to a published root plugin when GitHub API quota is exhausted', async () => {
+    const repository = 'demo/dsh-tui'
+    const manifest = {
+      name: '@demo/dsh-tui',
+      version: '0.6.1',
+      repository: `https://github.com/${repository}.git`,
+      dsh: { bundle: { patch: './cordis.patch.yml' } },
+    }
+    const analysis = await analyzeRepository(repository, 'main', 'web', mockFetch({
+      [commitUrl(repository)]: json({ message: 'rate limited' }, 403),
+      ['https://raw.githubusercontent.com/demo/dsh-tui/main/package.json']: json(manifest),
+      ['https://registry.npmjs.org/%40demo%2Fdsh-tui/latest']: json(manifest),
+    }))
+
+    expect(analysis).toMatchObject({ installability: 'ready' })
+    expect(analysis.targets[0]).toMatchObject({
+      packageName: '@demo/dsh-tui',
+      source: 'npm',
+      profileName: 'cc-tui',
+      commit: 'main',
+    })
+  })
 })

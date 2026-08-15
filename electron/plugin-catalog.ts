@@ -9,6 +9,7 @@ import { isSafePackageName, isSafeRepositoryName, repositoryFullNameFromSpecifie
 interface PackageManifest {
   name?: string
   version?: string
+  gitHead?: string
   private?: boolean
   workspaces?: unknown
   repository?: string | { url?: string }
@@ -112,6 +113,62 @@ async function publishedPackage(
   return manifest.name === packageName ? manifest : null
 }
 
+/** Verify a published root Bundle without relying on the GitHub API quota. */
+async function analyzePublishedRootPlugin(
+  repository: string,
+  defaultBranch: string,
+  currentProfile: string,
+  fetchImpl: typeof fetch,
+): Promise<RepositoryAnalysis | null> {
+  const rootManifest = await fetchOptionalManifest(rawFileUrl(repository, defaultBranch, 'package.json'), fetchImpl)
+  if (!rootManifest?.name || !isSafePackageName(rootManifest.name) || !rootManifest.dsh?.bundle?.patch) return null
+  if (rootManifest.dsh.type === 'dynamic-plugin') {
+    return {
+      repository,
+      defaultBranch,
+      installability: 'dynamic',
+      summary: 'This is a session-only dynamic plugin.',
+      targets: [],
+    }
+  }
+  if (rootManifest.name === '@deepseek-ai/dsh-root') {
+    return {
+      repository,
+      defaultBranch,
+      installability: 'application',
+      summary: 'This is the DeepSeek Harness source workspace.',
+      targets: [],
+    }
+  }
+
+  const published = await publishedPackage(rootManifest.name, repository, fetchImpl)
+  if (!published) return null
+  const profile = recommendedProfile(published, currentProfile)
+  const commit = published.gitHead && /^[a-f0-9]{40}$/i.test(published.gitHead)
+    ? published.gitHead
+    : defaultBranch
+  const buildScripts = lifecycleScripts(rootManifest, 'npm')
+  return {
+    repository,
+    defaultBranch,
+    installability: 'ready',
+    summary: `Detected installable ${published.name ?? rootManifest.name}.`,
+    targets: [{
+      id: targetId(rootManifest.name, ''),
+      packageName: rootManifest.name,
+      version: published.version ?? rootManifest.version ?? null,
+      source: 'npm',
+      profileName: profile.name,
+      platform: profile.platform,
+      subdirectory: null,
+      commit,
+      requiresBuild: buildScripts.length > 0,
+      buildScripts,
+      nodeRange: published.engines?.node ?? rootManifest.engines?.node ?? null,
+    }],
+  }
+}
+
 function candidatePatchPath(directory: string, patchFile: string): string | null {
   if (!patchFile || path.posix.isAbsolute(patchFile)) return null
   const normalized = path.posix.normalize(path.posix.join(directory, patchFile))
@@ -189,12 +246,19 @@ export async function analyzeRepository(
 ): Promise<RepositoryAnalysis> {
   if (!isSafeRepositoryName(repository) || !safeBranch(defaultBranch)) throw new Error('仓库名称或默认分支无效。')
 
-  const commitResult = await fetchJson<{ sha?: string }>(
-    githubApiPath(repository, `commits/${encodeURIComponent(defaultBranch)}`),
-    fetchImpl,
-  )
-  const commit = commitResult.sha
-  if (!commit || !/^[a-f0-9]{40}$/i.test(commit)) throw new Error('GitHub 没有返回有效的提交版本。')
+  let commit: string
+  try {
+    const commitResult = await fetchJson<{ sha?: string }>(
+      githubApiPath(repository, `commits/${encodeURIComponent(defaultBranch)}`),
+      fetchImpl,
+    )
+    commit = commitResult.sha ?? ''
+    if (!/^[a-f0-9]{40}$/i.test(commit)) throw new Error('GitHub 没有返回有效的提交版本。')
+  } catch (error) {
+    const fallback = await analyzePublishedRootPlugin(repository, defaultBranch, currentProfile, fetchImpl).catch(() => null)
+    if (fallback) return fallback
+    throw error
+  }
 
   const rootManifest = await fetchOptionalManifest(rawFileUrl(repository, commit, 'package.json'), fetchImpl)
   if (rootManifest?.dsh?.type === 'dynamic-plugin') {

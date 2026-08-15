@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { parseSkillDocument, readInstalledSkills } from '../electron/skill-format'
+import { parseSkillDocument, readInstalledSkills, toggleInstalledSkill } from '../electron/skill-format'
 
 const temporaryRoots: string[] = []
 
@@ -47,5 +47,19 @@ user-invocable: no
       ['bundle-skill', 'bundle'],
       ['flat-skill', 'flat'],
     ])
+    expect(installed.every(skill => skill.enabled)).toBe(true)
+  })
+
+  it('moves a skill into a hidden directory while disabled', async () => {
+    const dshHome = await mkdtemp(path.join(os.tmpdir(), 'dsh-skill-toggle-'))
+    temporaryRoots.push(dshHome)
+    await mkdir(path.join(dshHome, 'skills', 'toggle-skill'), { recursive: true })
+    await writeFile(path.join(dshHome, 'skills', 'toggle-skill', 'SKILL.md'), '---\nname: toggle-skill\ndescription: Toggle me.\n---\nBody\n')
+
+    const disabled = await toggleInstalledSkill(dshHome, 'toggle-skill', false)
+    expect(disabled).toMatchObject([{ name: 'toggle-skill', enabled: false }])
+    expect(disabled[0].path).toContain(`${path.sep}.disabled${path.sep}`)
+    const enabled = await toggleInstalledSkill(dshHome, 'toggle-skill', true)
+    expect(enabled).toMatchObject([{ name: 'toggle-skill', enabled: true }])
   })
 })

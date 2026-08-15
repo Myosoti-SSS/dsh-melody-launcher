@@ -182,14 +182,26 @@ export async function installSkillFromRepository(
       : path.join(skillRoot, target.name)
     assertInside(skillRoot, destination)
     assertInside(skillRoot, conflicting)
+    const disabledRoot = path.join(skillRoot, '.disabled')
+    const disabledDestination = target.format === 'bundle'
+      ? path.join(disabledRoot, target.name)
+      : path.join(disabledRoot, `${target.name}.md`)
+    const disabledConflicting = target.format === 'bundle'
+      ? path.join(disabledRoot, `${target.name}.md`)
+      : path.join(disabledRoot, target.name)
+    assertInside(skillRoot, disabledDestination)
+    assertInside(skillRoot, disabledConflicting)
     await replacePath(staged, destination)
     await rm(conflicting, { recursive: true, force: true })
+    await rm(disabledDestination, { recursive: true, force: true })
+    await rm(disabledConflicting, { recursive: true, force: true })
     onProgress(96, '正在验证本地 Skill')
     return {
       name: parsed.name,
       description: parsed.description,
       path: destination,
       format: target.format,
+      enabled: true,
       modelInvocable: parsed.modelInvocable,
       userInvocable: parsed.userInvocable,
     }

@@ -23,6 +23,7 @@ import { CatalogPagination } from '../components/CatalogPagination'
 import { PageHeading } from '../components/PageHeading'
 import { EMPTY_DSH_INSTALLATION } from '../constants'
 import { errorText, formatBytes, formatRelativeTime, formatStars } from '../lib/format'
+import { readCatalogAnalysisCache, writeCatalogAnalysisCache } from '../lib/catalog-cache'
 import { isInstallProgressActive } from '../lib/install-progress'
 import type {
   CatalogRepositoryAnalysis,
@@ -140,12 +141,16 @@ export function DiscoverView({
       setWarnings(result.warnings)
       setDshInstallation(result.dshInstallation)
       onInstallationState(result.installedRepositories, result.installedSkills)
+      for (const repo of result.repositories) {
+        const cached = readCatalogAnalysisCache(repo.fullName, repo.defaultBranch)
+        if (cached) onAnalysis(repo.fullName, cached)
+      }
     } catch (error) {
       onError(errorText(error))
     } finally {
       setLoading(false)
     }
-  }, [api, onError, onInstallationState, page, query, sort])
+  }, [api, onAnalysis, onError, onInstallationState, page, query, sort])
 
   useEffect(() => { void search('', 'stars', 1) }, [])
   useEffect(() => () => { batchRunRef.current += 1 }, [])
@@ -172,6 +177,7 @@ export function DiscoverView({
     setChecking(repo.fullName)
     try {
       const analysis = await api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch)
+      if (analysis.warnings.length === 0) writeCatalogAnalysisCache(repo.fullName, repo.defaultBranch, analysis)
       onAnalysis(repo.fullName, analysis)
       if (analysis.kind === 'hybrid'
         || pluginTargets(analysis).length + skillTargets(analysis).length > 1) {
@@ -203,6 +209,7 @@ export function DiscoverView({
       setChecking(repo.fullName)
       try {
         const analysis = await api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch)
+        if (analysis.warnings.length === 0) writeCatalogAnalysisCache(repo.fullName, repo.defaultBranch, analysis)
         if (batchRunRef.current !== runId) return
         onAnalysis(repo.fullName, analysis)
         if (analysis.kind !== 'invalid') available += 1

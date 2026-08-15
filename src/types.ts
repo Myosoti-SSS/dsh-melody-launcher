@@ -123,6 +123,7 @@ export interface InstalledSkill {
   description: string
   path: string
   format: 'bundle' | 'flat'
+  enabled: boolean
   modelInvocable: boolean
   userInvocable: boolean
 }
@@ -211,6 +212,7 @@ export interface LauncherApi {
   uninstallPlugin(packageName: string): Promise<ProfileState>
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
   readInstalledSkills(): Promise<InstalledSkill[]>
+  toggleSkill(name: string, enabled: boolean): Promise<InstalledSkill[]>
   getRuntimeState(): Promise<RuntimeState>
   startRuntime(): Promise<RuntimeState>
   stopRuntime(): Promise<RuntimeState>
