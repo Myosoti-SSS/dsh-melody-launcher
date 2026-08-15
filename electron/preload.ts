@@ -1,47 +1,48 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { IPC, IPC_EVENTS } from '../src/constants'
 import type { AppSettings, InstallProgress, LauncherApi, RuntimeOutput, RuntimeState, WindowMode } from '../src/types'
 
+/**
+ * 渲染层与主进程之间唯一的桥。
+ * 通道名来自共享常量，与主进程的注册面是同一份定义。
+ */
+
+/** 订阅一个主进程推送的事件，返回退订函数。 */
+function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
+  const wrapped = (_event: Electron.IpcRendererEvent, payload: T) => listener(payload)
+  ipcRenderer.on(channel, wrapped)
+  return () => ipcRenderer.removeListener(channel, wrapped)
+}
+
 const api: LauncherApi = {
-  getSettings: () => ipcRenderer.invoke('settings:get'),
-  saveSettings: (settings: AppSettings) => ipcRenderer.invoke('settings:save', settings),
-  detectDshInstallation: () => ipcRenderer.invoke('dsh:detect-installation'),
-  getDeepSeekCredentialStatus: () => ipcRenderer.invoke('credentials:deepseek-status'),
-  setDeepSeekApiKey: apiKey => ipcRenderer.invoke('credentials:deepseek-set', apiKey),
-  clearDeepSeekApiKey: () => ipcRenderer.invoke('credentials:deepseek-clear'),
-  chooseDirectory: kind => ipcRenderer.invoke('dialog:directory', kind),
-  readProfile: () => ipcRenderer.invoke('profile:read'),
-  togglePlugin: (packageName, enabled) => ipcRenderer.invoke('profile:toggle', { packageName, enabled }),
-  reorderPlugins: packageNames => ipcRenderer.invoke('profile:reorder', packageNames),
-  discoverPlugins: (query, sort, page) => ipcRenderer.invoke('plugins:discover', { query, sort, page }),
-  analyzePlugin: (fullName, defaultBranch) => ipcRenderer.invoke('plugins:analyze', { fullName, defaultBranch }),
-  installPlugin: request => ipcRenderer.invoke('plugins:install', request),
-  uninstallPlugin: packageName => ipcRenderer.invoke('plugins:uninstall', packageName),
-  discoverSkills: (query, sort, page) => ipcRenderer.invoke('skills:discover', { query, sort, page }),
-  analyzeSkill: (fullName, defaultBranch) => ipcRenderer.invoke('skills:analyze', { fullName, defaultBranch }),
-  installSkill: request => ipcRenderer.invoke('skills:install', request),
-  readInstalledSkills: () => ipcRenderer.invoke('skills:read-installed'),
-  getRuntimeState: () => ipcRenderer.invoke('runtime:state'),
-  startRuntime: () => ipcRenderer.invoke('runtime:start'),
-  stopRuntime: () => ipcRenderer.invoke('runtime:stop'),
-  openExternal: url => ipcRenderer.invoke('shell:open-external', url),
-  openPath: path => ipcRenderer.invoke('shell:open-path', path),
-  setWindowMode: (mode: WindowMode) => ipcRenderer.invoke('window:set-mode', mode),
-  closeWindow: () => ipcRenderer.invoke('window:close'),
-  onRuntimeOutput: listener => {
-    const wrapped = (_event: Electron.IpcRendererEvent, output: RuntimeOutput) => listener(output)
-    ipcRenderer.on('runtime:output', wrapped)
-    return () => ipcRenderer.removeListener('runtime:output', wrapped)
-  },
-  onRuntimeState: listener => {
-    const wrapped = (_event: Electron.IpcRendererEvent, state: RuntimeState) => listener(state)
-    ipcRenderer.on('runtime:state-changed', wrapped)
-    return () => ipcRenderer.removeListener('runtime:state-changed', wrapped)
-  },
-  onInstallProgress: listener => {
-    const wrapped = (_event: Electron.IpcRendererEvent, progress: InstallProgress) => listener(progress)
-    ipcRenderer.on('plugins:install-progress', wrapped)
-    return () => ipcRenderer.removeListener('plugins:install-progress', wrapped)
-  },
+  getSettings: () => ipcRenderer.invoke(IPC.settingsGet),
+  saveSettings: (settings: AppSettings) => ipcRenderer.invoke(IPC.settingsSave, settings),
+  detectDshInstallation: () => ipcRenderer.invoke(IPC.dshDetect),
+  getDeepSeekCredentialStatus: () => ipcRenderer.invoke(IPC.credentialStatus),
+  setDeepSeekApiKey: apiKey => ipcRenderer.invoke(IPC.credentialSet, apiKey),
+  clearDeepSeekApiKey: () => ipcRenderer.invoke(IPC.credentialClear),
+  chooseDirectory: kind => ipcRenderer.invoke(IPC.chooseDirectory, kind),
+  readProfile: () => ipcRenderer.invoke(IPC.profileRead),
+  togglePlugin: (packageName, enabled) => ipcRenderer.invoke(IPC.profileToggle, { packageName, enabled }),
+  reorderPlugins: packageNames => ipcRenderer.invoke(IPC.profileReorder, packageNames),
+  discoverPlugins: (query, sort, page) => ipcRenderer.invoke(IPC.pluginsDiscover, { query, sort, page }),
+  analyzePlugin: (fullName, defaultBranch) => ipcRenderer.invoke(IPC.pluginsAnalyze, { fullName, defaultBranch }),
+  installPlugin: request => ipcRenderer.invoke(IPC.pluginsInstall, request),
+  uninstallPlugin: packageName => ipcRenderer.invoke(IPC.pluginsUninstall, packageName),
+  discoverSkills: (query, sort, page) => ipcRenderer.invoke(IPC.skillsDiscover, { query, sort, page }),
+  analyzeSkill: (fullName, defaultBranch) => ipcRenderer.invoke(IPC.skillsAnalyze, { fullName, defaultBranch }),
+  installSkill: request => ipcRenderer.invoke(IPC.skillsInstall, request),
+  readInstalledSkills: () => ipcRenderer.invoke(IPC.skillsReadInstalled),
+  getRuntimeState: () => ipcRenderer.invoke(IPC.runtimeState),
+  startRuntime: () => ipcRenderer.invoke(IPC.runtimeStart),
+  stopRuntime: () => ipcRenderer.invoke(IPC.runtimeStop),
+  openExternal: url => ipcRenderer.invoke(IPC.openExternal, url),
+  openPath: path => ipcRenderer.invoke(IPC.openPath, path),
+  setWindowMode: (mode: WindowMode) => ipcRenderer.invoke(IPC.windowSetMode, mode),
+  closeWindow: () => ipcRenderer.invoke(IPC.windowClose),
+  onRuntimeOutput: listener => subscribe<RuntimeOutput>(IPC_EVENTS.runtimeOutput, listener),
+  onRuntimeState: listener => subscribe<RuntimeState>(IPC_EVENTS.runtimeStateChanged, listener),
+  onInstallProgress: listener => subscribe<InstallProgress>(IPC_EVENTS.installProgress, listener),
 }
 
 contextBridge.exposeInMainWorld('launcher', api)
