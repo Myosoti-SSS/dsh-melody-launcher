@@ -1,4 +1,5 @@
 import {
+  Bot,
   Box,
   Check,
   CircleAlert,
@@ -21,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLauncherApi } from '../api/client'
 import { CatalogPagination } from '../components/CatalogPagination'
 import { PageHeading } from '../components/PageHeading'
-import { EMPTY_DSH_INSTALLATION } from '../constants'
+import { AI_INSTALL_ENABLED, EMPTY_DSH_INSTALLATION } from '../constants'
 import { errorText, formatRelativeTime, formatStars } from '../lib/format'
 import type {
   DshInstallationStatus,
@@ -50,9 +51,15 @@ interface DiscoverViewProps {
   onInstalled: (result: RepositoryInstallResult) => void
   onError: (message: string) => void
   onOpenRepository: (url: string) => void
+  /** 启动「AI 尝试」安装（仅非标准形态显示）。 */
+  onAiInstall: (repo: RepositoryResult) => void
+  /** 正在跑 AI 任务的仓库，用于行内 spinner。 */
+  aiRepository: string | null
+  /** 是否有 AI 任务在跑（全局禁用普通安装与再次触发）。 */
+  aiActive: boolean
 }
 
-export function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onError, onOpenRepository }: DiscoverViewProps) {
+export function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onError, onOpenRepository, onAiInstall, aiRepository, aiActive }: DiscoverViewProps) {
   const api = useLauncherApi()
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<'stars' | 'updated'>('stars')
@@ -267,7 +274,11 @@ export function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onErr
                       : '不可安装'
           const actionDisabled = installing !== null
             || checking !== null
+            || aiActive
             || Boolean(analysis && !['ready', 'choice'].includes(analysis.installability))
+          const aiTryable = AI_INSTALL_ENABLED
+            && analysis
+            && !['ready', 'choice'].includes(analysis.installability)
           const runAction = () => {
             if (repo.kind === 'dsh') return void install(repo)
             if (!analysis) return void inspect(repo)
@@ -316,10 +327,24 @@ export function DiscoverView({ profile, analyses, onAnalysis, onInstalled, onErr
                     </button>
                   </div>
                 ) : (
-                  <button type="button" className="install-button" disabled={actionDisabled} onClick={runAction}>
-                    {isChecking || installing === repo.fullName ? <LoaderCircle className="spin" size={16} /> : analysis?.installability === 'application' ? <Box size={16} /> : analysis && !['ready', 'choice'].includes(analysis.installability) ? <CircleAlert size={16} /> : <Download size={16} />}
-                    {isChecking ? '检测中' : actionLabel}
-                  </button>
+                  <div className="ai-ready-actions">
+                    {aiTryable && (
+                      <button
+                        type="button"
+                        className="secondary-button accent ai-try-button"
+                        disabled={aiActive || checking !== null || installing !== null}
+                        onClick={() => onAiInstall(repo)}
+                        title="让 DSH 的 AI 研究仓库并尝试安装（实验性，只读自动放行、写操作需批准、可一键还原快照）"
+                      >
+                        {aiRepository === repo.fullName ? <LoaderCircle className="spin" size={15} /> : <Bot size={15} />}
+                        AI 尝试
+                      </button>
+                    )}
+                    <button type="button" className="install-button" disabled={actionDisabled} onClick={runAction}>
+                      {isChecking || installing === repo.fullName ? <LoaderCircle className="spin" size={16} /> : analysis?.installability === 'application' ? <Box size={16} /> : analysis && !['ready', 'choice'].includes(analysis.installability) ? <CircleAlert size={16} /> : <Download size={16} />}
+                      {isChecking ? '检测中' : actionLabel}
+                    </button>
+                  </div>
                 )}
               </div>
             </article>

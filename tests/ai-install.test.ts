@@ -1,0 +1,610 @@
+import { existsSync } from 'node:fs'
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { parseDocument } from 'yaml'
+import {
+  ACP_RUNTIME_PACKAGES,
+  buildAcpServerCommand,
+  buildInstallPrompt,
+  createProfileSnapshot,
+  decideApproval,
+  healCredentialsLock,
+  isReadOnlyPermission,
+  isSensitivePath,
+  lockCredentialsOut,
+  renderAcpComposition,
+  restoreCredentialsLock,
+  restoreProfileSnapshot,
+} from '../electron/ai-install'
+import type { AcpPermissionRequest } from '../electron/acp-client'
+import type { PluginInstallability, PluginInstallTarget, RepositoryAnalysis } from '../src/types'
+
+// ---------------------------------------------------------------------------
+// fixtures
+// ---------------------------------------------------------------------------
+
+function analysis(
+  installability: PluginInstallability,
+  summary = '仓库提供会话内插件，无静态 Bundle。',
+  targets: PluginInstallTarget[] = [],
+): RepositoryAnalysis {
+  return { repository: 'acme/super-plugin', defaultBranch: 'main', installability, summary, targets }
+}
+
+function permissionRequest(overrides: Partial<AcpPermissionRequest>): AcpPermissionRequest {
+  return {
+    sessionId: 'sess-1',
+    toolCallId: 'call-1',
+    toolTitle: 'Bash',
+    toolKind: 'bash',
+    rawInput: 'ls -la',
+    options: ['allow_once', 'reject_once'],
+    ...overrides,
+  }
+}
+
+function bash(command: string): AcpPermissionRequest {
+  return permissionRequest({ toolKind: 'bash', toolTitle: 'Bash', rawInput: { command } })
+}
+
+function fsTool(kind: string): AcpPermissionRequest {
+  return permissionRequest({ toolKind: kind, toolTitle: kind, rawInput: { path: '/tmp/x' } })
+}
+
+// ---------------------------------------------------------------------------
+// buildInstallPrompt
+// ---------------------------------------------------------------------------
+
+describe('buildInstallPrompt', () => {
+  const base = {
+    repository: 'acme/super-plugin',
+    defaultBranch: 'main',
+    profileName: 'web',
+    workspace: '/home/tester/.dsh',
+  }
+
+  it('按 installability 分支给出研究指引', () => {
+    expect(buildInstallPrompt({ ...base, analysis: analysis('dynamic') })).toContain('cordis_define')
+    expect(buildInstallPrompt({ ...base, analysis: analysis('application') })).toMatch(/Bundle/)
+    expect(buildInstallPrompt({ ...base, analysis: analysis('invalid') })).toMatch(/不能|无法/)
+  })
+
+  it('内嵌凭据禁令与工作区边界，且不含任何密钥内容', () => {
+    const prompt = buildInstallPrompt({ ...base, analysis: analysis('dynamic') })
+    expect(prompt).toContain('.credentials.yaml')
+    expect(prompt).toContain('token')
+    expect(prompt).toContain('/home/tester/.dsh')
+    expect(prompt).toContain('web')
+    expect(prompt).not.toContain('sk-test-secret-abc')
+  })
+
+  it('附上 DSH 命令行提示时写入 dshCliCommand', () => {
+    const prompt = buildInstallPrompt({
+      ...base,
+      analysis: analysis('application'),
+      dshCliCommand: 'npx --yes @deepseek-ai/dsh',
+    })
+    expect(prompt).toContain('npx --yes @deepseek-ai/dsh')
+    expect(prompt).toContain('plugin --profile web add')
+  })
+
+  it('带识别目标时列出可安装目标', () => {
+    const prompt = buildInstallPrompt({
+      ...base,
+      analysis: analysis('choice', '多组件', [
+        { id: 'a', packageName: 'some-pkg', version: null, source: 'npm', profileName: 'web', platform: 'web', subdirectory: null, commit: 'x', requiresBuild: false, buildScripts: [], nodeRange: null },
+      ]),
+    })
+    expect(prompt).toContain('some-pkg')
+  })
+
+  it('教 AI 把 Skill 仓库安装为 Skill（合法目标）', () => {
+    const prompt = buildInstallPrompt({ ...base, analysis: analysis('invalid') })
+    // Skill 是允许的安装目标：检测（SKILL.md / flat frontmatter）+ 目标目录
+    expect(prompt).toContain('/home/tester/.dsh/skills/')
+    expect(prompt).toContain('SKILL.md')
+    expect(prompt).toContain('Skill 是合法且推荐的安装目标')
+    expect(prompt).toContain('bundle 安装')
+    expect(prompt).toContain('flat 安装')
+    // invalid 指引应指向先判断是否为 Skill 仓库
+    expect(prompt).toContain('Agent Skills 仓库')
+  })
+
+  it('安全铁律反映真实沙箱模型：工作区内写直接执行、越界才弹审批', () => {
+    const prompt = buildInstallPrompt({ ...base, analysis: analysis('application') })
+    expect(prompt).toContain('`/home/tester/.dsh` 内写文件（含')
+    expect(prompt).toContain('直接执行即可，无需等待审批')
+    expect(prompt).toContain('可能触发审批弹窗')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// isReadOnlyPermission
+// ---------------------------------------------------------------------------
+
+describe('isReadOnlyPermission', () => {
+  it('放行只读 bash 单命令', () => {
+    expect(isReadOnlyPermission(bash('ls -la'))).toBe(true)
+    expect(isReadOnlyPermission(bash('pwd'))).toBe(true)
+    expect(isReadOnlyPermission(bash('cat package.json'))).toBe(true)
+    expect(isReadOnlyPermission(bash('grep -r deepseek src'))).toBe(true)
+  })
+
+  it('放行只读 git 子命令', () => {
+    expect(isReadOnlyPermission(bash('git status'))).toBe(true)
+    expect(isReadOnlyPermission(bash('git log --oneline -5'))).toBe(true)
+    expect(isReadOnlyPermission(bash('git diff HEAD'))).toBe(true)
+  })
+
+  it('放行纯只读管道', () => {
+    expect(isReadOnlyPermission(bash('ls | head -20'))).toBe(true)
+  })
+
+  it('拒绝写语义与复合命令', () => {
+    expect(isReadOnlyPermission(bash('npm install some-plugin'))).toBe(false)
+    expect(isReadOnlyPermission(bash('dsh plugin add github:a/b'))).toBe(false)
+    expect(isReadOnlyPermission(bash('git clone https://x/y'))).toBe(false)
+    expect(isReadOnlyPermission(bash('cat a; ls'))).toBe(false)
+    expect(isReadOnlyPermission(bash('echo hi > out.txt'))).toBe(false)
+    expect(isReadOnlyPermission(bash('ls && pwd'))).toBe(false)
+  })
+
+  it('按工具名分类非 bash 工具', () => {
+    expect(isReadOnlyPermission(fsTool('fs.read_file'))).toBe(true)
+    expect(isReadOnlyPermission(fsTool('fs.list_directory'))).toBe(true)
+    expect(isReadOnlyPermission(fsTool('fs.write_file'))).toBe(false)
+    expect(isReadOnlyPermission(fsTool('fs.edit_file'))).toBe(false)
+    expect(isReadOnlyPermission(fsTool('subprocess'))).toBe(false)
+    expect(isReadOnlyPermission(fsTool('unknown'))).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// isSensitivePath
+// ---------------------------------------------------------------------------
+
+describe('isSensitivePath', () => {
+  it('命中凭据/密钥/token 模式', () => {
+    expect(isSensitivePath(bash('cat .credentials.yaml'))).toBe(true)
+    expect(isSensitivePath(bash('cat .credentials.yml'))).toBe(true)
+    expect(isSensitivePath(bash('ls .env'))).toBe(true)
+    expect(isSensitivePath(bash('cat .env.production'))).toBe(true)
+    expect(isSensitivePath(bash('ls ".env"'))).toBe(true)
+    expect(isSensitivePath(bash('cat ~/.ssh/id_rsa'))).toBe(true)
+    expect(isSensitivePath(bash('grep api_key src'))).toBe(true)
+    expect(isSensitivePath(bash('cat my-token.json'))).toBe(true)
+    expect(isSensitivePath(bash('cat secrets.yaml'))).toBe(true)
+    expect(isSensitivePath(bash('cat cert.pem'))).toBe(true)
+  })
+
+  it('不误伤普通路径', () => {
+    expect(isSensitivePath(bash('cat package.json'))).toBe(false)
+    expect(isSensitivePath(bash('ls -la'))).toBe(false)
+    expect(isSensitivePath(bash('git status'))).toBe(false)
+    expect(isSensitivePath(fsTool('fs.read_file'))).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// decideApproval
+// ---------------------------------------------------------------------------
+
+describe('decideApproval', () => {
+  it('只读且非敏感 → allow', () => {
+    expect(decideApproval(bash('ls -la'))).toBe('allow')
+    expect(decideApproval(bash('git status'))).toBe('allow')
+    expect(decideApproval(fsTool('fs.read_file'))).toBe('allow')
+  })
+
+  it('敏感路径即使只读 → ask', () => {
+    expect(decideApproval(bash('cat .credentials.yaml'))).toBe('ask')
+    expect(decideApproval(bash('ls .env'))).toBe('ask')
+  })
+
+  it('写文件/安装命令 → ask', () => {
+    expect(decideApproval(bash('npm install some-plugin'))).toBe('ask')
+    expect(decideApproval(bash('dsh plugin add github:a/b'))).toBe('ask')
+    expect(decideApproval(fsTool('fs.write_file'))).toBe('ask')
+    expect(decideApproval(bash('git clone https://x/y'))).toBe('ask')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// renderAcpComposition
+// ---------------------------------------------------------------------------
+
+describe('renderAcpComposition', () => {
+  it('渲染出可解析的最小安全 composition（13 个插件）', () => {
+    const yaml = renderAcpComposition({ persistenceRoot: 'C:\\dsh\\sessions' })
+    const value = parseDocument(yaml).toJS() as Array<Record<string, unknown>>
+    expect(Array.isArray(value)).toBe(true)
+    expect(value.length).toBe(13)
+    for (const entry of value) {
+      const name = String(entry.name)
+      expect(ACP_RUNTIME_PACKAGES.some(([pkg]) => pkg === name)).toBe(true)
+    }
+  })
+
+  it('强制 workspace-write 与单次审批', () => {
+    const yaml = renderAcpComposition({ persistenceRoot: '/x' })
+    const value = parseDocument(yaml).toJS() as Array<Record<string, unknown>>
+    const sandboxPolicy = value.find(entry => entry.id === 'sandbox-policy')
+    const approval = value.find(entry => entry.id === 'approval')
+    const config = sandboxPolicy?.config as { mode?: string }
+    const approvalConfig = approval?.config as { policy?: string }
+    expect(config.mode).toBe('workspace-write')
+    expect(approvalConfig.policy).toBe('ask')
+  })
+
+  it('写入 provider/model/persistenceRoot 与默认 persona', () => {
+    const yaml = renderAcpComposition({ persistenceRoot: 'D:\\dsh\\sessions' })
+    const value = parseDocument(yaml).toJS() as Array<Record<string, unknown>>
+    const acp = value.find(entry => entry.id === 'acp-agent')?.config as {
+      provider?: string
+      model?: string
+      persistenceRoot?: string
+      persona?: string
+    }
+    expect(acp.provider).toBe('deepseek-official')
+    expect(acp.model).toBe('deepseek-v4-flash')
+    expect(acp.persistenceRoot).toBe('D:\\dsh\\sessions')
+    expect(acp.persona).toContain('{{model}}')
+  })
+
+  it('带自定义 bash 超时', () => {
+    const yaml = renderAcpComposition({ persistenceRoot: '/x', bashTimeoutMs: 120_000 })
+    const value = parseDocument(yaml).toJS() as Array<Record<string, unknown>>
+    const bash = value.find(entry => entry.id === 'bash')?.config as { timeoutMs?: number }
+    expect(bash.timeoutMs).toBe(120_000)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// buildAcpServerCommand
+// ---------------------------------------------------------------------------
+
+describe('buildAcpServerCommand', () => {
+  it('Windows 下解析出 .cmd 包装器', () => {
+    const command = buildAcpServerCommand('C:\\appdata\\acp-runtime', 'C:\\tmp\\cordis.yml', 'win32')
+    expect(command.executable).toBe(path.join('C:', 'appdata', 'acp-runtime', 'node_modules', '.bin', 'dsh-acp-demo.cmd'))
+    expect(command.args).toEqual(['--config', 'C:\\tmp\\cordis.yml'])
+  })
+
+  it('POSIX 下无扩展名', () => {
+    // path.join 跟随运行时平台（项目约定：平台感知断言）。
+    const command = buildAcpServerCommand('/home/x/acp-runtime', '/tmp/cordis.yml', 'linux')
+    const expected = path.join('/home/x/acp-runtime', 'node_modules', '.bin', 'dsh-acp-demo')
+    expect(command.executable).toBe(expected)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 快照 / 回滚
+// ---------------------------------------------------------------------------
+
+describe('profile 快照 / 回滚', () => {
+  async function tempDir(): Promise<string> {
+    return mkdtemp(path.join(tmpdir(), 'ai-install-test-'))
+  }
+
+  it('快照还原字节一致，且不触碰清单外的文件', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const snapshotRoot = path.join(root, 'snapshots')
+    const profileDir = path.join(dshHome, 'profiles', 'web')
+    const extraFile = path.join(profileDir, 'node_modules', 'some-pkg', 'index.js')
+    await mkdir(path.dirname(extraFile), { recursive: true })
+    await writeFile(path.join(profileDir, 'package.json'), '{"name":"web","version":"1.0.0"}\n', 'utf8')
+    await writeFile(path.join(profileDir, 'pnpm-workspace.yaml'), 'packages:\n  - "node_modules/*"\n', 'utf8')
+    await writeFile(extraFile, 'console.log("untouched")\n', 'utf8')
+
+    const snapshot = await createProfileSnapshot(dshHome, 'web', snapshotRoot)
+
+    // 模拟 AI 改坏了清单
+    await writeFile(path.join(profileDir, 'package.json'), '{"name":"web","version":"99.0.0"}\n', 'utf8')
+    await writeFile(path.join(profileDir, 'pnpm-workspace.yaml'), 'broken\n', 'utf8')
+
+    const result = await restoreProfileSnapshot(snapshot)
+    expect(result.restored).toBe(2)
+
+    expect(await readFile(path.join(profileDir, 'package.json'), 'utf8')).toBe('{"name":"web","version":"1.0.0"}\n')
+    expect(await readFile(path.join(profileDir, 'pnpm-workspace.yaml'), 'utf8')).toBe('packages:\n  - "node_modules/*"\n')
+    expect(await readFile(extraFile, 'utf8')).toBe('console.log("untouched")\n')
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('缺失的清单文件不参与快照', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const snapshotRoot = path.join(root, 'snapshots')
+    const profileDir = path.join(dshHome, 'profiles', 'web')
+    await mkdir(profileDir, { recursive: true })
+    await writeFile(path.join(profileDir, 'package.json'), '{"name":"web"}\n', 'utf8')
+
+    const snapshot = await createProfileSnapshot(dshHome, 'web', snapshotRoot)
+    expect(snapshot.files.map(file => file.relPath)).toEqual(['package.json'])
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('relPath 穿越被拒', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const profileDir = path.join(dshHome, 'profiles', 'web')
+    await mkdir(profileDir, { recursive: true })
+    await writeFile(path.join(profileDir, 'package.json'), '{"name":"web"}\n', 'utf8')
+
+    const snapshot = await createProfileSnapshot(dshHome, 'web', path.join(root, 'snapshots'))
+    const malicious = { ...snapshot, files: [{ relPath: '../evil', content: 'pwned' }] }
+    await expect(restoreProfileSnapshot(malicious)).rejects.toThrow(/越界/)
+
+    // 真实内容未被写入
+    const evilPath = path.join(root, 'dsh-home', 'evil')
+    await expect(readFile(evilPath, 'utf8')).rejects.toThrow()
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('skills/ 纳入快照——还原移除 AI 新增的 skill、还原被改动的 skill、保留 node_modules', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const snapshotRoot = path.join(root, 'snapshots')
+    const profileDir = path.join(dshHome, 'profiles', 'web')
+    const skillsDir = path.join(dshHome, 'skills')
+    await mkdir(profileDir, { recursive: true })
+    await writeFile(path.join(profileDir, 'package.json'), '{"name":"web"}\n', 'utf8')
+
+    // 任务前：skill-a 存在（含子目录），且带一个 node_modules（快照应跳过它）。
+    const skillASkillMd = path.join(skillsDir, 'skill-a', 'SKILL.md')
+    const skillAHelper = path.join(skillsDir, 'skill-a', 'scripts', 'run.mjs')
+    const skillANodeModule = path.join(skillsDir, 'skill-a', 'node_modules', 'dep', 'index.js')
+    await mkdir(path.dirname(skillASkillMd), { recursive: true })
+    await writeFile(skillASkillMd, '---\nname: skill-a\n---\noriginal\n', 'utf8')
+    await mkdir(path.dirname(skillAHelper), { recursive: true })
+    await writeFile(skillAHelper, 'console.log("helper")\n', 'utf8')
+    await mkdir(path.dirname(skillANodeModule), { recursive: true })
+    await writeFile(skillANodeModule, 'export {}\n', 'utf8')
+
+    const snapshot = await createProfileSnapshot(dshHome, 'web', snapshotRoot)
+    expect(snapshot.skillFiles.map(file => file.relPath).sort()).toEqual([
+      path.join('skill-a', 'SKILL.md'),
+      path.join('skill-a', 'scripts', 'run.mjs'),
+    ])
+
+    // 模拟 AI：改动 skill-a/SKILL.md，新增 skill-b（多级目录）。
+    await writeFile(skillASkillMd, '---\nname: skill-a\n---\nmodified by AI\n', 'utf8')
+    await mkdir(path.join(skillsDir, 'skill-b', 'tools'), { recursive: true })
+    await writeFile(path.join(skillsDir, 'skill-b', 'SKILL.md'), '---\nname: skill-b\n---\nnew\n', 'utf8')
+    await writeFile(path.join(skillsDir, 'skill-b', 'tools', 'tool.md'), '# tool\n', 'utf8')
+
+    const result = await restoreProfileSnapshot(snapshot)
+    // package.json + 2 个快照 skill 文件写回（新装的 skill-b 被删除，不算写入数）。
+    expect(result.restored).toBe(3)
+
+    expect(await readFile(skillASkillMd, 'utf8')).toBe('---\nname: skill-a\n---\noriginal\n')
+    expect(await readFile(skillAHelper, 'utf8')).toBe('console.log("helper")\n')
+    expect(existsSync(path.join(skillsDir, 'skill-b'))).toBe(false)
+    // node_modules 既未入快照也未被还原触碰。
+    expect(await readFile(skillANodeModule, 'utf8')).toBe('export {}\n')
+    const entries = await readdir(skillsDir)
+    expect(entries.sort()).toEqual(['skill-a'])
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('skills/ 不存在时不参与快照，还原不创建目录', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const profileDir = path.join(dshHome, 'profiles', 'web')
+    await mkdir(profileDir, { recursive: true })
+    await writeFile(path.join(profileDir, 'package.json'), '{"name":"web"}\n', 'utf8')
+
+    const snapshot = await createProfileSnapshot(dshHome, 'web', path.join(root, 'snapshots'))
+    expect(snapshot.skillFiles).toEqual([])
+
+    const result = await restoreProfileSnapshot(snapshot)
+    expect(result.restored).toBe(1)
+    expect(existsSync(path.join(dshHome, 'skills'))).toBe(false)
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('skills/ 任务前不存在时，还原移除 AI 新建的整个 skills/ 目录', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const profileDir = path.join(dshHome, 'profiles', 'web')
+    await mkdir(profileDir, { recursive: true })
+    await writeFile(path.join(profileDir, 'package.json'), '{"name":"web"}\n', 'utf8')
+
+    const snapshot = await createProfileSnapshot(dshHome, 'web', path.join(root, 'snapshots'))
+    expect(snapshot.skillFiles).toEqual([])
+
+    // 模拟 AI：任务前 skills/ 不存在，AI 新建了多级 skill 目录。
+    const skillsDir = path.join(dshHome, 'skills')
+    await mkdir(path.join(skillsDir, 'new-skill', 'tools'), { recursive: true })
+    await writeFile(path.join(skillsDir, 'new-skill', 'SKILL.md'), '---\nname: new-skill\n---\nnew\n', 'utf8')
+    await writeFile(path.join(skillsDir, 'new-skill', 'tools', 'tool.md'), '# tool\n', 'utf8')
+
+    const result = await restoreProfileSnapshot(snapshot)
+    expect(result.restored).toBe(1)
+    // 回到「任务前无 skills/」的状态——目录本身也不留。
+    expect(existsSync(skillsDir)).toBe(false)
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('skill relPath 穿越被拒', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const profileDir = path.join(dshHome, 'profiles', 'web')
+    const skillsDir = path.join(dshHome, 'skills')
+    await mkdir(profileDir, { recursive: true })
+    await mkdir(skillsDir, { recursive: true })
+    await writeFile(path.join(profileDir, 'package.json'), '{"name":"web"}\n', 'utf8')
+    await writeFile(path.join(skillsDir, 'ok.md'), '# ok\n', 'utf8')
+
+    const snapshot = await createProfileSnapshot(dshHome, 'web', path.join(root, 'snapshots'))
+    const malicious = {
+      ...snapshot,
+      skillFiles: [
+        { relPath: 'ok.md', content: '# ok\n' },
+        { relPath: '../evil.md', content: 'pwned' },
+      ],
+    }
+    await expect(restoreProfileSnapshot(malicious)).rejects.toThrow(/越界/)
+
+    // 清单外的真实内容未被写入。
+    const evilPath = path.join(dshHome, 'evil.md')
+    await expect(readFile(evilPath, 'utf8')).rejects.toThrow()
+
+    await rm(root, { recursive: true, force: true })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 凭据锁（AI 会话期间把 .credentials.yaml 移出工作区）
+// ---------------------------------------------------------------------------
+
+describe('凭据锁', () => {
+  async function tempDir(): Promise<string> {
+    return mkdtemp(path.join(tmpdir(), 'ai-credlock-test-'))
+  }
+
+  it('锁定把凭据文件移出工作区，还原字节一致', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const lockRoot = path.join(root, 'credentials-lock')
+    const credentialsPath = path.join(dshHome, '.credentials.yaml')
+    await mkdir(dshHome, { recursive: true })
+    await writeFile(credentialsPath, 'DEEPSEEK_API_KEY: sk-do-not-leak\n', 'utf8')
+
+    const lock = await lockCredentialsOut(dshHome, lockRoot)
+    expect(lock).not.toBeNull()
+    // 原位置不可见（agent 摸不到）
+    expect(existsSync(credentialsPath)).toBe(false)
+    // 锁文件在工作区外的 lockRoot
+    expect(existsSync(lock!.locked)).toBe(true)
+    expect(lock!.locked.startsWith(lockRoot)).toBe(true)
+    expect(lock!.original).toBe(credentialsPath)
+
+    // agent 视角：文件确实没了
+    await expect(readFile(credentialsPath, 'utf8')).rejects.toThrow()
+
+    await restoreCredentialsLock(lock!)
+    expect(await readFile(credentialsPath, 'utf8')).toBe('DEEPSEEK_API_KEY: sk-do-not-leak\n')
+    expect(existsSync(lock!.locked)).toBe(false)
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('没有凭据文件时不锁定（返回 null）', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const lockRoot = path.join(root, 'credentials-lock')
+    await mkdir(dshHome, { recursive: true })
+
+    const lock = await lockCredentialsOut(dshHome, lockRoot)
+    expect(lock).toBeNull()
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('还原幂等：重复调用不抛错，也不产生副作用', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const lockRoot = path.join(root, 'credentials-lock')
+    const credentialsPath = path.join(dshHome, '.credentials.yaml')
+    await mkdir(dshHome, { recursive: true })
+    await writeFile(credentialsPath, 'A: 1\n', 'utf8')
+
+    const lock = await lockCredentialsOut(dshHome, lockRoot)
+    await restoreCredentialsLock(lock!)
+    await expect(restoreCredentialsLock(lock!)).resolves.toBeUndefined()
+    expect(await readFile(credentialsPath, 'utf8')).toBe('A: 1\n')
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('锁定前清理上次崩溃残留的同名锁文件', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const lockRoot = path.join(root, 'credentials-lock')
+    const credentialsPath = path.join(dshHome, '.credentials.yaml')
+    await mkdir(dshHome, { recursive: true })
+    await writeFile(credentialsPath, 'V: fresh\n', 'utf8')
+
+    // 先模拟一次完整锁定+还原，再造出「原位与锁文件同时存在」的崩溃残留
+    const first = await lockCredentialsOut(dshHome, lockRoot)
+    await restoreCredentialsLock(first!)
+    await writeFile(first!.locked, 'stale\n', 'utf8') // 残留的旧锁内容
+
+    // 再次锁定：应清理旧锁、把当前凭据移入
+    const lock2 = await lockCredentialsOut(dshHome, lockRoot)
+    expect(lock2).not.toBeNull()
+    expect(await readFile(lock2!.locked, 'utf8')).toBe('V: fresh\n')
+    expect(existsSync(credentialsPath)).toBe(false)
+
+    await restoreCredentialsLock(lock2!)
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('agent 在锁定期重建了同名文件时，还原以原文件为准', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const lockRoot = path.join(root, 'credentials-lock')
+    const credentialsPath = path.join(dshHome, '.credentials.yaml')
+    await mkdir(dshHome, { recursive: true })
+    await writeFile(credentialsPath, 'original-secret\n', 'utf8')
+
+    const lock = await lockCredentialsOut(dshHome, lockRoot)
+    // agent 侧重建同名文件
+    await writeFile(credentialsPath, 'agent-tampered\n', 'utf8')
+
+    await restoreCredentialsLock(lock!)
+    expect(await readFile(credentialsPath, 'utf8')).toBe('original-secret\n')
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('启动自愈：崩溃残留的锁文件被还原回 dshHome', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const lockRoot = path.join(root, 'credentials-lock')
+    const credentialsPath = path.join(dshHome, '.credentials.yaml')
+    await mkdir(dshHome, { recursive: true })
+    await writeFile(credentialsPath, 'survived\n', 'utf8')
+    const lock = await lockCredentialsOut(dshHome, lockRoot)
+
+    // 模拟崩溃：不调 restore，直接重启触发自愈
+    await healCredentialsLock(dshHome, lockRoot)
+    expect(await readFile(credentialsPath, 'utf8')).toBe('survived\n')
+    expect(existsSync(lock!.locked)).toBe(false)
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('启动自愈无副作用：凭据已在原位则不碰锁文件', async () => {
+    const root = await tempDir()
+    const dshHome = path.join(root, 'dsh-home')
+    const lockRoot = path.join(root, 'credentials-lock')
+    const credentialsPath = path.join(dshHome, '.credentials.yaml')
+    await mkdir(dshHome, { recursive: true })
+    await writeFile(credentialsPath, 'in-place\n', 'utf8')
+
+    // 伪造一个残留锁文件，但原位已有凭据 → 不还原，原位优先
+    const first = await lockCredentialsOut(dshHome, lockRoot)
+    expect(first).not.toBeNull()
+    const locked = first!.locked
+    await writeFile(locked, 'stale\n', 'utf8')
+    await writeFile(credentialsPath, 'in-place\n', 'utf8')
+
+    await healCredentialsLock(dshHome, lockRoot)
+    expect(await readFile(credentialsPath, 'utf8')).toBe('in-place\n')
+    expect(await readFile(locked, 'utf8')).toBe('stale\n')
+
+    await rm(root, { recursive: true, force: true })
+  })
+})

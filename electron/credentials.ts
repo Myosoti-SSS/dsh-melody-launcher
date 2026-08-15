@@ -61,6 +61,17 @@ export async function getDeepSeekCredentialStatus(dshHome: string): Promise<Cred
   return { configured: Boolean(values[DEEPSEEK_CREDENTIAL]) }
 }
 
+/**
+ * 内部读取 DeepSeek API Key，仅供主进程 AI 安装时注入 ACP 子进程环境。
+ * 文件缺失返回 null。返回值绝不打日志。
+ */
+export async function readDeepSeekApiKey(dshHome: string): Promise<string | null> {
+  const source = await readCredentialSource(dshHome)
+  if (source === null) return null
+  const { values } = parseCredentials(source)
+  return values[DEEPSEEK_CREDENTIAL] ?? null
+}
+
 export async function setDeepSeekApiKey(dshHome: string, apiKey: string): Promise<CredentialStatus> {
   const normalized = apiKey.trim()
   if (!normalized) throw new Error('API Key 不能为空。')

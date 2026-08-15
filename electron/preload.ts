@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, IPC_EVENTS } from '../src/constants'
-import type { AppSettings, InstallProgress, LauncherApi, RuntimeOutput, RuntimeState, WindowMode } from '../src/types'
+import type {
+  AiInstallEvent,
+  AppSettings,
+  InstallProgress,
+  LauncherApi,
+  RuntimeOutput,
+  RuntimeState,
+  WindowMode,
+} from '../src/types'
 
 /**
  * 渲染层与主进程之间唯一的桥。
@@ -40,9 +48,16 @@ const api: LauncherApi = {
   openPath: path => ipcRenderer.invoke(IPC.openPath, path),
   setWindowMode: (mode: WindowMode) => ipcRenderer.invoke(IPC.windowSetMode, mode),
   closeWindow: () => ipcRenderer.invoke(IPC.windowClose),
+  aiInstall: input => ipcRenderer.invoke(IPC.aiInstall, input),
+  aiApprove: (requestId, allow) => ipcRenderer.invoke(IPC.aiApprove, requestId, allow),
+  aiCancel: () => ipcRenderer.invoke(IPC.aiCancel),
+  aiRollback: () => ipcRenderer.invoke(IPC.aiRollback),
+  aiStatus: () => ipcRenderer.invoke(IPC.aiStatus),
+  aiHasSnapshot: () => ipcRenderer.invoke(IPC.aiHasSnapshot),
   onRuntimeOutput: listener => subscribe<RuntimeOutput>(IPC_EVENTS.runtimeOutput, listener),
   onRuntimeState: listener => subscribe<RuntimeState>(IPC_EVENTS.runtimeStateChanged, listener),
   onInstallProgress: listener => subscribe<InstallProgress>(IPC_EVENTS.installProgress, listener),
+  onAiInstallEvent: listener => subscribe<AiInstallEvent>(IPC_EVENTS.aiInstallEvent, listener),
 }
 
 contextBridge.exposeInMainWorld('launcher', api)

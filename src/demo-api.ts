@@ -1,4 +1,6 @@
 import type {
+  AiInstallEvent,
+  AiInstallStatus,
   AppSettings,
   CredentialStatus,
   DshInstallationStatus,
@@ -113,6 +115,19 @@ let demoDshInstallation: DshInstallationStatus = { installed: false, version: nu
 const outputListeners = new Set<(output: RuntimeOutput) => void>()
 const stateListeners = new Set<(state: RuntimeState) => void>()
 const installProgressListeners = new Set<(progress: InstallProgress) => void>()
+const aiEventListeners = new Set<(event: AiInstallEvent) => void>()
+let demoAiStatus: AiInstallStatus = { phase: 'idle', repository: null, startedAt: null, sessionId: null, message: '' }
+let demoAiResolve: ((allow: boolean) => void) | null = null
+let demoAiCancelled = false
+
+function emitAiEvent(event: AiInstallEvent): void {
+  aiEventListeners.forEach(listener => listener(event))
+}
+
+function setDemoAiStatus(partial: Partial<AiInstallStatus>): void {
+  demoAiStatus = { ...demoAiStatus, ...partial }
+  emitAiEvent({ kind: 'status', status: demoAiStatus })
+}
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise(resolve => window.setTimeout(resolve, milliseconds))
@@ -333,5 +348,62 @@ export const demoApi: LauncherApi = {
   onInstallProgress: listener => {
     installProgressListeners.add(listener)
     return () => installProgressListeners.delete(listener)
+  },
+  aiInstall: async input => {
+    demoAiCancelled = false
+    setDemoAiStatus({ phase: 'preparing', repository: input.repository, startedAt: new Date().toISOString(), sessionId: null, message: '正在准备 ACP 运行时…' })
+    emitAiEvent({ kind: 'log', text: `开始研究 ${input.repository}（分支 ${input.defaultBranch}）` })
+    await wait(500)
+    emitAiEvent({ kind: 'snapshot', snapshotId: `demo-${Date.now()}` })
+    emitAiEvent({ kind: 'log', text: '已为当前 profile 生成配置快照。' })
+    setDemoAiStatus({ phase: 'running', sessionId: 'demo-session', message: 'AI 正在研究仓库并尝试安装…' })
+    await wait(700)
+    emitAiEvent({ kind: 'log', text: '读取仓库结构，确认组件形态…' })
+    emitAiEvent({ kind: 'auto-approved', toolName: 'read_file', reason: '只读操作，自动放行' })
+    await wait(400)
+    emitAiEvent({ kind: 'log', text: '发现组件位于 `packages/web-app`，需要写入 profile 配置。' })
+    emitAiEvent({ kind: 'approval', request: { id: 'demo-1', toolName: 'bash', toolKind: 'bash', args: 'dsh plugin add @demo/dsh-web-app --profile web', reason: '写文件或运行安装命令，需要确认' } })
+    // 挂起等待 aiApprove 裁决；取消由 aiCancel 兜底（resolve(false) 并置 cancelled）。
+    const allowed = await new Promise<boolean>(resolve => {
+      demoAiResolve = resolve
+    })
+    if (demoAiCancelled) return { ok: false, message: '用户已取消' }
+    emitAiEvent({ kind: 'log', text: allowed ? '已批准安装命令。' : '已拒绝安装命令。' })
+    if (allowed) {
+      setDemoAiStatus({ phase: 'done', message: 'AI 已完成研究并安装组件。' })
+      emitAiEvent({ kind: 'log', text: '组件已写入 profile，安装完成。' })
+      emitAiEvent({ kind: 'done', message: 'AI 已完成研究并安装组件。请检查改动；不满意可还原快照。' })
+      return { ok: true, message: 'AI 已完成研究并安装组件。' }
+    }
+    setDemoAiStatus({ phase: 'done', message: 'AI 已完成研究，但安装命令被拒绝。' })
+    emitAiEvent({ kind: 'done', message: '安装命令被拒绝，任务结束。快照仍保留，可还原。' })
+    return { ok: false, message: '安装命令被拒绝。' }
+  },
+  aiApprove: async (requestId, allow) => {
+    if (requestId !== 'demo-1' || !demoAiResolve) return false
+    demoAiResolve(Boolean(allow))
+    demoAiResolve = null
+    return true
+  },
+  aiCancel: async () => {
+    demoAiCancelled = true
+    if (demoAiResolve) {
+      demoAiResolve(false)
+      demoAiResolve = null
+    }
+    setDemoAiStatus({ phase: 'cancelled', message: '用户已取消' })
+    emitAiEvent({ kind: 'cancelled', message: '用户已取消任务。快照仍保留，可还原。' })
+  },
+  aiRollback: async () => {
+    emitAiEvent({ kind: 'log', text: '正在还原快照…' })
+    await wait(400)
+    emitAiEvent({ kind: 'log', text: '配置已还原到任务前状态。' })
+    return { restored: 2, profileName: demoSettings.profileName }
+  },
+  aiStatus: async () => demoAiStatus,
+  aiHasSnapshot: async () => demoAiStatus.phase !== 'idle',
+  onAiInstallEvent: listener => {
+    aiEventListeners.add(listener)
+    return () => aiEventListeners.delete(listener)
   },
 }
