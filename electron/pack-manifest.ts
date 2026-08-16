@@ -48,6 +48,19 @@ export function packProfileName(name: string): string {
   return derived
 }
 
+/**
+ * 校验整合包名称能派生「有意义的」包标识：纯中文/纯符号名会退化成 `pack------`，
+ * 既难以辨认又易撞名，直接拒绝并提示用户补字母或数字。
+ * 返回派生出的包标识（含 pack- 前缀），供调用方直接使用。
+ */
+export function assertMeaningfulPackName(name: string): string {
+  const packId = packProfileName(name)
+  if (!/[a-z0-9]/.test(packId.slice(PACK_PROFILE_PREFIX.length))) {
+    throw new Error('整合包名称需包含字母或数字，否则无法生成包标识。')
+  }
+  return packId
+}
+
 function parsePackPlugin(item: unknown, index: number): PackPluginEntry {
   if (typeof item !== 'object' || item === null || Array.isArray(item)) {
     throw new Error(`plugins[${index}] 必须是映射（对象）。`)

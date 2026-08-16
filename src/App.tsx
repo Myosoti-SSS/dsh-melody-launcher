@@ -281,7 +281,7 @@ function LauncherShell() {
           hasSnapshot={packInstall.hasSnapshot}
           packSnapshotsAvailable={store.packSnapshotsAvailable}
           busy={store.busy !== null || packInstall.busy !== null}
-          onConfirmImport={items => void packInstall.confirmImport(packInstall.importPath ?? '', items)}
+          onConfirmImport={(items, name) => void packInstall.confirmImport(packInstall.importPath ?? '', items, name)}
           onRollback={() => void packInstall.rollback()}
           onActivate={packId => {
             void (async () => {

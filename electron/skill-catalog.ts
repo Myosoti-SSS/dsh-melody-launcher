@@ -24,7 +24,8 @@ function safeArchivePath(value: string): string | null {
   return normalized
 }
 
-function likelyFlatSkill(filePath: string): boolean {
+/** 判定一个 .md 文件是否为「flat skill 候选」。导出供 raw 包扫描（pack-scan.ts）复用。 */
+export function likelyFlatSkill(filePath: string): boolean {
   if (!filePath.toLowerCase().endsWith('.md') || /(?:^|\/)skill\.md$/i.test(filePath)) return false
   const lower = filePath.toLowerCase()
   if (/(?:^|\/)(?:readme|license|contributing|changelog)(?:\.[^/]*)?\.md$/.test(lower)) return false
@@ -33,7 +34,8 @@ function likelyFlatSkill(filePath: string): boolean {
     || (segments.length <= 3 && ['skills', '.dsh', '.agents'].includes(segments[0]))
 }
 
-function preferTarget(left: SkillInstallTarget, right: SkillInstallTarget): SkillInstallTarget {
+/** 同名 skill 候选去重：路径浅优先，其次 bundle 优先于 flat。导出供 raw 包扫描复用。 */
+export function preferTarget(left: SkillInstallTarget, right: SkillInstallTarget): SkillInstallTarget {
   const leftDepth = left.sourcePath.split('/').length
   const rightDepth = right.sourcePath.split('/').length
   if (leftDepth !== rightDepth) return leftDepth < rightDepth ? left : right

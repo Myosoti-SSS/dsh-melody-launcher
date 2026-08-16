@@ -32,8 +32,9 @@ const PLUGIN_BODIES_PREFIX = 'plugin-bodies/'
 /**
  * zip 条目路径安全校验：归一化 + 拒绝 `..` / 绝对路径 / 反斜杠 / 空段。
  * 与 skill-catalog 的 safeArchivePath 同源，额外拒绝了空段与 `.` 段。
+ * 导出供 raw 扫描（pack-scan.ts）复用。
  */
-function safeArchivePath(value: string): string | null {
+export function safeArchivePath(value: string): string | null {
   if (value.includes('\\')) return null
   const segments = value.split('/')
   if (segments.some(segment => segment === '' || segment === '.' || segment === '..')) return null
@@ -42,7 +43,8 @@ function safeArchivePath(value: string): string | null {
   return normalized
 }
 
-function assertInside(root: string, target: string): void {
+/** 断言 target 位于 root 之下（防止解出路径越界）。导出供 raw 扫描复用。 */
+export function assertInside(root: string, target: string): void {
   const resolvedRoot = path.resolve(root)
   const resolvedTarget = path.resolve(target)
   if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
@@ -55,9 +57,27 @@ interface OpenPackZip {
   stripRoot: string | null
 }
 
+/**
+ * 检测整体套一层顶层目录：全部条目共享同一首段且它不是清单/plugin-bodies 时视为包裹层。
+ * 仅统计非目录条目；返回包裹层首段，否则 null。
+ */
+function computeStripRoot(entries: AdmZip.IZipEntry[]): string | null {
+  const firstSegments = new Set<string>()
+  for (const entry of entries) {
+    if (entry.isDirectory) continue
+    const safe = safeArchivePath(entry.entryName)
+    if (!safe) continue
+    firstSegments.add(safe.split('/')[0])
+  }
+  if (firstSegments.size !== 1) return null
+  const only = [...firstSegments][0]
+  if (only !== PACK_MANIFEST_FILENAME && !only.startsWith(PLUGIN_BODIES_PREFIX)) return only
+  return null
+}
+
 function openArchive(buffer: Uint8Array, limits: PackZipLimits): OpenPackZip {
   if (buffer.byteLength > limits.maxArchiveBytes) throw new Error('整合包压缩包过大。')
-  const archive = new AdmZip(Buffer.from(buffer))
+  const archive = new AdmZip(Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer))
   const entries = archive.getEntries()
   if (entries.length === 0) throw new Error('整合包压缩包为空。')
   if (entries.length > limits.maxFiles) throw new Error('整合包文件数量超过安全限制。')
@@ -70,20 +90,31 @@ function openArchive(buffer: Uint8Array, limits: PackZipLimits): OpenPackZip {
   }
   if (unpackedBytes > limits.maxUnpackedBytes) throw new Error('整合包解压体积超过安全限制。')
 
-  // 检测整体套一层顶层目录：全部条目共享同一首段且它不是清单/plugin-bodies 时视为包裹层。
-  const firstSegments = new Set<string>()
+  return { entries, stripRoot: computeStripRoot(entries) }
+}
+
+/**
+ * 宽松探测：zip 内是否存在 dsh-pack.yaml（尊重单顶层目录包裹）。
+ * 不做体积/文件数/解压体积限额——那是严格 inspectPackZip 与 raw 扫描各自的责任；
+ * 这里只负责「判定是否为标准格式包」并返回清单文本。全部条目仍过路径安全校验。
+ */
+export function findManifestInArchive(buffer: Uint8Array): string | null {
+  const archive = new AdmZip(Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer))
+  const entries = archive.getEntries()
+  if (entries.length === 0) return null
+  for (const entry of entries) {
+    if (entry.isDirectory) continue
+    if (!safeArchivePath(entry.entryName)) throw new Error('整合包包含不安全路径。')
+  }
+  const stripRoot = computeStripRoot(entries)
   for (const entry of entries) {
     if (entry.isDirectory) continue
     const safe = safeArchivePath(entry.entryName)
     if (!safe) continue
-    firstSegments.add(safe.split('/')[0])
+    const rel = relForEntry(safe, stripRoot)
+    if (rel === PACK_MANIFEST_FILENAME) return entry.getData().toString('utf8')
   }
-  let stripRoot: string | null = null
-  if (firstSegments.size === 1) {
-    const only = [...firstSegments][0]
-    if (only !== PACK_MANIFEST_FILENAME && !only.startsWith(PLUGIN_BODIES_PREFIX)) stripRoot = only
-  }
-  return { entries, stripRoot }
+  return null
 }
 
 function relForEntry(safe: string, stripRoot: string | null): string {

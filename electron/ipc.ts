@@ -8,8 +8,8 @@ import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } f
 import { searchCatalogRepositories, type DiscoverySort } from './discovery'
 import type { Installer } from './installer'
 import type { AiInstaller } from './ai-install'
-import { packProfileName } from './pack-manifest'
-import { DEFAULT_PACK_ZIP_LIMITS } from './pack-zip'
+import { assertMeaningfulPackName } from './pack-manifest'
+import { MAX_RAW_ARCHIVE_BYTES } from './pack-scan'
 import type { PackManager } from './pack'
 import {
   isSafePackageName,
@@ -160,7 +160,11 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.aiCancel, () => aiInstaller.cancel())
   ipcMain.handle(IPC.aiRollback, () => aiInstaller.rollback())
 
-  /** 校验文件存在、为绝对路径，且文件体积不超过整合包上限（未读入前的第一道闸门）。 */
+  /**
+   * 校验文件存在、为绝对路径，且文件体积不超过整合包上限（未读入前的第一道闸门）。
+   * 门禁放宽到 raw 扫描上限（4 GiB）：真实整合包远超标准包 64MB 限制；
+   * 标准包内部仍由 inspectPackZip 的严格限额保证。
+   */
   async function assertPackFilePath(target: unknown): Promise<void> {
     if (typeof target !== 'string' || !path.isAbsolute(target)) throw new Error('路径无效。')
     let stats
@@ -170,7 +174,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       throw new Error('文件不存在。')
     }
     if (!stats.isFile()) throw new Error('不是文件。')
-    if (stats.size > DEFAULT_PACK_ZIP_LIMITS.maxArchiveBytes) throw new Error('整合包压缩包过大。')
+    if (stats.size > MAX_RAW_ARCHIVE_BYTES) throw new Error('整合包压缩包过大。')
   }
 
   ipcMain.handle(IPC.packsList, () => packManager.listPacks())
@@ -178,7 +182,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.packsCreate, async (_event, request: PackCreateRequest) => {
     if (!request || typeof request !== 'object') throw new Error('请求格式无效。')
     if (typeof request.name !== 'string') throw new Error('整合包名称无效。')
-    packProfileName(request.name) // 非法名称会抛出中文错误
+    assertMeaningfulPackName(request.name) // 空名/纯中文等退化成无意义标识的名称会抛出中文错误
     if (request.description !== undefined && typeof request.description !== 'string') throw new Error('整合包描述无效。')
     if (!Array.isArray(request.packageNames) || request.packageNames.some(name => !isSafePackageName(name))) {
       throw new Error('插件列表无效。')
@@ -191,12 +195,18 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     return packManager.analyzeImport(target)
   })
 
-  ipcMain.handle(IPC.packsImport, async (_event, target: string, items?: string[]) => {
+  ipcMain.handle(IPC.packsImport, async (_event, target: string, items?: string[], name?: unknown) => {
     await assertPackFilePath(target)
-    if (items !== undefined && (!Array.isArray(items) || items.some(name => !isSafePackageName(name)))) {
+    if (items !== undefined && (!Array.isArray(items) || items.some(item => !isSafePackageName(item)))) {
       throw new Error('插件列表无效。')
     }
-    return packManager.importPack(target, items)
+    let nameOverride: string | undefined
+    if (name !== undefined && name !== null) {
+      if (typeof name !== 'string' || !name.trim()) throw new Error('整合包名称无效。')
+      assertMeaningfulPackName(name) // 空名/纯中文等退化成无意义标识的名称会抛出中文错误
+      nameOverride = name.trim()
+    }
+    return packManager.importPack(target, items, nameOverride === undefined ? undefined : { name: nameOverride })
   })
 
   ipcMain.handle(IPC.packsExport, async (_event, packId: string) => {

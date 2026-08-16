@@ -188,8 +188,8 @@ export function usePackInstall(onSettled: () => void, showToast: (toast: ToastSt
     }
   }, [adoptError, api, appendLog, resetTask])
 
-  /** 预览确认后真正执行导入。 */
-  const confirmImport = useCallback(async (path: string, selectedItems: string[]): Promise<boolean> => {
+  /** 预览确认后真正执行导入；name 仅在 raw 扫描导入（可编辑包名）时传入。 */
+  const confirmImport = useCallback(async (path: string, selectedItems: string[], name?: string): Promise<boolean> => {
     nextLogId.current = 0
     settledRef.current = false
     setEvents([])
@@ -200,7 +200,7 @@ export function usePackInstall(onSettled: () => void, showToast: (toast: ToastSt
     setPhase('installing')
     appendLog('status', `开始导入整合包（${selectedItems.length} 个组件）…`)
     try {
-      const next = await api.importPack(path, selectedItems)
+      const next = await api.importPack(path, selectedItems, name && name.trim() ? { name: name.trim() } : undefined)
       adoptResult(next)
       return true
     } catch (err) {

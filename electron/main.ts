@@ -22,6 +22,7 @@ import { createPackManager, type InstallInstaller, type PackInstallTarget, type 
 import { recordPluginInstall } from './plugin-receipts'
 import { withExecutableDirectoryOnPath } from './process'
 import { readProfile, togglePlugin } from './profile'
+import { installSkillFromDirectory } from './skill-install'
 import { createRendererEvents } from './renderer-events'
 import { createRuntimeController, type RuntimeController } from './runtime'
 import { createSettingsStore, defaultSettings, type SettingsStore } from './settings'
@@ -189,6 +190,8 @@ function createServices(): Services {
     remove: (packageName, profileName) => installer.remove(packageName, profileName),
     readProfile: (dshHome, profileName) => readProfile(dshHome, profileName),
     togglePlugin: (dshHome, profileName, packageName, enabled) => togglePlugin(dshHome, profileName, packageName, enabled),
+    // raw 整合包导入的技能：从本地 staging 目录全局安装（bundle 目录或 flat 单文件）。
+    installSkillLocal: (dshHome, skill) => installSkillFromDirectory(dshHome, skill.name, skill.format, skill.sourceDir),
   }
 
   const packManager = createPackManager({

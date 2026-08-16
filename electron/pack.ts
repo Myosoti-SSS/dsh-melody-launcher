@@ -6,7 +6,7 @@
 // 卸载 / profile 读取全部委托给注入的 installer 适配器（main.ts 组装真实
 // Installer，测试注入 stub）。
 
-import { mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { DEFAULT_PROFILE_NAME } from '../src/constants'
 import type {
@@ -14,16 +14,19 @@ import type {
   PackAnalysis,
   PackAnalysisItem,
   PackCreateRequest,
+  PackImportOptions,
   PackInstallResult,
   PackInstalledPlugin,
+  PackInstalledSkill,
   PackPluginEntry,
   PackProgressEvent,
   PackStatus,
   PluginInstallTarget,
   ProfileState,
 } from '../src/types'
-import { buildManifestFromReceipts, packProfileName } from './pack-manifest'
-import { extractPackBodies, inspectPackZip } from './pack-zip'
+import { assertMeaningfulPackName, buildManifestFromReceipts, packProfileName } from './pack-manifest'
+import { extractPackBodies, findManifestInArchive, inspectPackZip } from './pack-zip'
+import { cleanPackNameHint, extractRawPluginBodies, extractRawSkillSources, scanRawPackZip, type ExtractByteBudget } from './pack-scan'
 import { buildPackExport } from './pack-export'
 import {
   readPackRegistry,
@@ -48,6 +51,8 @@ export type PackInstallTarget = PluginInstallTarget & { repository?: string }
 /** pack 管理器依赖的最小 installer 面（main.ts 组装真实 Installer，测试注入 stub）。 */
 export interface InstallInstaller {
   installPluginTarget(target: PackInstallTarget): Promise<unknown>
+  /** raw 整合包导入的技能：从本地源目录/单文件全局安装到 dshHome/skills。 */
+  installSkillLocal(dshHome: string, skill: { name: string; format: 'bundle' | 'flat'; sourceDir: string }): Promise<unknown>
   remove(packageName: string, profileName?: string): Promise<unknown>
   readProfile(dshHome: string, profileName: string): Promise<ProfileState>
   togglePlugin(dshHome: string, profileName: string, packageName: string, enabled: boolean): Promise<ProfileState>
@@ -76,7 +81,7 @@ export interface PackManager {
   isBusy(): boolean
   createPack(request: PackCreateRequest): Promise<PackInstallResult>
   analyzeImport(filePath: string): Promise<PackAnalysis>
-  importPack(filePath: string, items?: string[]): Promise<PackInstallResult>
+  importPack(filePath: string, items?: string[], options?: PackImportOptions): Promise<PackInstallResult>
   exportPack(packId: string): Promise<{ zip: Uint8Array; fileName: string }>
   activatePack(packId: string): Promise<AppSettings>
   deactivatePack(): Promise<AppSettings>
@@ -269,7 +274,30 @@ export function createPackManager(options: PackManagerOptions): PackManager {
     },
 
     async analyzeImport(filePath) {
-      const buffer = new Uint8Array(await readFile(filePath))
+      const buffer = await readFile(filePath)
+      if (!findManifestInArchive(buffer)) {
+        // 非标准包：扫描包内的标准插件目录与技能，合成为我们格式的整合包。
+        const scan = scanRawPackZip(buffer)
+        const nameHint = cleanPackNameHint(path.basename(filePath)) ?? cleanPackNameHint(scan.topName ?? '') ?? ''
+        const items: PackAnalysisItem[] = []
+        for (const plugin of scan.plugins) {
+          items.push({ packageName: plugin.packageName, available: true, offline: true })
+        }
+        for (const skill of scan.skills) {
+          items.push({ packageName: skill.name, available: true, offline: true, kind: 'skill' })
+        }
+        for (const skippedItem of scan.skipped) {
+          items.push({ packageName: skippedItem.entryPrefix, available: false, offline: false, reason: skippedItem.reason })
+        }
+        return {
+          id: nameHint ? packProfileName(nameHint) : '',
+          name: nameHint,
+          description: `非标准整合包：扫描到 ${scan.plugins.length} 个插件、${scan.skills.length} 个技能。`,
+          version: '1.0.0',
+          source: 'raw',
+          items,
+        }
+      }
       const inspection = inspectPackZip(buffer)
       const manifest = inspection.manifest
       const packId = packProfileName(manifest.name)
@@ -305,13 +333,118 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       }
     },
 
-    async importPack(filePath, items) {
+    async importPack(filePath, items, importOptions) {
       const reason = guarded()
       if (reason) throw new Error(reason)
       beginTask()
       profileWasNew = true
+      let skillStaging: string | null = null
       try {
-        const buffer = new Uint8Array(await readFile(filePath))
+        // readFile 放在 try 内：文件被并发删除/移动时（通过 IPC stat 门禁后）若读失败，
+        // 也能走 catch → finally 复位 active，避免整合包子系统永久卡在「进行中」。
+        const buffer = await readFile(filePath)
+        if (!findManifestInArchive(buffer)) {
+          // ---- raw 分支：扫描非标准包内的插件与技能，离线安装，注册为我们格式的整合包。----
+          const scan = scanRawPackZip(buffer)
+          if (scan.plugins.length === 0 && scan.skills.length === 0) {
+            throw new Error('未在压缩包内发现可安装的插件或技能。')
+          }
+          const nameHint = cleanPackNameHint(path.basename(filePath)) ?? cleanPackNameHint(scan.topName ?? '') ?? ''
+          const packName = (importOptions?.name ?? '').trim() || nameHint
+          if (!packName) throw new Error('无法确定整合包名称，请在预览中手动命名。')
+          const packId = assertMeaningfulPackName(packName)
+
+          const existing = await readPackRegistry(options.registryPath)
+          if (existing.some(record => record.id === packId)) throw new Error('整合包已存在。')
+
+          const dshHome = await getDshHome()
+          // items 缺省 = 全装；插件名与技能名各自独立过滤（理论上可能撞名）。
+          const wantedPlugins = scan.plugins.filter(plugin => !items || items.includes(plugin.packageName))
+          const wantedSkills = scan.skills.filter(skill => !items || items.includes(skill.name))
+
+          await mkdir(path.join(dshHome, 'profiles', packId), { recursive: true })
+          options.emitEvent({ kind: 'status', message: `正在扫描并导入非标准整合包「${packName}」…` })
+          snapshot = await createProfileSnapshot(dshHome, packId, options.snapshotRoot)
+          options.emitEvent({ kind: 'snapshot' })
+
+          const installables: InstallableItem[] = []
+
+          // 插件与技能共用同一解压字节预算：2 GiB 上限按一次导入的累计解出字节封顶，
+          // 防止被拆成多个候选各自「达标」而整体绕过（zip-bomb）。
+          const extractBudget: ExtractByteBudget = { extracted: 0 }
+
+          // 插件本体解到 pack profile 持久目录（file: 引用不悬空，对齐标准离线导入）。
+          if (wantedPlugins.length > 0) {
+            const bodiesDir = packBodiesDir(dshHome, packId)
+            await rm(bodiesDir, { recursive: true, force: true }).catch(() => undefined)
+            const bodies = await extractRawPluginBodies(buffer, wantedPlugins, bodiesDir, undefined, extractBudget)
+            for (const plugin of wantedPlugins) {
+              const bodyDir = bodies.get(plugin.packageName)
+              if (!bodyDir) {
+                installables.push({ packageName: plugin.packageName, offline: true, install: async () => { throw new Error('插件本体解出失败。') } })
+                continue
+              }
+              const target: PackInstallTarget = {
+                id: plugin.packageName,
+                packageName: plugin.packageName,
+                version: plugin.version ?? null,
+                source: 'local-directory',
+                profileName: packId,
+                platform: 'unknown',
+                subdirectory: null,
+                commit: '',
+                requiresBuild: false,
+                buildScripts: [],
+                nodeRange: null,
+                localDirectory: bodyDir,
+              }
+              installables.push({ packageName: plugin.packageName, offline: true, install: async () => { await options.installer.installPluginTarget(target) } })
+            }
+          }
+
+          // 技能解到 dshHome 内 staging（与 skills/ 同卷），逐项全局安装。
+          if (wantedSkills.length > 0) {
+            skillStaging = await mkdtemp(path.join(dshHome, '.pack-raw-staging-'))
+            const sources = await extractRawSkillSources(buffer, wantedSkills, skillStaging, undefined, extractBudget)
+            for (const skill of wantedSkills) {
+              const sourceDir = sources.get(skill.name)
+              if (!sourceDir) {
+                installables.push({ packageName: skill.name, offline: true, install: async () => { throw new Error('技能来源解出失败。') } })
+                continue
+              }
+              const skillInstall = { name: skill.name, format: skill.format, sourceDir }
+              installables.push({ packageName: skill.name, offline: true, install: async () => { await options.installer.installSkillLocal(dshHome, skillInstall) } })
+            }
+          }
+
+          const { installed, failures } = await runSerialInstall(installables, { emitEvent: options.emitEvent })
+          const result = buildInstallResult(packId, installed, failures)
+
+          const installedPluginNames = wantedPlugins
+            .filter(plugin => installed.includes(plugin.packageName))
+            .map(plugin => plugin.packageName)
+          const installedSkills: PackInstalledSkill[] = wantedSkills
+            .filter(skill => installed.includes(skill.name))
+            .map(skill => ({ name: skill.name, format: skill.format, enabled: true }))
+
+          const record: PackRecord = {
+            id: packId,
+            name: packName,
+            description: `非标准整合包：扫描到 ${scan.plugins.length} 个插件、${scan.skills.length} 个技能。`,
+            version: '1.0.0',
+            source: 'raw',
+            installedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            state: result.state,
+            plugins: toInstalledPlugins(installedPluginNames),
+            skills: installedSkills,
+          }
+          await upsertPackRecord(options.registryPath, record)
+          log('success', `非标准整合包「${packName}」已导入：${installed.length} 项。`)
+          options.emitEvent({ kind: 'done', result })
+          return result
+        }
+
         const inspection = inspectPackZip(buffer)
         const manifest = inspection.manifest
         const packId = packProfileName(manifest.name)
@@ -416,6 +549,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         options.emitEvent({ kind: 'error', message })
         throw error
       } finally {
+        if (skillStaging) await rm(skillStaging, { recursive: true, force: true }).catch(() => undefined)
         active = false
       }
     },
@@ -478,6 +612,22 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         // 尽力清理 profile 目录（含 .pack-bodies 本体；DSH CLI 可能正在占用部分文件）。
         await rm(path.join(dshHome, 'profiles', packId), { recursive: true, force: true }).catch(() => undefined)
         await removePackRecord(options.registryPath, packId)
+        // 技能全局安装：仅当没有其它包引用同名技能时才删除（DSH 技能不随 profile 隔离）。
+        const remaining = await readPackRegistry(options.registryPath)
+        const skillRoot = path.join(dshHome, 'skills')
+        for (const skill of record.skills ?? []) {
+          const stillReferenced = remaining.some(other => (other.skills ?? []).some(item => item.name === skill.name))
+          if (stillReferenced) continue
+          // 只删本次包实际安装的形态（bundle 目录 或 flat 单 .md）：同名异形技能可能是
+          // 用户自行从目录安装的独立技能，不能因为删包而无差别清除。
+          if (skill.format === 'flat') {
+            await rm(path.join(skillRoot, `${skill.name}.md`), { recursive: true, force: true }).catch(() => undefined)
+            await rm(path.join(skillRoot, '.disabled', `${skill.name}.md`), { recursive: true, force: true }).catch(() => undefined)
+          } else {
+            await rm(path.join(skillRoot, skill.name), { recursive: true, force: true }).catch(() => undefined)
+            await rm(path.join(skillRoot, '.disabled', skill.name), { recursive: true, force: true }).catch(() => undefined)
+          }
+        }
         void record
         return { removed: profile.plugins.length }
       } finally {

@@ -524,19 +524,20 @@ export const demoApi: LauncherApi = {
     return { id, installed: request.packageNames, failures: [], state: 'complete' }
   },
   analyzePackImport: async () => ({
-    id: 'pack-import-demo',
-    name: '导入的示例包',
-    description: '从 zip / manifest 解析出的整合包。',
-    version: '0.1.0',
-    source: 'zip',
+    // demo 无法读真实 zip，返回 raw 形态样例以演练扫描导入 UI（含可编辑包名）。
+    id: '',
+    name: '',
+    description: '非标准整合包：扫描到 2 个插件、1 个技能。',
+    version: '1.0.0',
+    source: 'raw',
     items: [
-      { packageName: '@deepseek-ai/dsh-web-app', available: true, offline: true },
-      { packageName: '@zhu1090093659/dsh-web-ui', available: true, offline: false },
-      { packageName: '@liustack/modlens', available: false, offline: false, reason: '插件本体不在包内且当前离线' },
+      { packageName: 'dsh-anchored-standard', available: true, offline: true },
+      { packageName: 'dsh-router-standard', available: true, offline: true },
+      { packageName: 'git-workflow', available: true, offline: true, kind: 'skill' },
     ],
   }),
-  importPack: async (_path, items) => {
-    const installed = items?.length ? items : ['@deepseek-ai/dsh-web-app', '@zhu1090093659/dsh-web-ui']
+  importPack: async (_path, items, _options) => {
+    const installed = items?.length ? items : ['dsh-anchored-standard', 'dsh-router-standard', 'git-workflow']
     return { id: 'pack-import-demo', installed, failures: [], state: 'complete' }
   },
   exportPack: async packId => {

@@ -40,6 +40,7 @@ const SOURCE_LABEL: Record<PackStatus['source'], string> = {
   created: '自建',
   zip: '离线包',
   manifest: '清单包',
+  raw: '扫描导入',
 }
 
 const STATE_LABEL: Record<PackStatus['state'], string> = {

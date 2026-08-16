@@ -4,7 +4,7 @@ import path from 'node:path'
 import AdmZip from 'adm-zip'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { PackManifest } from '../src/types'
-import { buildPackZip, extractPackBodies, inspectPackZip } from '../electron/pack-zip'
+import { buildPackZip, extractPackBodies, findManifestInArchive, inspectPackZip } from '../electron/pack-zip'
 
 const temporaryRoots: string[] = []
 afterEach(async () => {
@@ -175,6 +175,33 @@ plugins:
       .toThrow('文件数量超过安全限制')
     expect(() => inspectPackZip(zip, { maxArchiveBytes: 1_000_000_000, maxFiles: 100_000, maxUnpackedBytes: 1 }))
       .toThrow('解压体积超过安全限制')
+  })
+})
+
+describe('findManifestInArchive', () => {
+  it('标准包返回清单文本', () => {
+    const text = findManifestInArchive(makeZip({ 'dsh-pack.yaml': manifestYaml }))
+    expect(text).toContain('name: Round Trip')
+  })
+
+  it('非标准包（无 dsh-pack.yaml）返回 null', () => {
+    expect(findManifestInArchive(makeZip({ 'README.md': '# hi', 'app/package.json': '{"name":"app"}' }))).toBeNull()
+  })
+
+  it('剥离整体包裹层后仍能找到清单', () => {
+    const text = findManifestInArchive(makeZip({
+      'pack-name/dsh-pack.yaml': manifestYaml,
+      'pack-name/plugin-bodies/alpha/package.json': '{"name":"alpha"}',
+    }))
+    expect(text).toContain('name: Round Trip')
+  })
+
+  it('宽松 probe 仍做全量路径校验：zip-slip 整体拒绝', () => {
+    const zip = rawZipWithEntries([
+      { name: 'dsh-pack.yaml', content: manifestYaml },
+      { name: '../evil.txt', content: 'x' },
+    ])
+    expect(() => findManifestInArchive(zip)).toThrow('不安全路径')
   })
 })
 

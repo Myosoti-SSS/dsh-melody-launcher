@@ -243,7 +243,7 @@ export interface AiInstallResult {
 
 // ===================== 整合包（Pack）管理 =====================
 
-export type PackSource = 'created' | 'zip' | 'manifest'
+export type PackSource = 'created' | 'zip' | 'manifest' | 'raw'
 
 export interface PackPluginEntry {
   packageName: string
@@ -267,6 +267,7 @@ export interface PackAnalysisItem {
   packageName: string
   available: boolean          // 能否安装
   offline: boolean            // 插件本体是否在 zip 内（离线装）
+  kind?: 'plugin' | 'skill'   // 缺省为插件；技能项的 packageName 即技能名
   reason?: string             // 不可装原因
 }
 
@@ -285,6 +286,14 @@ export interface PackInstalledPlugin {
   version?: string
 }
 
+/** raw 整合包导入的技能（全局安装，记入包以支持删包清理）。 */
+export interface PackInstalledSkill {
+  name: string
+  format: 'bundle' | 'flat'
+  enabled: boolean
+  description?: string
+}
+
 export interface PackStatus {
   id: string
   name: string
@@ -294,6 +303,7 @@ export interface PackStatus {
   enabled: boolean            // 当前 profile 是否为它
   state: 'complete' | 'partial' | 'failed'
   plugins: PackInstalledPlugin[]
+  skills?: PackInstalledSkill[]
   installedAt: string
   updatedAt: string
 }
@@ -302,6 +312,11 @@ export interface PackCreateRequest {
   name: string
   description?: string
   packageNames: string[]      // 从已安装插件勾选的包名
+}
+
+/** importPack 的可选覆盖项（raw 导入时的包名覆盖）。 */
+export interface PackImportOptions {
+  name?: string
 }
 
 export interface PackInstallResult {
@@ -356,7 +371,7 @@ export interface LauncherApi {
   listPacks(): Promise<PackStatus[]>
   createPack(request: PackCreateRequest): Promise<PackInstallResult>
   analyzePackImport(path: string): Promise<PackAnalysis>
-  importPack(path: string, items?: string[]): Promise<PackInstallResult>
+  importPack(path: string, items?: string[], options?: PackImportOptions): Promise<PackInstallResult>
   exportPack(packId: string): Promise<string | null>
   pickPackFile(): Promise<string | null>
   activatePack(packId: string): Promise<AppSettings>

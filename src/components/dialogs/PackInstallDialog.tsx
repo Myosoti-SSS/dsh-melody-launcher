@@ -31,7 +31,8 @@ export interface PackInstallDialogProps {
   packSnapshotsAvailable?: boolean
   /** 一次性的还原快照 / 启用整合包动作是否忙碌。 */
   busy: boolean
-  onConfirmImport: (selectedItems: string[]) => void
+  /** raw 扫描导入时由用户在预览中编辑包名（仅该来源需要）；name 缺省表示用派生名。 */
+  onConfirmImport: (selectedItems: string[], name?: string) => void
   onRollback: () => void
   onActivate: (packId: string) => void
   onClose: () => void
@@ -49,6 +50,7 @@ const SOURCE_LABEL: Record<string, string> = {
   created: '自建',
   zip: '离线包',
   manifest: '清单包',
+  raw: '扫描导入',
 }
 
 export function PackInstallDialog({
@@ -67,11 +69,14 @@ export function PackInstallDialog({
   onClose,
 }: PackInstallDialogProps) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  /** raw 扫描导入的可编辑包名（其它来源缺省用派生名）。 */
+  const [nameInput, setNameInput] = useState('')
   const logEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (phase === 'preview' && analysis) {
       setSelected(new Set(analysis.items.filter(item => item.available).map(item => item.packageName)))
+      setNameInput(analysis.name)
     }
   }, [phase, analysis])
 
@@ -97,8 +102,11 @@ export function PackInstallDialog({
     const items = analysis?.items
       .filter(item => item.available && selected.has(item.packageName))
       .map(item => item.packageName) ?? []
-    onConfirmImport(items)
+    onConfirmImport(items, analysis?.source === 'raw' ? nameInput.trim() : undefined)
   }
+
+  /** raw 来源要求一个能派生出有意义包标识的名字（含字母或数字）。 */
+  const rawNameValid = analysis?.source !== 'raw' || /[a-zA-Z0-9]/.test(nameInput)
 
   const title = phase === 'preview' || phase === 'idle'
     ? '导入整合包'
@@ -122,7 +130,13 @@ export function PackInstallDialog({
         </header>
         <div className="modal-content pack-install-content">
           {phase === 'preview' && analysis && (
-            <PreviewPanel analysis={analysis} selected={selected} onToggle={toggleItem} />
+            <PreviewPanel
+              analysis={analysis}
+              selected={selected}
+              nameInput={nameInput}
+              onNameChange={setNameInput}
+              onToggle={toggleItem}
+            />
           )}
           {(phase === 'installing' || (settled && events.length > 0)) && (
             <>
@@ -153,7 +167,13 @@ export function PackInstallDialog({
             <>
               <span className="pack-footer-note">共 {selected.size} 个组件将安装</span>
               <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-              <button type="button" className="primary-command" disabled={selected.size === 0} onClick={confirmImport}>
+              <button
+                type="button"
+                className="primary-command"
+                disabled={selected.size === 0 || !rawNameValid}
+                onClick={confirmImport}
+                title={rawNameValid ? undefined : '整合包名称需包含字母或数字'}
+              >
                 <Download size={16} />开始安装
               </button>
             </>
@@ -181,20 +201,36 @@ export function PackInstallDialog({
   )
 }
 
-function PreviewPanel({ analysis, selected, onToggle }: {
+function PreviewPanel({ analysis, selected, nameInput, onNameChange, onToggle }: {
   analysis: PackAnalysis
   selected: Set<string>
+  nameInput: string
+  onNameChange: (value: string) => void
   onToggle: (packageName: string) => void
 }) {
+  const isRaw = analysis.source === 'raw'
   return (
     <div className="pack-preview">
       <div className="pack-preview-head">
         <div>
-          <strong>{analysis.name}</strong>
+          <strong>{analysis.name || '（未命名整合包）'}</strong>
           <span>{analysis.description || '（无描述）'}</span>
         </div>
         <span className="pack-source-badge">{SOURCE_LABEL[analysis.source] ?? analysis.source}</span>
       </div>
+      {isRaw && (
+        <label className="pack-preview-name">
+          <span>整合包名称</span>
+          <input
+            type="text"
+            value={nameInput}
+            onChange={event => onNameChange(event.target.value)}
+            placeholder="给整合包起个名字（需包含字母或数字）"
+            autoFocus
+          />
+          <small>{/[a-zA-Z0-9]/.test(nameInput) ? '名称将作为包标识与 Profile 名的一部分。' : '名称需包含字母或数字，否则无法生成包标识。'}</small>
+        </label>
+      )}
       <p className="pack-preview-meta">
         版本 {analysis.version} · {analysis.items.length} 个组件，勾选要安装的项；离线本体从包内安装，其余走在线源。
       </p>
@@ -231,6 +267,7 @@ function PreviewRow({ item, checked, onToggle }: {
           {item.available
             ? <span className="pack-item-state ok">可安装</span>
             : <span className="pack-item-state bad">不可用</span>}
+          {item.kind === 'skill' && <span className="pack-item-kind">技能</span>}
           {item.offline && <span className="pack-item-offline">离线本体</span>}
         </span>
       </span>
@@ -330,6 +367,17 @@ const packDialogStyle = `
   flex: 0 0 auto; padding: 2px 9px; border: 1px solid #b9d7c7; border-radius: 999px;
   color: var(--accent); background: var(--accent-soft); font-size: 11px; font-weight: 650;
 }
+.pack-preview-name {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft);
+}
+.pack-preview-name > span { font-size: 11px; font-weight: 650; color: var(--muted); }
+.pack-preview-name input {
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: #fff; color: var(--text); font-size: 12px; outline: none;
+}
+.pack-preview-name input:focus { border-color: var(--accent); }
+.pack-preview-name small { color: var(--quiet); font-size: 10px; }
 .pack-item-list {
   display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 7px; overflow: hidden;
 }
@@ -349,6 +397,7 @@ const packDialogStyle = `
 .pack-item-state.ok { color: var(--accent); background: var(--accent-soft); }
 .pack-item-state.bad { color: var(--danger); background: var(--danger-soft); }
 .pack-item-offline { padding: 1px 7px; border-radius: 999px; color: var(--blue); background: var(--blue-soft); font-size: 10px; font-weight: 650; }
+.pack-item-kind { padding: 1px 7px; border-radius: 999px; color: var(--amber); background: var(--amber-soft); font-size: 10px; font-weight: 650; }
 .pack-item-reason { color: var(--muted); font-size: 10px; text-align: right; overflow-wrap: anywhere; }
 
 .pack-installing-note { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }

@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import AdmZip from 'adm-zip'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, PackManifest, PackPluginEntry, ProfileState } from '../src/types'
 import { createPackManager, type PackInstallTarget } from '../electron/pack'
@@ -55,10 +56,11 @@ const defaultProfile: ProfileState = {
 
 function makeInstallerStub() {
   const installPluginTarget = vi.fn(async (_target: PackInstallTarget): Promise<void> => {})
+  const installSkillLocal = vi.fn(async (_dshHome: string, _skill: { name: string; format: 'bundle' | 'flat'; sourceDir: string }): Promise<void> => {})
   const remove = vi.fn(async (_packageName: string, _profileName?: string): Promise<void> => {})
   const readProfile = vi.fn(async (): Promise<ProfileState> => defaultProfile)
   const togglePlugin = vi.fn(async (): Promise<ProfileState> => defaultProfile)
-  return { installPluginTarget, remove, readProfile, togglePlugin }
+  return { installPluginTarget, installSkillLocal, remove, readProfile, togglePlugin }
 }
 
 type InstallerStub = ReturnType<typeof makeInstallerStub>
@@ -135,6 +137,21 @@ async function writeZip(env: Awaited<ReturnType<typeof makeEnv>>, fileName: stri
   await writeFile(zipPath, Buffer.from(buildPackZip(manifest, bodies)))
   return zipPath
 }
+
+/** 非标准 raw zip：任意路径 → 内容的字节构建器（不经 buildPackZip，可无 dsh-pack.yaml）。 */
+function rawZip(entries: Record<string, string>): Uint8Array {
+  const zip = new AdmZip()
+  for (const [rel, content] of Object.entries(entries)) zip.addFile(rel, Buffer.from(content))
+  return zip.toBuffer()
+}
+
+async function writeRawZip(env: Awaited<ReturnType<typeof makeEnv>>, fileName: string, entries: Record<string, string>): Promise<string> {
+  const zipPath = path.join(env.root, fileName)
+  await writeFile(zipPath, Buffer.from(rawZip(entries)))
+  return zipPath
+}
+
+const SKILL_DOC = '---\nname: my-skill\ndescription: A skill.\n---\nBody.\n'
 
 function managedPlugin(packageName: string) {
   return {
@@ -354,6 +371,152 @@ describe('importPack', () => {
 
     await rm(bodyRoot, { recursive: true, force: true })
   })
+
+  it('raw 分支：插件与技能各自离线安装，注册表记录 source=raw 且带 skills', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const zipPath = await writeRawZip(env, 'raw-pack.zip', {
+      'plugin-alpha/package.json': JSON.stringify({ name: 'alpha', version: '1.2.3' }),
+      'plugin-beta/package.json': JSON.stringify({ name: 'beta' }),
+      'skills/my-skill/SKILL.md': SKILL_DOC,
+    })
+
+    const result = await manager.importPack(zipPath)
+    expect(result.installed).toEqual(['alpha', 'beta', 'my-skill'])
+    expect(result.failures).toEqual([])
+    expect(result.state).toBe('complete')
+
+    // 插件 → local-directory target，本体解到 pack profile 持久目录。
+    const target = stub.installPluginTarget.mock.calls[0][0] as PackInstallTarget
+    expect(target.source).toBe('local-directory')
+    expect(target.profileName).toBe('pack-raw-pack')
+    expect(target.localDirectory).toBe(path.join(env.dshHome, 'profiles', 'pack-raw-pack', '.pack-bodies', 'alpha'))
+    expect(stub.installPluginTarget).toHaveBeenCalledTimes(2)
+
+    // 技能 → installSkillLocal 全局安装。
+    expect(stub.installSkillLocal).toHaveBeenCalledTimes(1)
+    expect(stub.installSkillLocal).toHaveBeenCalledWith(
+      env.dshHome,
+      expect.objectContaining({ name: 'my-skill', format: 'bundle' }),
+    )
+
+    const records = await readPackRegistry(env.registryPath)
+    expect(records).toHaveLength(1)
+    expect(records[0].source).toBe('raw')
+    expect(records[0].plugins).toEqual([
+      { packageName: 'alpha', enabled: true },
+      { packageName: 'beta', enabled: true },
+    ])
+    expect(records[0].skills).toEqual([{ name: 'my-skill', format: 'bundle', enabled: true }])
+  })
+
+  it('raw 分支：items 只装选中的插件/技能', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const zipPath = await writeRawZip(env, 'raw-select.zip', {
+      'plugin-alpha/package.json': JSON.stringify({ name: 'alpha' }),
+      'plugin-beta/package.json': JSON.stringify({ name: 'beta' }),
+    })
+
+    const result = await manager.importPack(zipPath, ['beta'])
+    expect(result.installed).toEqual(['beta'])
+    expect(stub.installPluginTarget).toHaveBeenCalledTimes(1)
+    const target = stub.installPluginTarget.mock.calls[0][0] as PackInstallTarget
+    expect(target.packageName).toBe('beta')
+
+    const records = await readPackRegistry(env.registryPath)
+    expect(records[0].plugins).toEqual([{ packageName: 'beta', enabled: true }])
+  })
+
+  it('raw 分支：options.name 覆盖包名（packId 按覆盖名派生）', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const zipPath = await writeRawZip(env, '乱码整合包.zip', {
+      'plugin-alpha/package.json': JSON.stringify({ name: 'alpha' }),
+    })
+
+    const result = await manager.importPack(zipPath, undefined, { name: 'My Pack' })
+    expect(result.installed).toEqual(['alpha'])
+    const records = await readPackRegistry(env.registryPath)
+    expect(records[0].id).toBe('pack-my-pack')
+    expect(records[0].name).toBe('My Pack')
+    const target = stub.installPluginTarget.mock.calls[0][0] as PackInstallTarget
+    expect(target.profileName).toBe('pack-my-pack')
+  })
+
+  it('raw 分支：纯中文名无法派生有意义的包标识 → 拒绝', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const zipPath = await writeRawZip(env, '乱码整合包.zip', {
+      'plugin-alpha/package.json': JSON.stringify({ name: 'alpha' }),
+    })
+
+    await expect(manager.importPack(zipPath, undefined, { name: '我的整合包' })).rejects.toThrow('需包含字母或数字')
+    expect(stub.installPluginTarget).not.toHaveBeenCalled()
+  })
+
+  it('raw 分支：无可安装项抛错', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const zipPath = await writeRawZip(env, 'empty.zip', {
+      'readme.txt': 'just a file',
+      'locales/en.pak': 'binary',
+    })
+    await expect(manager.importPack(zipPath)).rejects.toThrow('未在压缩包内发现可安装的插件或技能')
+  })
+
+  it('raw 分支：flat 技能安装为单 .md', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const zipPath = await writeRawZip(env, 'raw-flat.zip', {
+      'skills/quick-ref.md': '---\nname: quick-ref\ndescription: Quick ref.\n---\nBody.\n',
+    })
+
+    const result = await manager.importPack(zipPath)
+    expect(result.installed).toEqual(['quick-ref'])
+    expect(stub.installSkillLocal).toHaveBeenCalledWith(
+      env.dshHome,
+      expect.objectContaining({ name: 'quick-ref', format: 'flat' }),
+    )
+    const records = await readPackRegistry(env.registryPath)
+    expect(records[0].skills).toEqual([{ name: 'quick-ref', format: 'flat', enabled: true }])
+  })
+
+  it('读文件失败（文件被并发删除）后互斥复位，后续导入可用', async () => {
+    // 安全回归：beginTask 之后、try 之外的 readFile 若抛错会卡死 active，导致整合包子系统
+    // 永久「进行中」。readFile 必须在 try 内，失败也要复位互斥。
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const ghostPath = path.join(env.root, 'ghost.zip')
+    await expect(manager.importPack(ghostPath)).rejects.toThrow()
+
+    // 互斥已复位：后续正常导入成功，不再报「整合包操作进行中」。
+    const manifest: PackManifest = { name: 'Ok', description: 'o', version: '1.0.0', plugins: [] }
+    const zipPath = await writeZip(env, 'ok.zip', manifest, new Map())
+    const result = await manager.importPack(zipPath)
+    expect(result.state).toBe('complete')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -410,6 +573,43 @@ describe('analyzeImport', () => {
       offline: false,
       reason: '缺少来源仓库，无法联网安装',
     }])
+  })
+
+  it('无清单 zip 回退 raw：source=raw，name 取文件名清洗值，技能项带 kind=skill', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const zipPath = await writeRawZip(env, 'raw-an.zip', {
+      'plugin-alpha/package.json': JSON.stringify({ name: 'alpha', version: '1.0.0' }),
+      'skills/my-skill/SKILL.md': SKILL_DOC,
+    })
+
+    const analysis = await manager.analyzeImport(zipPath)
+    expect(analysis.source).toBe('raw')
+    expect(analysis.id).toBe('pack-raw-an')
+    expect(analysis.name).toBe('raw-an')
+    expect(analysis.items).toEqual([
+      { packageName: 'alpha', available: true, offline: true },
+      { packageName: 'my-skill', available: true, offline: true, kind: 'skill' },
+    ])
+  })
+
+  it('无清单且文件名/顶层目录名无法清洗出 ASCII 时 name 为空', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const zipPath = await writeRawZip(env, '整合包(1).zip', {
+      '整合包/plugin-alpha/package.json': JSON.stringify({ name: 'alpha' }),
+    })
+
+    const analysis = await manager.analyzeImport(zipPath)
+    expect(analysis.source).toBe('raw')
+    expect(analysis.name).toBe('')
+    expect(analysis.id).toBe('')
   })
 })
 
@@ -482,6 +682,83 @@ describe('removePack', () => {
     expect(result.removed).toBe(0)
     expect(store.current.profileName).toBe('web')
     expect(store.saveSettings).not.toHaveBeenCalled()
+  })
+
+  it('删除含 bundle 技能的包：无其它包引用时清掉 bundle 目录与 disabled 副本，保留同名 flat 技能', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    stub.readProfile.mockResolvedValue({ ...defaultProfile, plugins: [] })
+    const store = makeSettings(env.dshHome, 'web')
+    const { manager } = makeManager(env, stub, store)
+    await upsertPackRecord(env.registryPath, {
+      ...recordFor('pack-x'),
+      skills: [{ name: 'my-skill', format: 'bundle', enabled: true }],
+    })
+
+    // 预置全局技能落盘：bundle 目录（本包安装的）+ 同名 flat 文件（用户自行安装的异形技能）。
+    const skillRoot = path.join(env.dshHome, 'skills')
+    await mkdir(path.join(skillRoot, 'my-skill'), { recursive: true })
+    await writeFile(path.join(skillRoot, 'my-skill', 'SKILL.md'), SKILL_DOC)
+    await writeFile(path.join(skillRoot, 'my-skill.md'), SKILL_DOC)
+    await mkdir(path.join(skillRoot, '.disabled', 'my-skill'), { recursive: true })
+    await writeFile(path.join(skillRoot, '.disabled', 'my-skill', 'SKILL.md'), 'stale')
+
+    await manager.removePack('pack-x')
+
+    await expect(readFile(path.join(skillRoot, 'my-skill', 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(path.join(skillRoot, '.disabled', 'my-skill', 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+    // 同名 flat 不是本包安装的，保留。
+    expect(await readFile(path.join(skillRoot, 'my-skill.md'), 'utf8')).toContain('my-skill')
+  })
+
+  it('删除含 flat 技能的包：清掉 flat 文件与 disabled 副本，保留同名 bundle 技能', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    stub.readProfile.mockResolvedValue({ ...defaultProfile, plugins: [] })
+    const store = makeSettings(env.dshHome, 'web')
+    const { manager } = makeManager(env, stub, store)
+    await upsertPackRecord(env.registryPath, {
+      ...recordFor('pack-x'),
+      skills: [{ name: 'quick-ref', format: 'flat', enabled: true }],
+    })
+
+    const skillRoot = path.join(env.dshHome, 'skills')
+    await mkdir(path.join(skillRoot, 'quick-ref'), { recursive: true })
+    await writeFile(path.join(skillRoot, 'quick-ref', 'SKILL.md'), SKILL_DOC)
+    await writeFile(path.join(skillRoot, 'quick-ref.md'), SKILL_DOC)
+    await mkdir(path.join(skillRoot, '.disabled'), { recursive: true })
+    await writeFile(path.join(skillRoot, '.disabled', 'quick-ref.md'), 'stale')
+
+    await manager.removePack('pack-x')
+
+    await expect(readFile(path.join(skillRoot, 'quick-ref.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(path.join(skillRoot, '.disabled', 'quick-ref.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+    // 同名 bundle 不是本包安装的，保留。
+    expect(await readFile(path.join(skillRoot, 'quick-ref', 'SKILL.md'), 'utf8')).toContain('my-skill')
+  })
+
+  it('删除含技能的包：有其它包引用同名技能时保留', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    stub.readProfile.mockResolvedValue({ ...defaultProfile, plugins: [] })
+    const store = makeSettings(env.dshHome, 'web')
+    const { manager } = makeManager(env, stub, store)
+    await upsertPackRecord(env.registryPath, {
+      ...recordFor('pack-x'),
+      skills: [{ name: 'shared', format: 'bundle', enabled: true }],
+    })
+    await upsertPackRecord(env.registryPath, {
+      ...recordFor('pack-y'),
+      skills: [{ name: 'shared', format: 'bundle', enabled: true }],
+    })
+
+    const skillRoot = path.join(env.dshHome, 'skills')
+    await mkdir(path.join(skillRoot, 'shared'), { recursive: true })
+    await writeFile(path.join(skillRoot, 'shared', 'SKILL.md'), '---\nname: shared\ndescription: Shared.\n---\n')
+
+    await manager.removePack('pack-x')
+
+    expect(await readFile(path.join(skillRoot, 'shared', 'SKILL.md'), 'utf8')).toContain('name: shared')
   })
 })
 
