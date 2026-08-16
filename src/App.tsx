@@ -8,15 +8,19 @@ import { Toast } from './components/Toast'
 import { AiInstallDialog } from './components/dialogs/AiInstallDialog'
 import { ConfirmDialog } from './components/dialogs/ConfirmDialog'
 import { CredentialDialog } from './components/dialogs/CredentialDialog'
+import { CreatePackDialog } from './components/dialogs/CreatePackDialog'
+import { PackInstallDialog } from './components/dialogs/PackInstallDialog'
 import { SettingsDialog } from './components/dialogs/SettingsDialog'
 import { DSH_REPOSITORY } from './constants'
 import { useAiInstall } from './hooks/use-ai-install'
 import { BUSY } from './hooks/use-async-action'
 import { useLauncherStore } from './hooks/use-launcher-store'
 import { useNavigation } from './hooks/use-navigation'
+import { usePackInstall } from './hooks/use-pack-install'
 import { isInstallProgressActive } from './lib/install-progress'
 import type { CatalogRepositoryAnalysis, ManagedPlugin } from './types'
 import { DiscoverView } from './views/DiscoverView'
+import { PacksView } from './views/PacksView'
 import { PluginsView } from './views/PluginsView'
 import { RuntimeView } from './views/RuntimeView'
 
@@ -40,10 +44,16 @@ function LauncherShell() {
   const navigation = useNavigation(message => store.showToast({ kind: 'error', message }))
   // AI 可能改 profile（安装组件），任务结束时刷新一次；toast 复用 store 的唯一实例。
   const ai = useAiInstall(() => { void store.refreshProfile() }, store.showToast)
+  // 整合包创建/导入是流式任务；结算后刷新包列表与快照状态。
+  const packInstall = usePackInstall(() => {
+    void store.refreshPacks()
+    void store.refreshPackSnapshots()
+  }, store.showToast)
 
   // 对话框开关是纯展示状态，不进 store。
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [credentialOpen, setCredentialOpen] = useState(false)
+  const [createPackOpen, setCreatePackOpen] = useState(false)
   const [confirmingRemoval, setConfirmingRemoval] = useState<ManagedPlugin | null>(null)
   // 仓库结构检测结果由各视图发起，App 统一持有，避免切页后丢失。
   const [repositoryAnalyses, setRepositoryAnalyses] = useState<Record<string, CatalogRepositoryAnalysis>>({})
@@ -62,6 +72,13 @@ function LauncherShell() {
   }
 
   const closeWindow = () => void api.closeWindow()
+
+  /** 「导入整合包」：选文件 → analyze 拿预览 → PackInstallDialog 展示 preview 态。 */
+  const handlePackImport = async () => {
+    const path = await api.pickPackFile()
+    if (!path) return
+    await packInstall.startImport(path)
+  }
 
   if (store.loading || !store.settings || !store.profile) {
     return (
@@ -180,6 +197,23 @@ function LauncherShell() {
                   onOpenSettings={() => setSettingsOpen(true)}
                 />
               )}
+              {navigation.view === 'packs' && (
+                <PacksView
+                  packs={store.packs}
+                  profile={profile}
+                  busy={store.busy}
+                  onRefresh={() => { void store.refreshPacks(); void store.refreshPackSnapshots() }}
+                  onCreate={() => setCreatePackOpen(true)}
+                  onImport={() => void handlePackImport()}
+                  onActivate={packId => void store.activatePack(packId)}
+                  onDeactivate={() => void store.deactivatePack()}
+                  onExport={packId => void store.exportPack(packId)}
+                  onRemove={packId => void store.removePack(packId)}
+                  onAddPlugin={(packId, packageName) => void store.addPackPlugin(packId, packageName)}
+                  onToggleItem={(packId, packageName, enabled) => void store.togglePackItem(packId, packageName, enabled)}
+                  onRemoveItem={(packId, packageName) => void store.removePackItem(packId, packageName)}
+                />
+              )}
             </main>
           </div>
         </div>
@@ -224,6 +258,37 @@ function LauncherShell() {
           onCancel={ai.cancel}
           onRollback={() => void ai.rollback()}
           onClose={ai.reset}
+        />
+      )}
+      {createPackOpen && packInstall.phase === 'idle' && (
+        <CreatePackDialog
+          plugins={profile.plugins}
+          onClose={() => setCreatePackOpen(false)}
+          onConfirm={request => {
+            setCreatePackOpen(false)
+            void packInstall.startCreate(request.name, request.description, request.packageNames)
+          }}
+        />
+      )}
+      {packInstall.phase !== 'idle' && (
+        <PackInstallDialog
+          phase={packInstall.phase}
+          events={packInstall.events}
+          result={packInstall.result}
+          error={packInstall.error}
+          analysis={packInstall.analysis}
+          itemProgress={packInstall.itemProgress}
+          hasSnapshot={packInstall.hasSnapshot}
+          packSnapshotsAvailable={store.packSnapshotsAvailable}
+          busy={store.busy !== null || packInstall.busy !== null}
+          onConfirmImport={items => void packInstall.confirmImport(packInstall.importPath ?? '', items)}
+          onRollback={() => void packInstall.rollback()}
+          onActivate={packId => {
+            void (async () => {
+              if (await store.activatePack(packId)) packInstall.reset()
+            })()
+          }}
+          onClose={packInstall.reset}
         />
       )}
       {store.toast && <Toast toast={store.toast} onClose={store.dismissToast} />}
