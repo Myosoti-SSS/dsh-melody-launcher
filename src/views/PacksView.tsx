@@ -77,6 +77,7 @@ export function PacksView({
 
   const activeCount = packs.filter(pack => pack.enabled).length
   const totalPlugins = packs.reduce((sum, pack) => sum + pack.plugins.length, 0)
+  const refreshing = busy === 'pack-refresh'
 
   const toggleSelect = (packId: string) => {
     setSelectedPackId(current => current === packId ? null : packId)
@@ -90,7 +91,9 @@ export function PacksView({
         description="把一组插件组合成可复用的配置，可自建、从 zip/清单导入，也能导出分享给他人。启用即切换当前 Profile。"
         actions={(
           <>
-            <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy !== null}><RefreshCw size={17} />刷新</button>
+            <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy !== null}>
+              {refreshing ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}刷新
+            </button>
             <button type="button" className="secondary-button accent" onClick={onCreate}><PackagePlus size={17} />创建整合包</button>
             <button type="button" className="primary-command" onClick={onImport}><Download size={17} />导入整合包</button>
           </>
@@ -179,6 +182,7 @@ function PackRow({ pack, selected, busy, onSelect, onActivate, onDeactivate, onE
   onRemove: () => void
 }) {
   const activating = busy === `pack-activate:${pack.id}`
+  const deactivating = busy === 'pack-deactivate'
   const removing = busy === `pack-remove:${pack.id}`
   const exporting = busy === `pack-export:${pack.id}`
   const rowDisabled = busy !== null
@@ -200,8 +204,8 @@ function PackRow({ pack, selected, busy, onSelect, onActivate, onDeactivate, onE
       </div>
       <div className="pack-row-actions" onClick={event => event.stopPropagation()}>
         {pack.enabled ? (
-          <button type="button" className="secondary-button" disabled={rowDisabled || activating} onClick={onDeactivate}>
-            {activating ? <LoaderCircle className="spin" size={15} /> : null}停用
+          <button type="button" className="secondary-button" disabled={rowDisabled || deactivating} onClick={onDeactivate}>
+            {deactivating ? <LoaderCircle className="spin" size={15} /> : null}停用
           </button>
         ) : (
           <button type="button" className="install-button" disabled={rowDisabled} onClick={onActivate}>
@@ -252,6 +256,19 @@ function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlu
         <div><dt>来源</dt><dd>{SOURCE_LABEL[pack.source]}</dd></div>
         <div><dt>状态</dt><dd className={pack.state}>{STATE_LABEL[pack.state]}</dd></div>
       </dl>
+      {pack.failures && pack.failures.length > 0 && (
+        <div className="pack-details-failures">
+          <div className="pack-details-failures-head"><span>失败项（{pack.failures.length}）</span></div>
+          <div className="pack-failure-items">
+            {pack.failures.map(failure => (
+              <div className="pack-failure-row" key={failure.packageName}>
+                <code>{failure.packageName}</code>
+                <span>{failure.reason}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="pack-details-plugins">
         <div className="pack-details-plugins-head">
           <span>包含插件（{pack.plugins.length}）</span>
@@ -451,6 +468,15 @@ const packsStyle = `
 .pack-details-meta dd.complete { color: var(--accent); }
 .pack-details-meta dd.partial { color: var(--amber); }
 .pack-details-meta dd.failed { color: var(--danger); }
+.pack-details-failures { display: flex; flex-direction: column; margin-top: 14px; gap: 7px; }
+.pack-details-failures-head > span { font-size: 11px; font-weight: 650; }
+.pack-failure-items { display: flex; flex-direction: column; gap: 5px; }
+.pack-failure-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 7px 10px; border: 1px solid #e4bcbc; border-radius: 6px; background: #fff5f4;
+}
+.pack-failure-row code { color: var(--danger); font-size: 10px; }
+.pack-failure-row span { color: var(--muted); font-size: 10px; text-align: right; overflow-wrap: anywhere; }
 .pack-details-plugins { display: flex; min-height: 0; flex-direction: column; margin-top: 18px; gap: 8px; }
 .pack-details-plugins-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pack-details-plugins-head > span { font-size: 11px; font-weight: 650; }

@@ -259,6 +259,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           updatedAt: new Date().toISOString(),
           state: result.state,
           plugins: toInstalledPlugins(installed),
+          failures: result.failures.length > 0 ? result.failures : undefined,
         }
         await upsertPackRecord(options.registryPath, record)
         log('success', `整合包「${request.name}」已创建：${installed.length} 个插件。`)
@@ -438,6 +439,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             state: result.state,
             plugins: toInstalledPlugins(installedPluginNames),
             skills: installedSkills,
+            failures: result.failures.length > 0 ? result.failures : undefined,
           }
           await upsertPackRecord(options.registryPath, record)
           log('success', `非标准整合包「${packName}」已导入：${installed.length} 项。`)
@@ -539,6 +541,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           updatedAt: new Date().toISOString(),
           state: result.state,
           plugins: toInstalledPlugins(installed),
+          failures: result.failures.length > 0 ? result.failures : undefined,
         }
         await upsertPackRecord(options.registryPath, record)
         log('success', `整合包「${manifest.name}」已导入：${installed.length} 个插件。`)

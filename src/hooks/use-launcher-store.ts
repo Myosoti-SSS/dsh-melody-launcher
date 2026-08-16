@@ -246,12 +246,11 @@ export function useLauncherStore() {
   // ===================== 整合包（Pack）管理 =====================
 
   const refreshPacks = useCallback(async () => {
-    try {
-      setPacks(await api.listPacks())
-    } catch (error) {
-      showToast({ kind: 'error', message: errorText(error) })
-    }
-  }, [api, showToast])
+    const next = await run('pack-refresh', () => api.listPacks(), {
+      onError: error => showToast({ kind: 'error', message: errorText(error) }),
+    })
+    if (next) setPacks(next)
+  }, [api, run, showToast])
 
   const refreshPackSnapshots = useCallback(async () => {
     try {

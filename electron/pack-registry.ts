@@ -28,6 +28,8 @@ export interface PackRecord {
   plugins: PackInstalledPlugin[]
   /** raw 导入的技能（全局安装，记入包以支持删包清理）。 */
   skills?: PackInstalledSkill[]
+  /** state 为 partial/failed 时的失败项（含原因），完整包缺省省略。 */
+  failures?: { packageName: string; reason: string }[]
 }
 
 /** 落盘信封：version 保留给未来 schema 迁移。 */
@@ -110,6 +112,7 @@ export function toPackStatus(record: PackRecord, currentProfile: string): PackSt
     state: record.state,
     plugins: record.plugins,
     skills: record.skills,
+    failures: record.failures,
     installedAt: record.installedAt,
     updatedAt: record.updatedAt,
   }

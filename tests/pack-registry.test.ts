@@ -133,4 +133,18 @@ describe('toPackStatus', () => {
       updatedAt: '2026-08-16T00:00:00.000Z',
     })
   })
+
+  it('partial/failed 记录的失败明细透传到 PackStatus', () => {
+    const failures = [
+      { packageName: '@demo/broken', reason: '清单中缺少该插件的来源，无法联网安装' },
+      { packageName: '@demo/offline', reason: '无来源记录，无法重新安装' },
+    ]
+    const record = makeRecord({ state: 'partial', failures })
+    expect(toPackStatus(record, 'pack-other').failures).toEqual(failures)
+  })
+
+  it('完整包不携带 failures（undefined 时省略）', () => {
+    const record = makeRecord()
+    expect(toPackStatus(record, 'pack-other').failures).toBeUndefined()
+  })
 })

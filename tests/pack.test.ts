@@ -228,6 +228,10 @@ describe('createPack', () => {
     expect(result.failures).toEqual([{ packageName: 'ghost', reason: '无来源记录，无法重新安装' }])
     expect(result.state).toBe('failed')
     expect(stub.installPluginTarget).not.toHaveBeenCalled()
+
+    // 失败明细随记录持久化，列表页关闭对话框后仍可见。
+    const records = await readPackRegistry(env.registryPath)
+    expect(records[0].failures).toEqual([{ packageName: 'ghost', reason: '无来源记录，无法重新安装' }])
   })
 
   it('local 源 receipt 无法重建 → failure', async () => {
