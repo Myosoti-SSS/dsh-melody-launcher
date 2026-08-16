@@ -40,6 +40,8 @@ integrationTest('prepares the ACP runtime, handshakes, observes a live read-only
     provider: ACP_DEFAULT_PROVIDER,
     model: ACP_DEFAULT_MODEL,
     persistenceRoot: path.join(taskDir, 'sessions'),
+    workspaceRoot: root,
+    platform: process.platform,
   }))
 
   const { executable, args } = buildAcpServerCommand(path.join(root, 'acp-runtime'), configPath)

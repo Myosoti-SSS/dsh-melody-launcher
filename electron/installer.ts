@@ -6,6 +6,7 @@ import type {
   AppSettings,
   CatalogRepositoryAnalysis,
   DshInstallationStatus,
+  DshUpdateStatus,
   InstallProgress,
   InstalledSkill,
   ProfileState,
@@ -25,6 +26,7 @@ import {
   isDshRepository,
   packageManagerProgress,
 } from './dsh-install'
+import { checkDshUpdate } from './dsh-update'
 import { resolveNodeExecutable, type NodeRuntime, type NodeRuntimeProgress } from './node-runtime'
 import { approveIgnoredGitHubBuilds } from './plugin-install'
 import { analyzeRepository } from './plugin-catalog'
@@ -99,6 +101,7 @@ export interface Installer {
   /** 从当前 Profile 中卸载一个插件。 */
   remove(packageName: string): Promise<ProfileState>
   detectDsh(): Promise<DshInstallationStatus>
+  checkDshUpdate(): Promise<DshUpdateStatus>
   isBusy(): boolean
 }
 
@@ -124,6 +127,8 @@ export function createInstaller(options: InstallerOptions): Installer {
       configuredExecutable: settings.launchExecutable,
     })
   }
+
+  const checkForDshUpdate = async () => checkDshUpdate(await detectDsh())
 
   /** 仓库结构检测结果缓存 5 分钟，避免同一仓库反复触发 GitHub 请求。 */
   const repositoryAnalysisCache = new Map<string, { expiresAt: number; analysis: RepositoryAnalysis }>()
@@ -371,6 +376,7 @@ export function createInstaller(options: InstallerOptions): Installer {
     isBusy: () => active !== null,
 
     detectDsh,
+    checkDshUpdate: checkForDshUpdate,
 
     async install(fullName: string): Promise<RepositoryInstallResult> {
       if (active) throw new Error(`正在安装 ${active.repository}，请等待当前任务完成。`)

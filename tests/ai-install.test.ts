@@ -6,13 +6,16 @@ import { describe, expect, it } from 'vitest'
 import { parseDocument } from 'yaml'
 import {
   ACP_RUNTIME_PACKAGES,
+  aiInfrastructureFailure,
   buildAcpServerCommand,
   buildInstallPrompt,
   createProfileSnapshot,
   decideApproval,
   healCredentialsLock,
+  isAcpRuntimeReady,
   isReadOnlyPermission,
   isSensitivePath,
+  isWorkspaceFileRequest,
   lockCredentialsOut,
   renderAcpComposition,
   restoreCredentialsLock,
@@ -118,6 +121,19 @@ describe('buildInstallPrompt', () => {
     expect(prompt).toContain('直接执行即可，无需等待审批')
     expect(prompt).toContain('可能触发审批弹窗')
   })
+
+  it('Windows 使用本地仓库副本与逐命令审批的 PowerShell 指引', () => {
+    const prompt = buildInstallPrompt({
+      ...base,
+      analysis: analysis('invalid'),
+      repositoryPath: 'C:\\Users\\tester\\.dsh\\.ai-install-sources\\session-1\\repository',
+      shell: 'pwsh',
+    })
+    expect(prompt).toContain('必须优先检查这个本地副本')
+    expect(prompt).toContain('PowerShell（pwsh）')
+    expect(prompt).toContain('每次 PowerShell 命令都必须等待启动器审批')
+    expect(prompt).toContain('不要使用后台任务')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -211,13 +227,50 @@ describe('decideApproval', () => {
   })
 })
 
+describe('isWorkspaceFileRequest', () => {
+  const workspace = path.join(tmpdir(), 'dsh-workspace')
+
+  it('只允许文件工具访问 DSH_HOME 内路径', () => {
+    expect(isWorkspaceFileRequest(permissionRequest({
+      toolKind: 'fs.read_file',
+      toolTitle: 'Read file',
+      rawInput: { path: path.join(workspace, 'repository', 'README.md') },
+    }), workspace)).toBe(true)
+    expect(isWorkspaceFileRequest(permissionRequest({
+      toolKind: 'fs.read_file',
+      toolTitle: 'Read file',
+      rawInput: { path: path.join(path.dirname(workspace), 'outside.txt') },
+    }), workspace)).toBe(false)
+  })
+
+  it('文件工具缺少路径时 fail closed，非文件工具不参与判断', () => {
+    expect(isWorkspaceFileRequest(permissionRequest({
+      toolKind: 'fs.read_file',
+      toolTitle: 'Read file',
+      rawInput: {},
+    }), workspace)).toBe(false)
+    expect(isWorkspaceFileRequest(bash('pwd'), workspace)).toBeNull()
+  })
+})
+
+describe('aiInfrastructureFailure', () => {
+  it('把 Windows 沙箱运行器故障识别为任务错误', () => {
+    expect(aiInfrastructureFailure('windows-acl-run: CreateProcessAsUserW failed (Win32 2)')).toMatch(/执行环境不可用/)
+    expect(aiInfrastructureFailure('后台任务同样因沙箱运行器失败，所有执行通道均已确认不可用')).toMatch(/执行环境不可用/)
+  })
+
+  it('正常的不可安装研究结论不算基础设施故障', () => {
+    expect(aiInfrastructureFailure('该仓库既不是标准插件 Bundle，也不包含有效 Skill，因此无法安装。')).toBeNull()
+  })
+})
+
 // ---------------------------------------------------------------------------
 // renderAcpComposition
 // ---------------------------------------------------------------------------
 
 describe('renderAcpComposition', () => {
   it('渲染出可解析的最小安全 composition（13 个插件）', () => {
-    const yaml = renderAcpComposition({ persistenceRoot: 'C:\\dsh\\sessions' })
+    const yaml = renderAcpComposition({ persistenceRoot: '/dsh/sessions', workspaceRoot: '/dsh', platform: 'linux' })
     const value = parseDocument(yaml).toJS() as Array<Record<string, unknown>>
     expect(Array.isArray(value)).toBe(true)
     expect(value.length).toBe(13)
@@ -228,18 +281,19 @@ describe('renderAcpComposition', () => {
   })
 
   it('强制 workspace-write 与单次审批', () => {
-    const yaml = renderAcpComposition({ persistenceRoot: '/x' })
+    const yaml = renderAcpComposition({ persistenceRoot: '/x', workspaceRoot: '/workspace', platform: 'linux' })
     const value = parseDocument(yaml).toJS() as Array<Record<string, unknown>>
     const sandboxPolicy = value.find(entry => entry.id === 'sandbox-policy')
     const approval = value.find(entry => entry.id === 'approval')
-    const config = sandboxPolicy?.config as { mode?: string }
+    const config = sandboxPolicy?.config as { mode?: string; workspaceRoot?: string }
     const approvalConfig = approval?.config as { policy?: string }
     expect(config.mode).toBe('workspace-write')
+    expect(config.workspaceRoot).toBe('/workspace')
     expect(approvalConfig.policy).toBe('ask')
   })
 
   it('写入 provider/model/persistenceRoot 与默认 persona', () => {
-    const yaml = renderAcpComposition({ persistenceRoot: 'D:\\dsh\\sessions' })
+    const yaml = renderAcpComposition({ persistenceRoot: 'D:\\dsh\\sessions', platform: 'linux' })
     const value = parseDocument(yaml).toJS() as Array<Record<string, unknown>>
     const acp = value.find(entry => entry.id === 'acp-agent')?.config as {
       provider?: string
@@ -254,10 +308,54 @@ describe('renderAcpComposition', () => {
   })
 
   it('带自定义 bash 超时', () => {
-    const yaml = renderAcpComposition({ persistenceRoot: '/x', bashTimeoutMs: 120_000 })
+    const yaml = renderAcpComposition({ persistenceRoot: '/x', bashTimeoutMs: 120_000, platform: 'linux' })
     const value = parseDocument(yaml).toJS() as Array<Record<string, unknown>>
     const bash = value.find(entry => entry.id === 'bash')?.config as { timeoutMs?: number }
     expect(bash.timeoutMs).toBe(120_000)
+  })
+
+  it('Windows 改用逐命令审批的 pwsh，禁用后台任务与 bash 工具', () => {
+    const yaml = renderAcpComposition({
+      persistenceRoot: 'C:\\dsh\\sessions',
+      workspaceRoot: 'C:\\Users\\tester\\.dsh',
+      platform: 'win32',
+    })
+    const value = parseDocument(yaml).toJS() as Array<Record<string, unknown>>
+    expect(value.find(entry => entry.id === 'sandbox')).toBeUndefined()
+    expect(value.find(entry => entry.id === 'bash')?.name).toBe('@deepseek-ai/dsh-pwsh-local')
+    expect(value.find(entry => entry.id === 'tool-pwsh')).toMatchObject({
+      name: '@deepseek-ai/dsh-tool-pwsh',
+      config: { enableRunInBackground: false },
+    })
+    expect(value.find(entry => entry.id === 'acp-agent')?.config).toMatchObject({ toolBash: false })
+    expect(value.find(entry => entry.id === 'fs-sandbox')?.config).toMatchObject({ cwd: 'C:\\Users\\tester\\.dsh' })
+    expect(value.find(entry => entry.id === 'sandbox-policy')?.config).toMatchObject({
+      workspaceRoot: 'C:\\Users\\tester\\.dsh',
+    })
+  })
+})
+
+describe('isAcpRuntimeReady', () => {
+  it('需要可执行文件和全部精确版本依赖', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-acp-runtime-ready-'))
+    try {
+      const executable = buildAcpServerCommand(root, 'unused').executable
+      await mkdir(path.dirname(executable), { recursive: true })
+      await writeFile(executable, '')
+      for (const [packageName, version] of ACP_RUNTIME_PACKAGES) {
+        const packageRoot = path.join(root, 'node_modules', ...packageName.split('/'))
+        await mkdir(packageRoot, { recursive: true })
+        await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: packageName, version }))
+      }
+      expect(await isAcpRuntimeReady(root)).toBe(true)
+      await writeFile(
+        path.join(root, 'node_modules', '@deepseek-ai', 'dsh-tool-pwsh', 'package.json'),
+        JSON.stringify({ name: '@deepseek-ai/dsh-tool-pwsh', version: '0.0.0' }),
+      )
+      expect(await isAcpRuntimeReady(root)).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 

@@ -26,6 +26,7 @@ const api: LauncherApi = {
   getSettings: () => ipcRenderer.invoke(IPC.settingsGet),
   saveSettings: (settings: AppSettings) => ipcRenderer.invoke(IPC.settingsSave, settings),
   detectDshInstallation: () => ipcRenderer.invoke(IPC.dshDetect),
+  checkDshUpdate: () => ipcRenderer.invoke(IPC.dshUpdateCheck),
   getDeepSeekCredentialStatus: () => ipcRenderer.invoke(IPC.credentialStatus),
   setDeepSeekApiKey: apiKey => ipcRenderer.invoke(IPC.credentialSet, apiKey),
   clearDeepSeekApiKey: () => ipcRenderer.invoke(IPC.credentialClear),

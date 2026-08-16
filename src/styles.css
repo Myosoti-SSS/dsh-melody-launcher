@@ -162,6 +162,72 @@ input:focus-visible {
   font-weight: 650;
 }
 
+.launcher-update-notice {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  margin-top: 11px;
+  padding: 7px 8px 7px 9px;
+  gap: 7px;
+  border: 1px solid rgba(123, 91, 28, 0.38);
+  border-radius: 5px;
+  color: #5d4519;
+  background: rgba(255, 248, 220, 0.9);
+  box-shadow: 0 5px 15px rgba(53, 39, 14, 0.12);
+  text-align: left;
+}
+
+.launcher-update-notice > svg {
+  flex: none;
+  color: #9f6309;
+}
+
+.launcher-update-notice > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.launcher-update-notice strong,
+.launcher-update-notice small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launcher-update-notice strong {
+  font-size: 10px;
+}
+
+.launcher-update-notice small {
+  color: rgba(93, 69, 25, 0.76);
+  font-size: 9px;
+}
+
+.launcher-update-notice button {
+  flex: none;
+  min-height: 25px;
+  padding: 0 9px;
+  border: 1px solid rgba(123, 91, 28, 0.42);
+  border-radius: 4px;
+  color: #5d4519;
+  background: rgba(255, 255, 255, 0.62);
+  font-size: 10px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.launcher-update-notice button:hover:not(:disabled) {
+  color: #3e2e0e;
+  background: #fff;
+}
+
+.launcher-update-notice button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .launcher-controls {
   grid-column: 2;
   align-self: end;

@@ -7,6 +7,7 @@ import type {
   CatalogRepositoryResult,
   CredentialStatus,
   DshInstallationStatus,
+  DshUpdateStatus,
   InstallProgress,
   InstalledSkill,
   LauncherApi,
@@ -109,6 +110,7 @@ let demoInstalledSkills: InstalledSkill[] = []
 let demoRuntime: RuntimeState = { running: false, pid: null, startedAt: null, url: null }
 let demoCredential: CredentialStatus = { configured: false }
 let demoDshInstallation: DshInstallationStatus = { installed: false, version: null, executable: null, source: null }
+const demoRemoteDshVersion = '0.1.0-rc.7'
 const outputListeners = new Set<(output: RuntimeOutput) => void>()
 const stateListeners = new Set<(state: RuntimeState) => void>()
 const installProgressListeners = new Set<(progress: InstallProgress) => void>()
@@ -249,6 +251,28 @@ export const demoApi: LauncherApi = {
   getSettings: async () => demoSettings,
   saveSettings: async settings => (demoSettings = settings),
   detectDshInstallation: async () => ({ ...demoDshInstallation }),
+  checkDshUpdate: async (): Promise<DshUpdateStatus> => {
+    const localVersion = demoDshInstallation.version
+    if (!demoDshInstallation.installed || !localVersion) {
+      return {
+        state: 'not-installed',
+        localVersion,
+        remoteVersion: null,
+        repository: 'deepseek-ai/deepseek-harness',
+        checkedAt: new Date().toISOString(),
+        message: '尚未安装 DSH。',
+      }
+    }
+    const available = localVersion !== demoRemoteDshVersion
+    return {
+      state: available ? 'update-available' : 'up-to-date',
+      localVersion,
+      remoteVersion: demoRemoteDshVersion,
+      repository: 'deepseek-ai/deepseek-harness',
+      checkedAt: new Date().toISOString(),
+      message: available ? `发现 DSH 新版本 ${demoRemoteDshVersion}。` : '当前 DSH 已是最新版本。',
+    }
+  },
   getDeepSeekCredentialStatus: async () => demoCredential,
   setDeepSeekApiKey: async apiKey => {
     if (!apiKey.trim()) throw new Error('API Key 不能为空。')

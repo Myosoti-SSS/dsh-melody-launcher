@@ -83,12 +83,14 @@ function LauncherShell() {
           profile={profile}
           runtime={store.runtime}
           dshInstallation={store.dshInstallation}
+          dshUpdate={store.dshUpdate}
           installProgress={store.installProgress?.repository === DSH_REPOSITORY ? store.installProgress : null}
           busy={runtimeBusy}
           installingDsh={installingDsh}
           onCredential={() => setCredentialOpen(true)}
           onManage={navigation.showManager}
           onToggleRuntime={toggleRuntime}
+          onUpdateDsh={() => { void store.updateDsh() }}
           onOpenHarness={openHarness}
           onClose={closeWindow}
         />

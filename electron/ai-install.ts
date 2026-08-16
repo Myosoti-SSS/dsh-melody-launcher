@@ -9,8 +9,9 @@
  * 安全约定（用户硬性要求「受限且安全」）：
  *   - 审批：只读且非敏感路径自动放行；写操作 / 下载 / 改 profile / 跑安装命令
  *     一律转 ask，弹窗征求用户批准；敏感路径即使只读也转 ask。
- *   - 沙箱：composition 强制 sandbox-policy mode=workspace-write，bash/fs 被
- *     限制在 session cwd（= settings.dshHome）内。
+ *   - 隔离：POSIX 命令使用 workspace-write 沙箱；Windows 因 ACL runner 在
+ *     部分桌面环境不可用，改用本地 PowerShell 且每条命令都走用户审批。
+ *     文件工具在所有平台均限制在 settings.dshHome 内。
  *   - 快照：任务前对 profile 的 package.json / pnpm-workspace.yaml 与
  *     skills/ 目录做快照，还原时只写快照清单内文件，relPath 防穿越。
  */
@@ -36,6 +37,7 @@ import {
   type AcpPermissionRequest,
   type AcpTransport,
 } from './acp-client'
+import { prepareAiRepositorySource, type AiRepositorySource } from './ai-repository-source'
 import { runCommand } from './command'
 import type { NodeRuntime } from './node-runtime'
 import { spawnCommand } from './process'
@@ -47,6 +49,9 @@ import { spawnCommand } from './process'
 /** ACP 独立运行时的托管目录名（位于 userData 下，与核心 DSH 运行时隔离）。 */
 export const ACP_RUNTIME_DIRNAME = 'acp-runtime'
 
+/** AI 研究仓库的临时副本目录（位于 DSH_HOME 内，会话结束即删除）。 */
+export const AI_REPOSITORY_SOURCE_DIRNAME = '.ai-install-sources'
+
 /** 单个审批请求的等待超时：5 分钟。超时视为拒绝并取消任务。 */
 export const AI_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -54,8 +59,9 @@ export const AI_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000
 export const AI_TASK_TIMEOUT_MS = 30 * 60 * 1000
 
 /**
- * ACP 运行时精确 pin 的包版本。全部经装包冒烟验证可启动（13 插件最小安全
- * composition 完成 initialize/session/new 握手）。npm latest dist-tag 过时
+ * ACP 运行时精确 pin 的包版本。POSIX 使用 sandboxed bash；Windows 使用
+ * 本地 PowerShell + 启动器逐命令审批，绕开不可用的 windows-acl runner。
+ * npm latest dist-tag 过时
  * （指向 0.0.1-rc.1），绝不可依赖无版本安装。
  */
 export const ACP_RUNTIME_PACKAGES: ReadonlyArray<readonly [packageName: string, version: string]> = [
@@ -65,6 +71,9 @@ export const ACP_RUNTIME_PACKAGES: ReadonlyArray<readonly [packageName: string, 
   ['@deepseek-ai/dsh-sandbox-policy', '0.1.0-rc.6'],
   ['@deepseek-ai/dsh-subprocess-local', '0.1.0-rc.6'],
   ['@deepseek-ai/dsh-bash-sandbox', '0.1.0-rc.6'],
+  ['@deepseek-ai/dsh-pwsh-local', '0.1.0-rc.6'],
+  ['@deepseek-ai/dsh-tool-pwsh', '0.1.0-rc.6'],
+  ['@deepseek-ai/dsh-shell-env', '0.1.0-rc.6'],
   ['@deepseek-ai/dsh-user-approval', '0.1.0-rc.6'],
   ['@deepseek-ai/dsh-token-meter', '0.1.0-rc.6'],
   ['@deepseek-ai/dsh-compaction-basic', '0.1.0-rc.6'],
@@ -187,6 +196,50 @@ export function decideApproval(request: AcpPermissionRequest): ApprovalDecision 
   return isReadOnlyPermission(request) ? 'allow' : 'ask'
 }
 
+const INFRASTRUCTURE_FAILURE_PATTERNS = [
+  /windows-acl-run/i,
+  /CreateProcessAsUserW/i,
+  /所有执行通道.{0,24}(不可用|失败)/,
+  /沙箱运行器.{0,24}(不可用|失败)/,
+]
+
+/** Distinguish an unavailable execution channel from a valid "not installable" conclusion. */
+export function aiInfrastructureFailure(text: string): string | null {
+  if (!INFRASTRUCTURE_FAILURE_PATTERNS.some(pattern => pattern.test(text))) return null
+  return 'AI 执行环境不可用，未能完成仓库研究或安装。请重试；若仍失败，请查看运行日志。'
+}
+
+const FILE_PATH_KEYS = new Set(['path', 'file', 'filepath', 'source', 'destination'])
+
+function fileRequestPaths(rawInput: unknown): string[] {
+  if (!rawInput || typeof rawInput !== 'object' || Array.isArray(rawInput)) return []
+  const paths: string[] = []
+  for (const [key, value] of Object.entries(rawInput as Record<string, unknown>)) {
+    if (FILE_PATH_KEYS.has(key.toLowerCase()) && typeof value === 'string') paths.push(value)
+  }
+  return paths
+}
+
+/**
+ * Return null for non-filesystem tools. Filesystem operations fail closed when
+ * the request does not expose a path or any path resolves outside DSH_HOME.
+ */
+export function isWorkspaceFileRequest(
+  request: Pick<AcpPermissionRequest, 'toolKind' | 'toolTitle' | 'rawInput'>,
+  workspace: string,
+): boolean | null {
+  const toolName = `${request.toolKind ?? ''} ${request.toolTitle}`.toLowerCase()
+  if (!/(^|[._\s-])fs([._\s-]|$)|file/.test(toolName)) return null
+  const candidates = fileRequestPaths(request.rawInput)
+  if (candidates.length === 0) return false
+  const root = path.resolve(workspace)
+  return candidates.every(candidate => {
+    const target = path.resolve(root, candidate)
+    const relative = path.relative(root, target)
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+  })
+}
+
 // ---------------------------------------------------------------------------
 // 安装提示词
 // ---------------------------------------------------------------------------
@@ -198,6 +251,10 @@ export interface AiInstallPromptInput {
   profileName: string
   /** 会话工作目录（沙箱根）= settings.dshHome。 */
   workspace: string
+  /** 启动器预先下载并安全解压的仓库本地副本。 */
+  repositoryPath?: string
+  /** Agent 可用的命令工具方言。Windows 使用 PowerShell。 */
+  shell?: 'bash' | 'pwsh'
   /** 可用的 DSH 命令行前缀（如 `npx --yes @deepseek-ai/dsh`），agent 借它调 plugin add。 */
   dshCliCommand?: string
 }
@@ -236,7 +293,9 @@ function formatTargets(targets: PluginInstallTarget[]): string {
  * 只操作工作区与目标 profile、一切安装动作等审批。输入不含任何密钥。
  */
 export function buildInstallPrompt(input: AiInstallPromptInput): string {
-  const { repository, defaultBranch, analysis, profileName, workspace, dshCliCommand } = input
+  const { repository, defaultBranch, analysis, profileName, workspace, repositoryPath, dshCliCommand } = input
+  const shell = input.shell ?? 'bash'
+  const shellLabel = shell === 'pwsh' ? 'PowerShell（pwsh）' : 'bash'
   const cliHint = dshCliCommand
     ? `\n如需调用 DSH 命令行完成安装，可执行：\`${dshCliCommand} plugin --profile ${profileName} add …\`。也可以直接编辑目标 profile 的 package.json。`
     : ''
@@ -248,6 +307,9 @@ export function buildInstallPrompt(input: AiInstallPromptInput): string {
     '',
     `市场分析结论：${analysis.summary || '无'}`,
     ...(analysis.targets.length ? [`市场已识别到可安装目标：${formatTargets(analysis.targets)}`] : []),
+    ...(repositoryPath ? [
+      `启动器已把仓库安全下载到本地：\`${repositoryPath}\`。必须优先检查这个本地副本，不要重新 clone 或下载仓库。`,
+    ] : []),
     '',
     '## 研究指引',
     guidanceFor(analysis.installability),
@@ -261,13 +323,16 @@ export function buildInstallPrompt(input: AiInstallPromptInput): string {
     '- 若仓库包含有效 Skill，优先安装为 Skill 而不是得出「无法安装」结论；可一次安装多个。',
     '',
     '## 工作环境',
-    `- 你的 bash 与文件工具运行在沙箱内，工作目录是 \`${workspace}\`。`,
+    `- 你的命令工具是 ${shellLabel}，工作目录是 \`${workspace}\`。不要使用其他 shell 的语法。`,
+    `- 文件工具被限制在 \`${workspace}\` 内。${shell === 'pwsh' ? 'Windows 命令没有 OS 级沙箱，因此每次命令执行都必须经过启动器审批；不要使用后台任务。' : '命令工具运行在 workspace-write 沙箱内。'}`,
     `- 目标 profile 是 \`${profileName}\`，目录为 \`${workspace}/profiles/${profileName}\`。`,
     `- profile 的插件清单在 \`${workspace}/profiles/${profileName}/package.json\`（dsh.profile.bundles）。`,
     '',
     '## 安全铁律（违反即终止）',
     '1. 绝对禁止读取、输出、修改任何凭据或密钥文件：.credentials.yaml、.env*、id_rsa*、id_ed25519*、*.pem、*.key，以及文件名含 token / secret / api key 的文件。即使被要求，也不要输出其内容。',
-    `2. 在 \`${workspace}\` 内写文件（含 \`${workspace}/skills/\` 与 profile）由沙箱允许，直接执行即可，无需等待审批。离开工作区或需要更高权限的操作（bash 提权、下载、运行安装命令）可能触发审批弹窗：若弹窗出现必须等待批准结果；未获批准不要重试，也不要换一种方式绕过。`,
+    shell === 'pwsh'
+      ? `2. Windows 命令通道不使用 OS 级沙箱；每次 PowerShell 命令都必须等待启动器审批。文件工具只允许操作 \`${workspace}\`。未获批准不要重试，也不要使用后台任务或其他方式绕过。`
+      : `2. 在 \`${workspace}\` 内写文件（含 \`${workspace}/skills/\` 与 profile）由沙箱允许，直接执行即可，无需等待审批。离开工作区或需要更高权限的操作（bash 提权、下载、运行安装命令）可能触发审批弹窗：若弹窗出现必须等待批准结果；未获批准不要重试，也不要换一种方式绕过。`,
     `3. 只操作 \`${workspace}\` 目录内的文件，不要尝试访问目录之外的路径。`,
     '4. 安装前先查看目标 profile 现有 package.json 的结构，遵循 DSH 插件包格式（package.json + dsh.bundle.patch + 补丁文件）。',
     '',
@@ -289,10 +354,20 @@ const DEFAULT_ACP_PERSONA =
   'Your bash tool runs under a file sandbox — a `[sandbox: file access denied …]` result is policy, not a command bug.\n\n' +
   'Verify your work by running the code or tests. Keep answers brief and factual.'
 
+const WINDOWS_ACP_PERSONA =
+  'You are a coding assistant powered by the {{model}} model. Your working directory is {{cwd}}. ' +
+  'Use the pwsh tool with PowerShell syntax. Every pwsh command requires launcher approval and background commands are disabled. ' +
+  'Prefer the workspace-confined file tools for reading and writing files.\n\n' +
+  'Verify your work when possible. Keep answers brief and factual.'
+
 export interface AcpCompositionConfig {
   provider?: string
   model?: string
   persona?: string
+  /** 文件工具与沙箱策略的真实工作区根目录。 */
+  workspaceRoot?: string
+  /** 用于选择 POSIX sandboxed bash 或 Windows approved pwsh。 */
+  platform?: NodeJS.Platform
   /** 会话持久化根目录（绝对路径），agent 会话状态写入这里。 */
   persistenceRoot: string
   /** bash 工具超时（毫秒），默认 60000。 */
@@ -310,18 +385,52 @@ function yamlScalar(value: string): string {
 }
 
 /**
- * 渲染 ACP server 的 cordis.yml。输出为最小安全集：sandbox-policy
- * workspace-write、user-approval policy=ask、llm/sandbox/subprocess/fs 等 13 个
- * 插件（全部在 ACP_RUNTIME_PACKAGES 中显式 pin）。workspaceRoot / cwd 用
- * !!js process.cwd()（DSH 加载器原生支持，冒烟验证通过）解析为 spawn 时的 cwd。
+ * 渲染 ACP server 的 cordis.yml。POSIX 使用 workspace-write 进程沙箱；
+ * Windows 的 ACL runner 在部分桌面环境无法 CreateProcessAsUserW，因此使用
+ * 官方 pwsh-local，并由 user-approval 对每条命令 fail-closed。文件工具在所有
+ * 平台仍由 fs-sandbox 限制在显式 workspaceRoot 内。
  */
 export function renderAcpComposition(config: AcpCompositionConfig): string {
   const provider = config.provider ?? ACP_DEFAULT_PROVIDER
   const model = config.model ?? ACP_DEFAULT_MODEL
-  const persona = (config.persona ?? DEFAULT_ACP_PERSONA).trimEnd()
+  const platform = config.platform ?? process.platform
+  const windows = platform === 'win32'
+  const workspaceRoot = config.workspaceRoot ?? process.cwd()
+  const persona = (config.persona ?? (windows ? WINDOWS_ACP_PERSONA : DEFAULT_ACP_PERSONA)).trimEnd()
   const bashTimeoutMs = config.bashTimeoutMs ?? 60_000
+  const shellEntries = windows
+    ? [
+      '- id: bash',
+      "  name: '@deepseek-ai/dsh-pwsh-local'",
+      '  config:',
+      `    cwd: ${yamlScalar(workspaceRoot)}`,
+      `    timeoutMs: ${bashTimeoutMs}`,
+      '',
+      '- id: shell-env',
+      "  name: '@deepseek-ai/dsh-shell-env'",
+      '  config:',
+      `    dshHome: ${yamlScalar(workspaceRoot)}`,
+      '',
+      '- id: tool-pwsh',
+      "  name: '@deepseek-ai/dsh-tool-pwsh'",
+      '  config:',
+      '    enableRunInBackground: false',
+      '',
+    ]
+    : [
+      '- id: sandbox',
+      "  name: '@deepseek-ai/dsh-sandbox-local'",
+      '',
+      '- id: bash',
+      "  name: '@deepseek-ai/dsh-bash-sandbox'",
+      '  config:',
+      `    timeoutMs: ${bashTimeoutMs}`,
+      '',
+    ]
   return [
-    '# AI 自动安装会话的 ACP composition —— 最小安全集（sandbox workspace-write + 单次审批）。',
+    windows
+      ? '# AI 自动安装会话：Windows approved-pwsh + workspace-confined fs。'
+      : '# AI 自动安装会话：sandboxed bash + workspace-confined fs。',
     '- id: llm-deepseek',
     "  name: '@deepseek-ai/dsh-llm-deepseek'",
     '  config:',
@@ -331,23 +440,16 @@ export function renderAcpComposition(config: AcpCompositionConfig): string {
     '      - id: deepseek-v4-flash',
     '      - id: deepseek-v4-pro',
     '',
-    '- id: sandbox',
-    "  name: '@deepseek-ai/dsh-sandbox-local'",
-    '',
     '- id: sandbox-policy',
     "  name: '@deepseek-ai/dsh-sandbox-policy'",
     '  config:',
     '    mode: workspace-write',
-    '    workspaceRoot: !!js process.cwd()',
+    `    workspaceRoot: ${yamlScalar(workspaceRoot)}`,
     '',
     '- id: subprocess',
     "  name: '@deepseek-ai/dsh-subprocess-local'",
     '',
-    '- id: bash',
-    "  name: '@deepseek-ai/dsh-bash-sandbox'",
-    '  config:',
-    `    timeoutMs: ${bashTimeoutMs}`,
-    '',
+    ...shellEntries,
     '- id: approval',
     "  name: '@deepseek-ai/dsh-user-approval'",
     '  config:',
@@ -360,6 +462,10 @@ export function renderAcpComposition(config: AcpCompositionConfig): string {
     `    model: ${yamlScalar(model)}`,
     `    persistenceRoot: ${yamlScalar(config.persistenceRoot)}`,
     '    persistenceCompression: none',
+    ...(windows ? ['    toolBash: false'] : [
+      '    toolBash:',
+      '      enableRunInBackground: false',
+    ]),
     '    workspaceContext:',
     '      maxBytes: 65536',
     '    persona: |',
@@ -379,7 +485,7 @@ export function renderAcpComposition(config: AcpCompositionConfig): string {
     '- id: fs-sandbox',
     "  name: '@deepseek-ai/dsh-fs-sandbox'",
     '  config:',
-    '    cwd: !!js process.cwd()',
+    `    cwd: ${yamlScalar(workspaceRoot)}`,
     '',
     '- id: fs-observation-policy',
     "  name: '@deepseek-ai/dsh-fs-observation-policy'",
@@ -762,19 +868,34 @@ export async function healCredentialsLock(dshHome: string, lockRoot: string): Pr
 
 /**
  * 确保 ACP 运行时已安装到 acpRuntimeRoot（首次 npm install --prefix，精确 pin）。
- * 已安装（存在 .bin/dsh-acp-demo）时直接返回。
+ * 已安装且每个显式依赖版本都匹配时直接返回；新增平台依赖后会自动补装，
+ * 不能只检查旧的 dsh-acp-demo 可执行文件。
  */
+export async function isAcpRuntimeReady(acpRuntimeRoot: string): Promise<boolean> {
+  const bin = buildAcpServerCommand(acpRuntimeRoot, 'cordis.yml').executable
+  if (!existsSync(bin)) return false
+  for (const [packageName, expectedVersion] of ACP_RUNTIME_PACKAGES) {
+    try {
+      const manifestPath = path.join(acpRuntimeRoot, 'node_modules', ...packageName.split('/'), 'package.json')
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { version?: unknown }
+      if (manifest.version !== expectedVersion) return false
+    } catch {
+      return false
+    }
+  }
+  return true
+}
+
 export async function prepareAcpRuntime(
   acpRuntimeRoot: string,
   nodeRuntime: NodeRuntime,
   onOutput?: (text: string) => void,
 ): Promise<void> {
-  const bin = buildAcpServerCommand(acpRuntimeRoot, 'cordis.yml').executable
-  if (existsSync(bin)) return
+  if (await isAcpRuntimeReady(acpRuntimeRoot)) return
   await mkdir(acpRuntimeRoot, { recursive: true })
   await atomicWrite(path.join(acpRuntimeRoot, 'package.json'), '{"name":"dsh-acp-runtime","private":true}\n')
   const specifiers = ACP_RUNTIME_PACKAGES.map(([name, version]) => `${name}@${version}`)
-  onOutput?.('首次安装 ACP 运行时（精确 pin 版本，可能需要几分钟）…')
+  onOutput?.('正在安装或更新 ACP 运行时（精确 pin 版本，可能需要几分钟）…')
   const result = await runCommand(nodeRuntime.npm, [
     'install',
     '--prefix', acpRuntimeRoot,
@@ -859,6 +980,7 @@ interface ActiveTask {
   aborted: string | null
   configPath: string | null
   promptActive: boolean
+  transcript: string
 }
 
 let nextApprovalSeq = 0
@@ -896,6 +1018,9 @@ function sanitizeApprovalArgs(rawInput: unknown): string {
 
 function approvalReason(request: AcpPermissionRequest): string {
   if (isSensitivePath(request)) return '涉及凭据/密钥文件，需要确认'
+  if ((request.toolKind ?? '').toLowerCase().includes('pwsh')) {
+    return 'Windows 兼容命令通道未使用 OS 级沙箱，需要确认每条 PowerShell 命令'
+  }
   return '写文件或运行安装命令，需要确认'
 }
 
@@ -955,6 +1080,12 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
     current: ActiveTask,
     request: AcpPermissionRequest,
   ): Promise<boolean> {
+    const fileRequestAllowed = isWorkspaceFileRequest(request, current.settings.dshHome)
+    if (fileRequestAllowed === false) {
+      options.emitOutput('error', `[ai] 已拒绝越出 DSH_HOME 的文件操作：${request.toolTitle}`)
+      options.emitEvent({ kind: 'log', text: `已拒绝越出 DSH_HOME 的文件操作：${request.toolTitle}` })
+      return false
+    }
     const decision = decideApproval(request)
     if (decision === 'allow') {
       options.emitOutput('info', `[ai] 自动放行只读操作：${request.toolTitle}`)
@@ -997,6 +1128,7 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
       aborted: null,
       configPath: null,
       promptActive: false,
+      transcript: '',
     }
     task = current
     try {
@@ -1005,6 +1137,8 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
         provider: ACP_DEFAULT_PROVIDER,
         model: ACP_DEFAULT_MODEL,
         persistenceRoot: path.join(taskDir, 'sessions'),
+        workspaceRoot: ctx.settings.dshHome,
+        platform: process.platform,
       }))
       current.configPath = configPath
 
@@ -1021,7 +1155,10 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
         clientInfo: { name: 'dsh-melody-launcher', version: '0.1.4' },
         onPermissionRequest: request => handlePermissionRequest(current, request),
         onSessionUpdate: update => {
-          if (update.text) log(update.text)
+          if (update.text) {
+            current.transcript = `${current.transcript}${update.text}`.slice(-200_000)
+            log(update.text)
+          }
         },
         onClose: error => {
           if (error) options.emitOutput('error', `[acp] 连接关闭：${error.message}`)
@@ -1047,7 +1184,9 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
       if (current.aborted) {
         finishTerminal(current.aborted.startsWith('任务超时') ? 'error' : 'cancelled', current.aborted)
       } else if (stopReason === 'end_turn') {
-        finishTerminal('done', 'AI 已完成研究。请检查改动；不满意可一键还原快照。')
+        const infrastructureFailure = aiInfrastructureFailure(current.transcript)
+        if (infrastructureFailure) finishTerminal('error', infrastructureFailure)
+        else finishTerminal('done', 'AI 已完成研究。请检查改动；不满意可一键还原快照。')
       } else if (stopReason === 'cancelled') {
         finishTerminal('cancelled', 'AI 会话已取消。')
       } else {
@@ -1104,6 +1243,7 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
     // 凭据锁目录：userData 下、工作区之外。
     const credentialsLockRoot = path.join(path.dirname(options.acpRuntimeRoot), CREDENTIALS_LOCK_DIRNAME)
     let credentialsLock: CredentialsLock | null = null
+    let repositorySource: AiRepositorySource | null = null
     try {
       const settings = await options.readSettings()
       const analysis = await options.analyzePlugin(input.repository, input.defaultBranch)
@@ -1117,12 +1257,30 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
       credentialsLock = await lockCredentialsOut(settings.dshHome, credentialsLockRoot)
       if (credentialsLock) log('已临时移出凭据文件，会话结束后自动还原。')
 
+      log('正在下载仓库供 AI 本地研究…')
+      let lastProgressPercent = -10
+      repositorySource = await prepareAiRepositorySource(
+        path.join(settings.dshHome, AI_REPOSITORY_SOURCE_DIRNAME),
+        input.repository,
+        input.defaultBranch,
+        (received, total) => {
+          if (!total) return
+          const percent = Math.round(Math.min(1, received / total) * 100)
+          if (percent < lastProgressPercent + 10 && percent !== 100) return
+          lastProgressPercent = percent
+          options.emitOutput('info', `[ai] 仓库下载 ${percent}%（${received}/${total} bytes）`)
+        },
+      )
+      log(`仓库本地副本已准备：${repositorySource.repositoryPath}`)
+
       const prompt = buildInstallPrompt({
         repository: input.repository,
         defaultBranch: input.defaultBranch,
         analysis,
         profileName: settings.profileName,
         workspace: settings.dshHome,
+        repositoryPath: repositorySource.repositoryPath,
+        shell: process.platform === 'win32' ? 'pwsh' : 'bash',
         dshCliCommand: dshCliCommandHint(settings),
       })
 
@@ -1144,6 +1302,11 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
       options.emitEvent({ kind: 'error', message })
       return { ok: false, message }
     } finally {
+      if (repositorySource) {
+        await rm(repositorySource.taskRoot, { recursive: true, force: true }).catch(error => {
+          options.emitOutput('error', `[ai] 清理仓库临时副本失败：${asError(error, '未知错误').message}`)
+        })
+      }
       if (credentialsLock) {
         try {
           await restoreCredentialsLock(credentialsLock)

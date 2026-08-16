@@ -37,6 +37,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.settingsGet, () => settings.read())
   ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => settings.save(next))
   ipcMain.handle(IPC.dshDetect, () => installer.detectDsh())
+  ipcMain.handle(IPC.dshUpdateCheck, () => installer.checkDshUpdate())
 
   ipcMain.handle(IPC.credentialStatus, async () => {
     const current = await settings.read()

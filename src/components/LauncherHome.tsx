@@ -1,6 +1,6 @@
-import { Box, CircleStop, Download, ExternalLink, KeyRound, LoaderCircle, Play, Settings, X } from 'lucide-react'
+import { Box, CircleStop, Download, ExternalLink, KeyRound, LoaderCircle, Play, RefreshCw, Settings, X } from 'lucide-react'
 import packageMetadata from '../../package.json'
-import type { AppSettings, DshInstallationStatus, InstallProgress, ProfileState, RuntimeState } from '../types'
+import type { AppSettings, DshInstallationStatus, DshUpdateStatus, InstallProgress, ProfileState, RuntimeState } from '../types'
 
 /** 启动页：无边框小窗口，只暴露最少的几个动作。 */
 
@@ -9,12 +9,14 @@ interface LauncherHomeProps {
   profile: ProfileState
   runtime: RuntimeState
   dshInstallation: DshInstallationStatus
+  dshUpdate: DshUpdateStatus | null
   installProgress: InstallProgress | null
   busy: boolean
   installingDsh: boolean
   onCredential: () => void
   onManage: () => void
   onToggleRuntime: () => void
+  onUpdateDsh: () => void
   onOpenHarness: () => void
   onClose: () => void
 }
@@ -24,12 +26,14 @@ export function LauncherHome({
   profile,
   runtime,
   dshInstallation,
+  dshUpdate,
   installProgress,
   busy,
   installingDsh,
   onCredential,
   onManage,
   onToggleRuntime,
+  onUpdateDsh,
   onOpenHarness,
   onClose,
 }: LauncherHomeProps) {
@@ -51,6 +55,13 @@ export function LauncherHome({
           <span className="launcher-kicker">LOCAL AI WORKSPACE</span>
           <h1>DeepSeek Harness</h1>
           <p>{needsInstallation ? '首次部署准备' : `本地 DSH ${dshInstallation.version ?? ''}`} · {profile.activeBundles.length} 个加载层</p>
+          {dshUpdate?.state === 'update-available' && (
+            <div className="launcher-update-notice" role="status">
+              <RefreshCw size={14} />
+              <span><strong>发现新版本 {dshUpdate.remoteVersion}</strong><small>本地 {dshUpdate.localVersion}，可以更新</small></span>
+              <button type="button" onClick={onUpdateDsh} disabled={busy} title="更新 DSH">更新</button>
+            </div>
+          )}
         </div>
 
         <div className="launcher-controls">

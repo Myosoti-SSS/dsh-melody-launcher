@@ -31,6 +31,7 @@ export const IPC = {
   settingsGet: 'settings:get',
   settingsSave: 'settings:save',
   dshDetect: 'dsh:detect-installation',
+  dshUpdateCheck: 'dsh:check-update',
   credentialStatus: 'credentials:deepseek-status',
   credentialSet: 'credentials:deepseek-set',
   credentialClear: 'credentials:deepseek-clear',

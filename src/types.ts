@@ -99,6 +99,15 @@ export interface DshInstallationStatus {
   source: 'launcher' | 'system' | null
 }
 
+export interface DshUpdateStatus {
+  state: 'not-installed' | 'up-to-date' | 'update-available' | 'error'
+  localVersion: string | null
+  remoteVersion: string | null
+  repository: string
+  checkedAt: string
+  message: string
+}
+
 export interface SkillInstallTarget {
   id: string
   name: string
@@ -233,6 +242,7 @@ export interface LauncherApi {
   getSettings(): Promise<AppSettings>
   saveSettings(settings: AppSettings): Promise<AppSettings>
   detectDshInstallation(): Promise<DshInstallationStatus>
+  checkDshUpdate(): Promise<DshUpdateStatus>
   getDeepSeekCredentialStatus(): Promise<CredentialStatus>
   setDeepSeekApiKey(apiKey: string): Promise<CredentialStatus>
   clearDeepSeekApiKey(): Promise<CredentialStatus>

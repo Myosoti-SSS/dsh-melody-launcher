@@ -7,6 +7,7 @@ import type {
   AppSettings,
   CredentialStatus,
   DshInstallationStatus,
+  DshUpdateStatus,
   InstallProgress,
   InstalledSkill,
   ManagedPlugin,
@@ -36,6 +37,7 @@ export function useLauncherStore() {
   const [profile, setProfile] = useState<ProfileState | null>(null)
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME_STATE)
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
+  const [dshUpdate, setDshUpdate] = useState<DshUpdateStatus | null>(null)
   const [installProgress, setInstallProgress] = useState<InstallProgress | null>(null)
   const [installedRepositories, setInstalledRepositories] = useState<Set<string>>(new Set())
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([])
@@ -53,6 +55,7 @@ export function useLauncherStore() {
   }, [])
 
   useEffect(() => {
+    let disposed = false
     void Promise.all([
       api.getSettings(),
       api.readProfile(),
@@ -73,12 +76,20 @@ export function useLauncherStore() {
       .catch(error => showToast({ kind: 'error', message: errorText(error) }))
       .finally(() => setLoading(false))
 
+    // 更新检查必须在后台进行，网络不可用时不能阻塞启动页。
+    void api.checkDshUpdate()
+      .then(next => { if (!disposed) setDshUpdate(next) })
+      .catch(() => { /* 主进程已把网络失败转换为状态；演示 API 也不应阻塞启动 */ })
+
     const unsubscribers = [
       api.onRuntimeOutput(output => setLogs(current => [...current.slice(-(MAX_LOG_LINES - 1)), output])),
       api.onRuntimeState(setRuntime),
       api.onInstallProgress(setInstallProgress),
     ]
-    return () => unsubscribers.forEach(unsubscribe => unsubscribe())
+    return () => {
+      disposed = true
+      unsubscribers.forEach(unsubscribe => unsubscribe())
+    }
   }, [api, showToast])
 
   const refreshProfile = useCallback(async () => {
@@ -118,24 +129,31 @@ export function useLauncherStore() {
     setInstallProgress(current => current?.repository === repository ? null : current)
   }, [])
 
+  const installDsh = useCallback(async (): Promise<RepositoryInstallResult | undefined> => {
+    setInstallProgress({
+      repository: DSH_REPOSITORY,
+      kind: 'dsh',
+      phase: 'preparing',
+      percent: 0,
+      message: '正在准备本地 DSH',
+    })
+    const result = await run(BUSY.dshInstall, () => api.installPlugin(DSH_REPOSITORY), {
+      success: installed => `本地 DSH ${installed.dshInstallation.version ?? ''} 已安装，可以启动。`,
+    })
+    if (!result) return undefined
+    applyInstallResult(result)
+    void api.checkDshUpdate().then(setDshUpdate).catch(() => undefined)
+    return result
+  }, [api, applyInstallResult, run])
+
   /**
    * 首页主按钮。尚未安装 DSH 时先完成部署，之后才是启动/停止。
    */
   const toggleRuntime = useCallback(async (): Promise<RuntimeToggleResult> => {
     const needsInstallation = !runtime.running && !dshInstallation.installed
     if (needsInstallation) {
-      setInstallProgress({
-        repository: DSH_REPOSITORY,
-        kind: 'dsh',
-        phase: 'preparing',
-        percent: 0,
-        message: '正在准备本地 DSH',
-      })
-      const result = await run(BUSY.dshInstall, () => api.installPlugin(DSH_REPOSITORY), {
-        success: installed => `本地 DSH ${installed.dshInstallation.version ?? ''} 已安装，可以启动。`,
-      })
+      const result = await installDsh()
       if (!result) return 'failed'
-      applyInstallResult(result)
       return 'installed'
     }
 
@@ -144,7 +162,12 @@ export function useLauncherStore() {
     if (!next) return 'failed'
     setRuntime(next)
     return wasRunning ? 'stopped' : 'started'
-  }, [api, applyInstallResult, dshInstallation.installed, run, runtime.running])
+  }, [dshInstallation.installed, installDsh, run, runtime.running])
+
+  const updateDsh = useCallback(async (): Promise<boolean> => {
+    const result = await installDsh()
+    return result !== undefined
+  }, [installDsh])
 
   const saveSettings = useCallback(async (next: AppSettings): Promise<boolean> => {
     const saved = await run(BUSY.settings, async () => {
@@ -220,6 +243,7 @@ export function useLauncherStore() {
     profile,
     runtime,
     dshInstallation,
+    dshUpdate,
     installProgress,
     installedRepositories,
     installedSkills,
@@ -243,6 +267,7 @@ export function useLauncherStore() {
     beginInstall,
     finishInstall,
     toggleRuntime,
+    updateDsh,
     saveSettings,
     saveApiKey,
     clearApiKey,
