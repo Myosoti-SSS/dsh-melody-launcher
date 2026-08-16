@@ -1,4 +1,4 @@
-export type ViewName = 'plugins' | 'discover' | 'runtime'
+export type ViewName = 'plugins' | 'discover' | 'runtime' | 'packs'
 export type WindowMode = 'launcher' | 'manager'
 
 export interface AppSettings {
@@ -62,7 +62,7 @@ export interface CatalogRepositoryResult {
 
 export type PluginInstallability = 'ready' | 'choice' | 'dynamic' | 'application' | 'invalid'
 
-export type PluginInstallSource = 'npm' | 'github' | 'archive-subdirectory'
+export type PluginInstallSource = 'npm' | 'github' | 'archive-subdirectory' | 'local-directory'
 
 export interface PluginInstallTarget {
   id: string
@@ -76,6 +76,8 @@ export interface PluginInstallTarget {
   requiresBuild: boolean
   buildScripts: string[]
   nodeRange: string | null
+  /** `local-directory` 源专用：本地插件本体所在目录（已存在的绝对路径）。 */
+  localDirectory?: string
 }
 
 export interface RepositoryAnalysis {
@@ -90,6 +92,7 @@ export interface PluginInstallRequest {
   repository: string
   defaultBranch: string
   targetId: string
+  profileName?: string // 安装到指定 profile
 }
 
 export interface DshInstallationStatus {
@@ -170,6 +173,12 @@ export interface CatalogDiscoveryResult {
   installedSkills: InstalledSkill[]
 }
 
+/** 从 GitHub 链接导入的结果：市场行 + 已完成的仓库分析。 */
+export interface CatalogImportResult {
+  repository: CatalogRepositoryResult
+  analysis: CatalogRepositoryAnalysis
+}
+
 export interface InstallProgress {
   repository: string
   kind: 'plugin' | 'dsh' | 'skill'
@@ -238,6 +247,103 @@ export interface AiInstallResult {
   message: string
 }
 
+// ===================== 整合包（Pack）管理 =====================
+
+export type PackSource = 'created' | 'zip' | 'manifest' | 'raw'
+
+export interface PackPluginEntry {
+  packageName: string
+  repository?: string        // github 源
+  source?: 'github' | 'npm' | 'local'
+  subdirectory?: string
+  commit?: string
+  version?: string
+}
+
+export interface PackManifest {
+  name: string
+  description: string
+  version: string
+  author?: string
+  plugins: PackPluginEntry[]
+  skills?: unknown[]          // v1 预留，忽略
+}
+
+export interface PackAnalysisItem {
+  packageName: string
+  available: boolean          // 能否安装
+  offline: boolean            // 插件本体是否在 zip 内（离线装）
+  kind?: 'plugin' | 'skill'   // 缺省为插件；技能项的 packageName 即技能名
+  reason?: string             // 不可装原因
+}
+
+export interface PackAnalysis {
+  id: string                  // = pack-<safeName>
+  name: string
+  description: string
+  version: string
+  source: PackSource
+  items: PackAnalysisItem[]
+}
+
+export interface PackInstalledPlugin {
+  packageName: string
+  enabled: boolean
+  version?: string
+}
+
+/** raw 整合包导入的技能（全局安装，记入包以支持删包清理）。 */
+export interface PackInstalledSkill {
+  name: string
+  format: 'bundle' | 'flat'
+  enabled: boolean
+  description?: string
+}
+
+export interface PackStatus {
+  id: string
+  name: string
+  description: string
+  version: string
+  source: PackSource
+  enabled: boolean            // 当前 profile 是否为它
+  state: 'complete' | 'partial' | 'failed'
+  plugins: PackInstalledPlugin[]
+  skills?: PackInstalledSkill[]
+  /** state 为 partial/failed 时的失败项（含原因），完整包缺省省略。 */
+  failures?: { packageName: string; reason: string }[]
+  installedAt: string
+  updatedAt: string
+}
+
+export interface PackCreateRequest {
+  name: string
+  description?: string
+  packageNames: string[]      // 从已安装插件勾选的包名
+}
+
+/** importPack 的可选覆盖项（raw 导入时的包名覆盖）。 */
+export interface PackImportOptions {
+  name?: string
+}
+
+export interface PackInstallResult {
+  id: string
+  installed: string[]
+  failures: { packageName: string; reason: string }[]
+  state: 'complete' | 'partial' | 'failed'
+}
+
+export type PackProgressEvent =
+  | { kind: 'status'; message: string }
+  | { kind: 'phase'; phase: string; itemIndex?: number; itemTotal?: number }
+  | { kind: 'item-start'; packageName: string; offline: boolean }
+  | { kind: 'item-done'; packageName: string; ok: boolean; reason?: string }
+  | { kind: 'snapshot' }
+  | { kind: 'done'; result: PackInstallResult }
+  | { kind: 'cancelled' }
+  | { kind: 'error'; message: string }
+
 export interface LauncherApi {
   getSettings(): Promise<AppSettings>
   saveSettings(settings: AppSettings): Promise<AppSettings>
@@ -248,10 +354,11 @@ export interface LauncherApi {
   clearDeepSeekApiKey(): Promise<CredentialStatus>
   chooseDirectory(kind: 'dshInstallPath' | 'dshHome' | 'workspace'): Promise<string | null>
   readProfile(): Promise<ProfileState>
-  togglePlugin(packageName: string, enabled: boolean): Promise<ProfileState>
+  togglePlugin(packageName: string, enabled: boolean, profileName?: string): Promise<ProfileState>
   reorderPlugins(packageNames: string[]): Promise<ProfileState>
   discoverCatalog(query: string, sort: 'stars' | 'updated', page: number): Promise<CatalogDiscoveryResult>
   analyzeCatalogRepository(fullName: string, defaultBranch: string): Promise<CatalogRepositoryAnalysis>
+  importCatalogUrl(url: string): Promise<CatalogImportResult>
   installPlugin(request: string | PluginInstallRequest): Promise<RepositoryInstallResult>
   uninstallPlugin(packageName: string): Promise<ProfileState>
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
@@ -270,6 +377,21 @@ export interface LauncherApi {
   aiRollback(): Promise<{ restored: number; profileName: string }>
   aiStatus(): Promise<AiInstallStatus>
   aiHasSnapshot(): Promise<boolean>
+  listPacks(): Promise<PackStatus[]>
+  createPack(request: PackCreateRequest): Promise<PackInstallResult>
+  analyzePackImport(path: string): Promise<PackAnalysis>
+  importPack(path: string, items?: string[], options?: PackImportOptions): Promise<PackInstallResult>
+  exportPack(packId: string): Promise<string | null>
+  pickPackFile(): Promise<string | null>
+  activatePack(packId: string): Promise<AppSettings>
+  deactivatePack(): Promise<AppSettings>
+  removePack(packId: string): Promise<{ removed: number }>
+  rollbackPack(): Promise<{ restored: number; profileName: string }>
+  packHasSnapshot(): Promise<boolean>
+  addPackPlugin(packId: string, packageName: string): Promise<PackStatus>
+  togglePackItem(packId: string, packageName: string, enabled: boolean): Promise<PackStatus>
+  removePackItem(packId: string, packageName: string): Promise<PackStatus>
+  onPackProgress(listener: (event: PackProgressEvent) => void): () => void
   onRuntimeOutput(listener: (output: RuntimeOutput) => void): () => void
   onRuntimeState(listener: (state: RuntimeState) => void): () => void
   onInstallProgress(listener: (progress: InstallProgress) => void): () => void

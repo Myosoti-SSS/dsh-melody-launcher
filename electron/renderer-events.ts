@@ -1,5 +1,5 @@
 import { IPC_EVENTS } from '../src/constants'
-import type { AiInstallEvent, InstallProgress, RuntimeOutput, RuntimeState } from '../src/types'
+import type { AiInstallEvent, InstallProgress, PackProgressEvent, RuntimeOutput, RuntimeState } from '../src/types'
 import type { RendererChannel } from './app-window'
 
 /** 主进程主动推送给渲染层的三类事件，统一在这里成形与发送。 */
@@ -14,6 +14,7 @@ export interface RendererEvents {
   runtimeState(state: RuntimeState): void
   installProgress(progress: InstallProgress): void
   aiInstallEvent(event: AiInstallEvent): void
+  packProgress(event: PackProgressEvent): void
 }
 
 export function createRendererEvents(
@@ -35,6 +36,9 @@ export function createRendererEvents(
     },
     aiInstallEvent(event) {
       channel.send(IPC_EVENTS.aiInstallEvent, event)
+    },
+    packProgress(event) {
+      channel.send(IPC_EVENTS.packProgress, event)
     },
   }
 }

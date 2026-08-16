@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FolderGit2,
   Layers3,
+  Link2,
   LoaderCircle,
   RefreshCw,
   ScanSearch,
@@ -135,6 +136,8 @@ export function DiscoverView({
     repo: CatalogRepositoryResult
     analysis: CatalogRepositoryAnalysis
   } | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importing, setImporting] = useState(false)
   const batchRunRef = useRef(0)
 
   const search = useCallback(async (searchQuery = query, searchSort = sort, searchPage = page) => {
@@ -246,6 +249,31 @@ export function DiscoverView({
     })
   }
 
+  const importFromUrl = async (url: string) => {
+    setImportOpen(false)
+    setImporting(true)
+    try {
+      const { repository, analysis } = await api.importCatalogUrl(url)
+      if (analysis.warnings.length === 0) {
+        writeCatalogAnalysisCache(repository.fullName, repository.defaultBranch, analysis)
+      }
+      onAnalysis(repository.fullName, analysis)
+      // 去重（忽略大小写）并移到列表顶部，与搜索结果同生命周期。
+      setRepositories(current => {
+        const without = current.filter(repo => repo.fullName.toLowerCase() !== repository.fullName.toLowerCase())
+        return [repository, ...without]
+      })
+      if (analysis.kind === 'hybrid'
+        || pluginTargets(analysis).length + skillTargets(analysis).length > 1) {
+        setTargetDialog({ repo: repository, analysis })
+      }
+    } catch (error) {
+      onError(errorText(error))
+    } finally {
+      setImporting(false)
+    }
+  }
+
   const installPlugin = async (repo: CatalogRepositoryResult, target?: PluginInstallTarget) => {
     const kind = repo.kind === 'dsh' ? 'dsh' : 'plugin'
     setInstalling({ repository: repo.fullName, kind })
@@ -335,6 +363,16 @@ export function DiscoverView({
           >
             {batchRunning ? <LoaderCircle className="spin" size={15} /> : <ScanSearch size={15} />}
             {batchRunning ? `检测 ${batchScan.completed}/${batchScan.total}` : batchScan ? '再次检测当前页' : '检测当前页'}
+          </button>
+          <button
+            type="button"
+            className="secondary-button catalog-scan-button"
+            disabled={loading || batchRunning || checking !== null || activeInstalling !== null || aiActive || importing}
+            onClick={() => setImportOpen(true)}
+            title="从 GitHub 链接导入仓库，加入市场并复用检测 / 安装流程"
+          >
+            {importing ? <LoaderCircle className="spin" size={15} /> : <Link2 size={15} />}
+            从链接导入
           </button>
         </div>
       </div>
@@ -525,9 +563,72 @@ export function DiscoverView({
           onInstallSkill={target => void installSkill(targetDialog.repo, target)}
         />
       )}
+
+      {importOpen && (
+        <ImportUrlDialog
+          busy={importing}
+          onImport={url => void importFromUrl(url)}
+          onClose={() => setImportOpen(false)}
+        />
+      )}
     </div>
   )
 }
+
+function ImportUrlDialog({
+  busy,
+  onImport,
+  onClose,
+}: {
+  busy: boolean
+  onImport: (url: string) => void
+  onClose: () => void
+}) {
+  const [url, setUrl] = useState('')
+  const trimmed = url.trim()
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target && !busy) onClose() }}>
+      <section className="modal import-url-dialog" role="dialog" aria-modal="true" aria-labelledby="import-url-title">
+        <header>
+          <div><Link2 size={18} /><h2 id="import-url-title">从 GitHub 链接导入</h2></div>
+          <button type="button" className="icon-button" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17} /></button>
+        </header>
+        <div className="modal-content">
+          <p className="target-dialog-summary">
+            粘贴 GitHub 仓库链接，例如 <code>https://github.com/owner/repo</code> 或 <code>git@github.com:owner/repo.git</code>。
+            导入后会加入市场列表，并复用同一套「检测 / 安装 / 选择组件」流程。
+          </p>
+          <form className="import-url-form" onSubmit={event => { event.preventDefault(); if (trimmed) onImport(trimmed) }}>
+            <input
+              value={url}
+              autoFocus
+              disabled={busy}
+              onChange={event => setUrl(event.target.value)}
+              placeholder="https://github.com/owner/repo"
+              aria-label="GitHub 仓库链接"
+            />
+            <button type="submit" className="primary-command" disabled={busy || !trimmed}>
+              <ScanSearch size={15} />导入并检测
+            </button>
+          </form>
+        </div>
+        <footer><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>取消</button></footer>
+      </section>
+      <style>{importUrlDialogStyle}</style>
+    </div>
+  )
+}
+
+const importUrlDialogStyle = `
+.import-url-dialog { width: min(520px, calc(100vw - 32px)); }
+.import-url-form { display: flex; gap: 8px; margin-top: 4px; align-items: center; }
+.import-url-form input {
+  flex: 1; min-width: 0; height: 34px; padding: 0 9px;
+  border: 1px solid var(--line-strong); border-radius: 5px;
+  color: var(--ink); background: #fff;
+  font-family: Consolas, "Segoe UI", sans-serif; font-size: 11px;
+}
+`
 
 function CatalogTargetDialog({
   repo,

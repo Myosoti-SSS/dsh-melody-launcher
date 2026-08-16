@@ -11,6 +11,7 @@ import type {
   InstallProgress,
   InstalledSkill,
   ManagedPlugin,
+  PackStatus,
   ProfileState,
   RepositoryInstallResult,
   RuntimeOutput,
@@ -44,6 +45,8 @@ export function useLauncherStore() {
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>({ configured: false })
   const [logs, setLogs] = useState<RuntimeOutput[]>([])
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null)
+  const [packs, setPacks] = useState<PackStatus[]>([])
+  const [packSnapshotsAvailable, setPackSnapshotsAvailable] = useState(false)
   const [loading, setLoading] = useState(true)
 
   /** 保留原选中项；它已不存在时退回列表首项。 */
@@ -63,8 +66,10 @@ export function useLauncherStore() {
       api.getDeepSeekCredentialStatus(),
       api.detectDshInstallation(),
       api.readInstalledSkills(),
+      api.listPacks(),
+      api.packHasSnapshot(),
     ])
-      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextDshInstallation, nextInstalledSkills]) => {
+      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextDshInstallation, nextInstalledSkills, nextPacks, nextPackSnapshot]) => {
         setSettings(nextSettings)
         setProfile(nextProfile)
         setRuntime(nextRuntime)
@@ -72,6 +77,8 @@ export function useLauncherStore() {
         setDshInstallation(nextDshInstallation)
         setInstalledSkills(nextInstalledSkills)
         setSelectedPlugin(nextProfile.plugins[0]?.packageName ?? null)
+        setPacks(nextPacks)
+        setPackSnapshotsAvailable(nextPackSnapshot)
       })
       .catch(error => showToast({ kind: 'error', message: errorText(error) }))
       .finally(() => setLoading(false))
@@ -236,6 +243,92 @@ export function useLauncherStore() {
     setSelectedPlugin(next.plugins[0]?.packageName ?? null)
   }, [api, run])
 
+  // ===================== 整合包（Pack）管理 =====================
+
+  const refreshPacks = useCallback(async () => {
+    const next = await run('pack-refresh', () => api.listPacks(), {
+      onError: error => showToast({ kind: 'error', message: errorText(error) }),
+    })
+    if (next) setPacks(next)
+  }, [api, run, showToast])
+
+  const refreshPackSnapshots = useCallback(async () => {
+    try {
+      setPackSnapshotsAvailable(await api.packHasSnapshot())
+    } catch {
+      setPackSnapshotsAvailable(false)
+    }
+  }, [api])
+
+  /** 包级写操作返回单个 PackStatus，原地替换列表项，避免整表刷新闪烁。 */
+  const applyPackUpdate = useCallback((next: PackStatus) => {
+    setPacks(current => current.map(pack => pack.id === next.id ? next : pack))
+  }, [])
+
+  const activatePack = useCallback(async (packId: string): Promise<boolean> => {
+    const next = await run(`pack-activate:${packId}`, async () => {
+      const settings = await api.activatePack(packId)
+      setSettings(settings)
+      await refreshProfile()
+      await refreshPacks()
+      return settings
+    }, { success: '整合包已启用，当前 Profile 已切换。' })
+    return next !== undefined
+  }, [api, refreshPacks, refreshProfile, run])
+
+  const deactivatePack = useCallback(async (): Promise<boolean> => {
+    const next = await run('pack-deactivate', async () => {
+      const settings = await api.deactivatePack()
+      setSettings(settings)
+      await refreshProfile()
+      await refreshPacks()
+      return settings
+    }, { success: '已停用整合包，恢复默认 Profile。' })
+    return next !== undefined
+  }, [api, refreshPacks, refreshProfile, run])
+
+  const removePack = useCallback(async (packId: string): Promise<boolean> => {
+    const next = await run(`pack-remove:${packId}`, async () => {
+      const result = await api.removePack(packId)
+      await refreshPacks()
+      return result
+    }, { success: result => `已删除 ${result.removed} 个整合包。` })
+    return next !== undefined
+  }, [api, refreshPacks, run])
+
+  const exportPack = useCallback(async (packId: string): Promise<string | null> => {
+    const path = await run(`pack-export:${packId}`, () => api.exportPack(packId))
+    if (path) showToast({ kind: 'success', message: `整合包已导出到 ${path}` })
+    return path ?? null
+  }, [api, run, showToast])
+
+  const addPackPlugin = useCallback(async (packId: string, packageName: string): Promise<boolean> => {
+    const next = await run(`pack-add:${packId}:${packageName}`, async () => {
+      const updated = await api.addPackPlugin(packId, packageName)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: `${packageName} 已加入整合包。` })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
+  const togglePackItem = useCallback(async (packId: string, packageName: string, enabled: boolean): Promise<boolean> => {
+    const next = await run(`pack-toggle:${packId}:${packageName}`, async () => {
+      const updated = await api.togglePackItem(packId, packageName, enabled)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: enabled ? '插件已启用。' : '插件已停用。' })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
+  const removePackItem = useCallback(async (packId: string, packageName: string): Promise<boolean> => {
+    const next = await run(`pack-remove-item:${packId}:${packageName}`, async () => {
+      const updated = await api.removePackItem(packId, packageName)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: `${packageName} 已从整合包移除。` })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
   return {
     // 状态
     loading,
@@ -251,6 +344,8 @@ export function useLauncherStore() {
     logs,
     selectedPlugin,
     selected: profile?.plugins.find(plugin => plugin.packageName === selectedPlugin) ?? null,
+    packs,
+    packSnapshotsAvailable,
     busy,
     toast,
 
@@ -275,6 +370,15 @@ export function useLauncherStore() {
     toggleSkill,
     reorderPlugins,
     uninstallPlugin,
+    refreshPacks,
+    refreshPackSnapshots,
+    activatePack,
+    deactivatePack,
+    removePack,
+    exportPack,
+    addPackPlugin,
+    togglePackItem,
+    removePackItem,
   }
 }
 
