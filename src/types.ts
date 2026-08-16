@@ -62,7 +62,7 @@ export interface CatalogRepositoryResult {
 
 export type PluginInstallability = 'ready' | 'choice' | 'dynamic' | 'application' | 'invalid'
 
-export type PluginInstallSource = 'npm' | 'github' | 'archive-subdirectory'
+export type PluginInstallSource = 'npm' | 'github' | 'archive-subdirectory' | 'local-directory'
 
 export interface PluginInstallTarget {
   id: string
@@ -76,6 +76,8 @@ export interface PluginInstallTarget {
   requiresBuild: boolean
   buildScripts: string[]
   nodeRange: string | null
+  /** `local-directory` 源专用：本地插件本体所在目录（已存在的绝对路径）。 */
+  localDirectory?: string
 }
 
 export interface RepositoryAnalysis {

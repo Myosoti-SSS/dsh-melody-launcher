@@ -208,6 +208,7 @@ function targetPreference(target: PluginInstallTarget): [number, number, number,
     npm: 0,
     github: 1,
     'archive-subdirectory': 2,
+    'local-directory': 3,
   }
   const directory = target.subdirectory ?? ''
   const depth = directory ? directory.split('/').length : 0

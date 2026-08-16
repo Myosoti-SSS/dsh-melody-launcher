@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { DSH_PACKAGE_NAME } from '../src/constants'
+import { DEFAULT_PROFILE_NAME, DSH_PACKAGE_NAME } from '../src/constants'
 import type {
   AppSettings,
   CatalogRepositoryAnalysis,
@@ -9,6 +9,7 @@ import type {
   DshUpdateStatus,
   InstallProgress,
   InstalledSkill,
+  PluginInstallTarget,
   ProfileState,
   RepositoryAnalysis,
   RepositoryInstallResult,
@@ -17,7 +18,7 @@ import type {
   SkillInstallResult,
   SkillRepositoryAnalysis,
 } from '../src/types'
-import { runCommand, type OutputLevel } from './command'
+import { runCommand, type CommandOptions, type CommandResult, type OutputLevel } from './command'
 import { classifyCatalogRepository } from './catalog-analysis'
 import {
   findInstalledDsh,
@@ -31,7 +32,7 @@ import { resolveNodeExecutable, type NodeRuntime, type NodeRuntimeProgress } fro
 import { approveIgnoredGitHubBuilds } from './plugin-install'
 import { analyzeRepository } from './plugin-catalog'
 import { prepareSubdirectoryPlugin } from './plugin-source'
-import { readPluginReceipts, recordPluginInstall } from './plugin-receipts'
+import { readPluginReceipts, recordPluginInstall, removePluginReceipt } from './plugin-receipts'
 import { readProfile } from './profile'
 import { withExecutableDirectoryOnPath } from './process'
 import { analyzeSkillRepository } from './skill-catalog'
@@ -63,6 +64,28 @@ export function buildPluginCommandArgs(
   return [...prefix, 'plugin', '--profile', profileName ?? settings.profileName, ...args]
 }
 
+/**
+ * 解析插件最终装入的 Profile：调用方显式覆盖优先，其次取组件自身的建议，
+ * 都没有时回落到默认 Profile。
+ */
+export function resolveInstallProfile(target: PluginInstallTarget, override?: string): string {
+  return override ?? target.profileName ?? DEFAULT_PROFILE_NAME
+}
+
+/** 校验 `local-directory` 源的本地插件本体目录，返回可用于 pnpm `file:` 源的路径。 */
+export function validateLocalPluginDirectory(localDirectory?: string): string {
+  if (!localDirectory || !path.isAbsolute(localDirectory)) {
+    throw new Error('本地插件目录无效，必须是绝对路径。')
+  }
+  if (!existsSync(localDirectory)) {
+    throw new Error(`本地插件目录不存在：${localDirectory}`)
+  }
+  if (!existsSync(path.join(localDirectory, 'package.json'))) {
+    throw new Error(`本地插件目录中没有找到 package.json：${localDirectory}`)
+  }
+  return localDirectory
+}
+
 export interface InstallerOptions {
   readSettings: () => Promise<AppSettings>
   saveSettings: (settings: AppSettings) => Promise<AppSettings>
@@ -77,13 +100,18 @@ export interface InstallerOptions {
   emitOutput: (level: RuntimeOutput['level'], text: string) => void
   emitProgress: (progress: InstallProgress) => void
   isRuntimeRunning: () => boolean
+  /** 测试注入用的命令执行器替身；缺省用真实 runCommand。 */
+  runCommand?: (executable: string, args: string[], options: CommandOptions) => Promise<CommandResult>
 }
 
 export interface Installer {
   /** 安装一个 GitHub 仓库；识别为 DSH 本体时走本体安装流程。 */
   install(fullName: string): Promise<RepositoryInstallResult>
-  /** 安装一个已选定的插件组件；调用前需先 analyze。 */
-  installPluginTarget(request: { repository: string; defaultBranch: string; targetId: string }): Promise<RepositoryInstallResult>
+  /** 安装一个已选定的插件组件；调用前需先 analyze。profileOverride 用于把插件装进指定 Profile。 */
+  installPluginTarget(
+    request: { repository: string; defaultBranch: string; targetId: string },
+    profileOverride?: string,
+  ): Promise<RepositoryInstallResult>
   /** 检测一个插件仓库，返回可安装组件清单（带 5 分钟缓存）。 */
   analyzePlugin(fullName: string, defaultBranch: string): Promise<RepositoryAnalysis>
   /** 检测一个 Skill 仓库，返回可安装组件清单（带 5 分钟缓存）。 */
@@ -98,8 +126,8 @@ export interface Installer {
   toggleSkill(name: string, enabled: boolean): Promise<InstalledSkill[]>
   /** 汇总当前 Profile 与安装凭据里已安装的仓库，用于在列表中标记「已安装」。 */
   listInstalledRepositories(): Promise<string[]>
-  /** 从当前 Profile 中卸载一个插件。 */
-  remove(packageName: string): Promise<ProfileState>
+  /** 从指定 Profile 中卸载一个插件（缺省为当前 Profile）。 */
+  remove(packageName: string, profileName?: string): Promise<ProfileState>
   detectDsh(): Promise<DshInstallationStatus>
   checkDshUpdate(): Promise<DshUpdateStatus>
   isBusy(): boolean
@@ -112,6 +140,7 @@ const DOWNLOAD_PROGRESS_FLOOR = 28
 
 export function createInstaller(options: InstallerOptions): Installer {
   let active: InstallProgress | null = null
+  const executeCommand = options.runCommand ?? runCommand
 
   const emit = (progress: InstallProgress) => {
     active = progress
@@ -245,7 +274,7 @@ export function createInstaller(options: InstallerOptions): Installer {
 
     let result
     try {
-      result = await runCommand(executable, commandArgs, {
+      result = await executeCommand(executable, commandArgs, {
         cwd: settings.workspace,
         env: withExecutableDirectoryOnPath(nodeRuntime.node, {
           ...process.env,
@@ -300,7 +329,7 @@ export function createInstaller(options: InstallerOptions): Installer {
     const tracker = trackPackageProgress(repository, 'dsh', '正在下载并安装 DSH')
     let result
     try {
-      result = await runCommand(nodeRuntime.npm, [
+      result = await executeCommand(nodeRuntime.npm, [
         'install',
         '--prefix', runtimeRoot,
         '--save-exact',
@@ -358,7 +387,7 @@ export function createInstaller(options: InstallerOptions): Installer {
       : path.basename(executable).toLowerCase().startsWith('dsh')
         ? []
         : ['--yes', DSH_PACKAGE_NAME]
-    const result = await runCommand(executable, [...prefix, '--profile', profileName, '--dump-config'], {
+    const result = await executeCommand(executable, [...prefix, '--profile', profileName, '--dump-config'], {
       cwd: settings.workspace,
       env: withExecutableDirectoryOnPath(nodeRuntime.node, {
         ...process.env,
@@ -412,10 +441,12 @@ export function createInstaller(options: InstallerOptions): Installer {
       }
     },
 
-    async remove(packageName: string): Promise<ProfileState> {
+    async remove(packageName: string, profileName?: string): Promise<ProfileState> {
       const settings = await options.readSettings()
-      await runPluginCommand(['remove', packageName])
-      return readProfile(settings.dshHome, settings.profileName)
+      const targetProfile = profileName ?? settings.profileName
+      await runPluginCommand(['remove', packageName], undefined, true, targetProfile)
+      await removePluginReceipt(options.pluginReceiptsPath, targetProfile, packageName)
+      return readProfile(settings.dshHome, targetProfile)
     },
 
     analyzePlugin,
@@ -446,7 +477,10 @@ export function createInstaller(options: InstallerOptions): Installer {
       return [...repositories]
     },
 
-    async installPluginTarget(request: { repository: string; defaultBranch: string; targetId: string }): Promise<RepositoryInstallResult> {
+    async installPluginTarget(
+      request: { repository: string; defaultBranch: string; targetId: string },
+      profileOverride?: string,
+    ): Promise<RepositoryInstallResult> {
       const fullName = request.repository
       if (active) throw new Error(`正在安装 ${active.repository}，请等待当前任务完成。`)
       emit({ repository: fullName, kind: 'plugin', phase: 'preparing', percent: 5, message: '正在检查插件结构' })
@@ -454,12 +488,15 @@ export function createInstaller(options: InstallerOptions): Installer {
         const analysis = await analyzePlugin(fullName, request.defaultBranch)
         const target = analysis.targets.find(item => item.id === request.targetId)
         if (!target) throw new Error(analysis.summary || '所选插件组件已经失效，请重新检测仓库。')
+        const profileName = resolveInstallProfile(target, profileOverride)
 
         let specifier: string
         if (target.source === 'npm') {
           specifier = target.version ? `${target.packageName}@${target.version}` : target.packageName
         } else if (target.source === 'github') {
           specifier = `github:${fullName}#${target.commit}`
+        } else if (target.source === 'local-directory') {
+          specifier = `file:${validateLocalPluginDirectory(target.localDirectory)}`
         } else {
           const packageDirectory = await prepareSubdirectoryPlugin(
             options.pluginSourceRoot,
@@ -470,37 +507,37 @@ export function createInstaller(options: InstallerOptions): Installer {
           specifier = `file:${packageDirectory}`
         }
 
-        await runPluginCommand(['add', specifier], fullName, true, target.profileName)
+        await runPluginCommand(['add', specifier], fullName, true, profileName)
         emit({ repository: fullName, kind: 'plugin', phase: 'configuring', percent: 88, message: '正在核对插件加载顺序' })
         const settings = await options.readSettings()
-        const installedProfile = await readProfile(settings.dshHome, target.profileName)
+        const installedProfile = await readProfile(settings.dshHome, profileName)
         const installedPlugin = installedProfile.plugins.find(plugin => plugin.packageName === target.packageName)
         if (!installedPlugin?.enabled || !installedPlugin.compatible) {
           throw new Error('包已下载，但 DSH 没有把它识别为有效 Bundle。请检查插件清单和补丁文件。')
         }
         emit({ repository: fullName, kind: 'plugin', phase: 'verifying', percent: 94, message: '正在验证插件组合配置' })
-        await verifyProfileComposition(target.profileName, fullName)
+        await verifyProfileComposition(profileName, fullName)
         await recordPluginInstall(options.pluginReceiptsPath, {
           repository: fullName,
           packageName: target.packageName,
-          profileName: target.profileName,
+          profileName,
           source: target.source,
           subdirectory: target.subdirectory,
           version: target.version,
           commit: target.commit,
           installedAt: new Date().toISOString(),
         })
-        const profile = target.profileName === settings.profileName
+        const profile = profileName === settings.profileName
           ? installedProfile
           : await readProfile(settings.dshHome, settings.profileName)
         const dshInstallation = await detectDsh()
-        emit({ repository: fullName, kind: 'plugin', phase: 'complete', percent: 100, message: `插件已安装到 ${target.profileName} Profile` })
+        emit({ repository: fullName, kind: 'plugin', phase: 'complete', percent: 100, message: `插件已安装到 ${profileName} Profile` })
         return {
           kind: 'plugin',
           profile,
           settings,
           dshInstallation,
-          installedProfileName: target.profileName,
+          installedProfileName: profileName,
           packageName: target.packageName,
         }
       } catch (error) {
