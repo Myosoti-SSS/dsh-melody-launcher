@@ -109,7 +109,15 @@ export interface Installer {
   install(fullName: string): Promise<RepositoryInstallResult>
   /** 安装一个已选定的插件组件；调用前需先 analyze。profileOverride 用于把插件装进指定 Profile。 */
   installPluginTarget(
-    request: { repository: string; defaultBranch: string; targetId: string },
+    request: {
+      repository: string
+      defaultBranch: string
+      targetId: string
+      /** 整合包声明的固定 commit（github 源），覆盖重新分析得到的 HEAD commit。 */
+      commit?: string
+      /** 整合包声明的固定版本（npm 源），覆盖重新分析得到的版本。 */
+      version?: string
+    },
     profileOverride?: string,
   ): Promise<RepositoryInstallResult>
   /** 检测一个插件仓库，返回可安装组件清单（带 5 分钟缓存）。 */
@@ -478,7 +486,15 @@ export function createInstaller(options: InstallerOptions): Installer {
     },
 
     async installPluginTarget(
-      request: { repository: string; defaultBranch: string; targetId: string },
+      request: {
+        repository: string
+        defaultBranch: string
+        targetId: string
+        /** 整合包声明的固定 commit（github 源），覆盖重新分析得到的 HEAD commit。 */
+        commit?: string
+        /** 整合包声明的固定版本（npm 源），覆盖重新分析得到的版本。 */
+        version?: string
+      },
       profileOverride?: string,
     ): Promise<RepositoryInstallResult> {
       const fullName = request.repository
@@ -486,8 +502,12 @@ export function createInstaller(options: InstallerOptions): Installer {
       emit({ repository: fullName, kind: 'plugin', phase: 'preparing', percent: 5, message: '正在检查插件结构' })
       try {
         const analysis = await analyzePlugin(fullName, request.defaultBranch)
-        const target = analysis.targets.find(item => item.id === request.targetId)
-        if (!target) throw new Error(analysis.summary || '所选插件组件已经失效，请重新检测仓库。')
+        const found = analysis.targets.find(item => item.id === request.targetId)
+        if (!found) throw new Error(analysis.summary || '所选插件组件已经失效，请重新检测仓库。')
+        const target = { ...found }
+        // 尊重整合包声明的 pin：仓库已前进时仍按导出时的 commit / version 安装。
+        if (request.commit && target.source === 'github') target.commit = request.commit
+        if (request.version && target.source === 'npm') target.version = request.version
         const profileName = resolveInstallProfile(target, profileOverride)
 
         let specifier: string

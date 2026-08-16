@@ -114,6 +114,23 @@ describe('inspectPackZip', () => {
     expect([...inspection.bodyPackageNames].sort()).toEqual(['@demo/beta', '@demo/gamma', 'alpha'])
   })
 
+  it('按清单包名消歧嵌套 scoped：@my-scope/web-ui 解码为自身而非 @my/scope', () => {
+    const scopedManifest = `
+name: Scoped Nested
+description: nested scoped pack
+version: 1.0.0
+plugins:
+  - packageName: '@my-scope/web-ui'
+    source: npm
+`
+    const zip = makeZip({
+      'dsh-pack.yaml': scopedManifest,
+      'plugin-bodies/@my-scope/web-ui/package.json': JSON.stringify({ name: '@my-scope/web-ui' }),
+    })
+    const inspection = inspectPackZip(zip)
+    expect(inspection.bodyPackageNames).toEqual(['@my-scope/web-ui'])
+  })
+
   it('剥离整体套一层顶层目录', () => {
     const zip = makeZip({
       'pack-name/dsh-pack.yaml': manifestYaml,

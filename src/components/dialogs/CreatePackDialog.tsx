@@ -15,9 +15,12 @@ export interface CreatePackDialogProps {
   onClose: () => void
 }
 
-/** 与主进程/演示 API 一致的包 id 派生规则。 */
+/**
+ * 与主进程 pack-manifest.packProfileName 一致的包 id 派生规则（仅展示用预览）。
+ * 注意与主进程保持同一变换：仅小写化并把非 [a-z0-9._-] 字符替换为 `-`，不做首尾清理。
+ */
 export function packIdFromName(name: string): string {
-  const safe = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  const safe = name.toLowerCase().replace(/[^a-z0-9._-]/g, '-')
   return `pack-${safe || 'untitled'}`
 }
 

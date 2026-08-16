@@ -1,5 +1,5 @@
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { access, writeFile } from 'node:fs/promises'
+import { stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC } from '../src/constants'
 import type { AppSettings, PackCreateRequest, PluginInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
@@ -9,6 +9,7 @@ import { searchCatalogRepositories, type DiscoverySort } from './discovery'
 import type { Installer } from './installer'
 import type { AiInstaller } from './ai-install'
 import { packProfileName } from './pack-manifest'
+import { DEFAULT_PACK_ZIP_LIMITS } from './pack-zip'
 import type { PackManager } from './pack'
 import {
   isSafePackageName,
@@ -159,14 +160,17 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.aiCancel, () => aiInstaller.cancel())
   ipcMain.handle(IPC.aiRollback, () => aiInstaller.rollback())
 
-  /** 校验文件存在且为绝对路径。 */
+  /** 校验文件存在、为绝对路径，且文件体积不超过整合包上限（未读入前的第一道闸门）。 */
   async function assertPackFilePath(target: unknown): Promise<void> {
     if (typeof target !== 'string' || !path.isAbsolute(target)) throw new Error('路径无效。')
+    let stats
     try {
-      await access(target)
+      stats = await stat(target)
     } catch {
       throw new Error('文件不存在。')
     }
+    if (!stats.isFile()) throw new Error('不是文件。')
+    if (stats.size > DEFAULT_PACK_ZIP_LIMITS.maxArchiveBytes) throw new Error('整合包压缩包过大。')
   }
 
   ipcMain.handle(IPC.packsList, () => packManager.listPacks())

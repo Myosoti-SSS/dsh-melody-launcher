@@ -174,10 +174,17 @@ function createServices(): Services {
       if (!target.repository) throw new Error('缺少来源仓库，无法安装。')
       // 真实 installer 按 analysis.targets 的 id 定位，id 形如 `<packageName>:<subdir|.>`。
       const targetId = target.subdirectory ? `${target.packageName}:${target.subdirectory}` : `${target.packageName}:.`
-      await installer.installPluginTarget(
-        { repository: target.repository, defaultBranch: 'main', targetId },
-        target.profileName,
-      )
+      const request: {
+        repository: string
+        defaultBranch: string
+        targetId: string
+        commit?: string
+        version?: string
+      } = { repository: target.repository, defaultBranch: 'main', targetId }
+      // 转发整合包声明的 pin：github 用固定 commit，npm 用固定 version（0.0.0 是占位符，不转发）。
+      if (target.source === 'github' && target.commit) request.commit = target.commit
+      if (target.source === 'npm' && target.version && target.version !== '0.0.0') request.version = target.version
+      await installer.installPluginTarget(request, target.profileName)
     },
     remove: (packageName, profileName) => installer.remove(packageName, profileName),
     readProfile: (dshHome, profileName) => readProfile(dshHome, profileName),

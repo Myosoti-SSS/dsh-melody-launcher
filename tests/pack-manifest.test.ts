@@ -213,4 +213,18 @@ describe('buildManifestFromReceipts', () => {
     const manifest = buildManifestFromReceipts('pack-valid', receipts)
     expect(() => parsePackManifest(serializePackManifest(manifest))).not.toThrow()
   })
+
+  it('local-directory 源 receipt 映射为 source local（离线本体可再带出）', () => {
+    const manifest = buildManifestFromReceipts('pack-x', [{
+      repository: 'file:/some/path',
+      packageName: 'alpha',
+      profileName: 'pack-x',
+      source: 'local-directory',
+      subdirectory: null,
+      version: '1.0.0',
+      commit: '',
+      installedAt: '2026-08-16T00:00:00.000Z',
+    }])
+    expect(manifest.plugins).toEqual([{ packageName: 'alpha', source: 'local', version: '1.0.0' }])
+  })
 })

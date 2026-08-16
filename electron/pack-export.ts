@@ -4,6 +4,7 @@
 import { access } from 'node:fs/promises'
 import path from 'node:path'
 import type { PackManifest } from '../src/types'
+import { isSafePackageName } from './profile'
 import { buildPackZip } from './pack-zip'
 
 export interface PackBodyCollection {
@@ -20,15 +21,28 @@ async function exists(target: string): Promise<boolean> {
   }
 }
 
-/** 收集 profile 内 node_modules 中每个包名对应的目录；scoped 包为 node_modules/@scope/pkg，缺失的记入 missing。 */
+/**
+ * 收集 profile 内 node_modules 中每个包名对应的目录；scoped 包为 node_modules/@scope/pkg，缺失的记入 missing。
+ * packageName 必须通过安全校验，且拼接后的路径不得越出 node_modules，防止路径穿越。
+ */
 export async function collectPackBodies(
   packProfileDir: string,
   packageNames: string[],
 ): Promise<PackBodyCollection> {
   const bodies = new Map<string, string>()
   const missing: string[] = []
+  const nodeModulesDir = path.join(packProfileDir, 'node_modules')
   for (const packageName of packageNames) {
-    const directory = path.join(packProfileDir, 'node_modules', ...packageName.split('/'))
+    if (!isSafePackageName(packageName)) {
+      missing.push(packageName)
+      continue
+    }
+    const directory = path.join(nodeModulesDir, ...packageName.split('/'))
+    const relative = path.relative(nodeModulesDir, directory)
+    if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+      missing.push(packageName)
+      continue
+    }
     if (await exists(directory)) bodies.set(packageName, directory)
     else missing.push(packageName)
   }

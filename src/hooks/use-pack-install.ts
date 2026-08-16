@@ -131,7 +131,8 @@ export function usePackInstall(onSettled: () => void, showToast: (toast: ToastSt
         case 'done':
           setResult(event.result)
           setPhase('done')
-          setItemProgress(current => ({ current: null, done: event.result.installed.length, total: current.total || event.result.installed.length }))
+          // done 事件不覆盖逐项累计的 done 计数：item-done 已按项累加，结果里只统计成功的数量。
+          setItemProgress(current => ({ current: null, done: current.done, total: current.total }))
           appendLog('success', `整合包处理完成：成功安装 ${event.result.installed.length} 个组件。`)
           finish()
           break

@@ -270,6 +270,65 @@ describe('installPluginTarget with local-directory source', () => {
   })
 })
 
+describe('installPluginTarget with github source and pinned commit', () => {
+  function githubTarget(commit: string): PluginInstallTarget {
+    return {
+      id: 'demo-plugin:.',
+      packageName: 'demo-plugin',
+      version: '1.0.0',
+      source: 'github',
+      profileName: 'tui',
+      platform: 'unknown',
+      subdirectory: null,
+      commit,
+      requiresBuild: false,
+      buildScripts: [],
+      nodeRange: null,
+    }
+  }
+
+  it('优先使用请求里的固定 commit 构造 specifier，而不是重新分析得到的 HEAD commit', async () => {
+    vi.mocked(analyzeRepository).mockResolvedValue({
+      repository: 'demo/plugin',
+      defaultBranch: 'main',
+      installability: 'ready',
+      summary: 'ok',
+      targets: [githubTarget('c0ffee11')],
+    })
+    vi.mocked(readProfile).mockResolvedValue(profileState('tui', 'demo-plugin'))
+
+    const { installer, calls } = createTestInstaller()
+    await installer.installPluginTarget(
+      { repository: 'demo/plugin', defaultBranch: 'main', targetId: 'demo-plugin:.', commit: 'abc1234' },
+      'tui',
+    )
+
+    const addCall = calls.find(call => call.args.includes('add'))
+    expect(addCall).toBeDefined()
+    expect(addCall!.args).toContain('github:demo/plugin#abc1234')
+  })
+
+  it('未提供 pin 时回退到分析得到的 commit', async () => {
+    vi.mocked(analyzeRepository).mockResolvedValue({
+      repository: 'demo/plugin',
+      defaultBranch: 'main',
+      installability: 'ready',
+      summary: 'ok',
+      targets: [githubTarget('c0ffee11')],
+    })
+    vi.mocked(readProfile).mockResolvedValue(profileState('tui', 'demo-plugin'))
+
+    const { installer, calls } = createTestInstaller()
+    await installer.installPluginTarget(
+      { repository: 'demo/plugin', defaultBranch: 'main', targetId: 'demo-plugin:.' },
+      'tui',
+    )
+
+    const addCall = calls.find(call => call.args.includes('add'))
+    expect(addCall!.args).toContain('github:demo/plugin#c0ffee11')
+  })
+})
+
 describe('remove with profileName', () => {
   it('passes --profile to the CLI and removes the matching receipt', async () => {
     vi.mocked(readProfile).mockResolvedValue(profileState('tui', 'some-plugin'))

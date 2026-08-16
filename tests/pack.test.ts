@@ -1,10 +1,10 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, PackManifest, PackPluginEntry, ProfileState } from '../src/types'
 import { createPackManager, type PackInstallTarget } from '../electron/pack'
-import { buildPackZip } from '../electron/pack-zip'
+import { buildPackZip, inspectPackZip } from '../electron/pack-zip'
 import { readPackRegistry, upsertPackRecord, type PackRecord } from '../electron/pack-registry'
 import { recordPluginInstall, type PluginInstallReceipt } from '../electron/plugin-receipts'
 import { defaultSettings } from '../electron/settings'
@@ -196,6 +196,8 @@ describe('createPack', () => {
     expect(target.source).toBe('github')
     expect(target.subdirectory).toBe('packages/alpha')
     expect(target.repository).toBe('demo/owner')
+    // receipt 的固定 commit 保留在 target 上，供组装层转发为安装 pin。
+    expect(target.commit).toBe('abc1234')
   })
 
   it('无来源记录的包名进 failures，state = failed', async () => {
@@ -292,9 +294,9 @@ describe('importPack', () => {
     expect(target.source).toBe('local-directory')
     expect(target.profileName).toBe('pack-offline-pack')
     expect(target.packageName).toBe('alpha')
-    expect(target.localDirectory).toBeDefined()
-    expect(target.localDirectory!.startsWith(os.tmpdir())).toBe(true)
-    expect(path.basename(target.localDirectory!)).toBe('alpha')
+    // 本体解到 pack profile 内的持久目录（.pack-bodies），安装后不删除，file: 引用不悬空。
+    expect(target.localDirectory).toBe(path.join(env.dshHome, 'profiles', 'pack-offline-pack', '.pack-bodies', 'alpha'))
+    expect(await readFile(path.join(target.localDirectory!, 'package.json'), 'utf8')).toContain('"name":"alpha"')
 
     await rm(bodyRoot, { recursive: true, force: true })
   })
@@ -480,6 +482,84 @@ describe('removePack', () => {
     expect(result.removed).toBe(0)
     expect(store.current.profileName).toBe('web')
     expect(store.saveSettings).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// rollback
+// ---------------------------------------------------------------------------
+
+describe('rollback', () => {
+  it('新建包失败后回滚：删除 profile 目录与注册表记录', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    stub.installPluginTarget.mockRejectedValue(new Error('boom'))
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const manifest: PackManifest = {
+      name: 'Roll',
+      description: 'roll',
+      version: '1.0.0',
+      plugins: [{ packageName: 'alpha', source: 'npm' }],
+    }
+    const zipPath = await writeZip(env, 'roll.zip', manifest, new Map())
+
+    const result = await manager.importPack(zipPath)
+    expect(result.state).toBe('failed')
+    expect(await readPackRegistry(env.registryPath)).toHaveLength(1)
+
+    const profileDir = path.join(env.dshHome, 'profiles', 'pack-roll')
+    expect(await readdir(profileDir)).toBeDefined()
+
+    const rolledBack = await manager.rollback()
+    expect(rolledBack.profileName).toBe('pack-roll')
+    // profile 目录与注册表记录都被清掉，等于撤销这次创建。
+    await expect(readdir(profileDir)).rejects.toThrow()
+    expect(await readPackRegistry(env.registryPath)).toEqual([])
+    expect(manager.hasSnapshot()).resolves.toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// exportPack
+// ---------------------------------------------------------------------------
+
+describe('exportPack', () => {
+  it('只收集 manifest 引用的插件本体（无来源记录的不进包）', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    stub.readProfile.mockResolvedValue({
+      ...defaultProfile,
+      plugins: [managedPlugin('alpha'), managedPlugin('ghost')],
+    })
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+    await upsertPackRecord(env.registryPath, recordFor('pack-x'))
+    await recordPluginInstall(env.pluginReceiptsPath, receipt('alpha', 'pack-x', 'npm'))
+
+    const alphaDir = path.join(env.dshHome, 'profiles', 'pack-x', 'node_modules', 'alpha')
+    await mkdir(alphaDir, { recursive: true })
+    await writeFile(path.join(alphaDir, 'package.json'), JSON.stringify({ name: 'alpha', version: '1.0.0' }))
+
+    const { zip } = await manager.exportPack('pack-x')
+    const inspection = inspectPackZip(zip)
+    expect(inspection.manifest.plugins).toEqual([{ packageName: 'alpha', source: 'npm', version: '1.2.3' }])
+    expect(inspection.bodyPackageNames).toEqual(['alpha'])
+  })
+
+  it('profile 中无 source 时导出 manifest-only 包（不失败）', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    stub.readProfile.mockResolvedValue({ ...defaultProfile, plugins: [] })
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+    await upsertPackRecord(env.registryPath, recordFor('pack-empty'))
+
+    const { zip } = await manager.exportPack('pack-empty')
+    const inspection = inspectPackZip(zip)
+    expect(inspection.hasBodies).toBe(false)
+    expect(inspection.manifest.plugins).toEqual([])
   })
 })
 

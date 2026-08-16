@@ -161,6 +161,10 @@ function receiptToPluginEntry(receipt: PluginInstallReceipt): PackPluginEntry {
     if (receipt.repository) entry.repository = receipt.repository
     if (receipt.subdirectory) entry.subdirectory = receipt.subdirectory
     if (receipt.commit) entry.commit = receipt.commit
+  } else if (receipt.source === 'local-directory') {
+    // 离线 zip 导入的本体：来源映射为 local，导出时 body 会原样带上（联网安装方需要它）。
+    entry.source = 'local'
+    if (receipt.version) entry.version = receipt.version
   } else {
     entry.source = 'npm'
     if (receipt.version) entry.version = receipt.version
