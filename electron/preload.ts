@@ -37,6 +37,7 @@ const api: LauncherApi = {
   reorderPlugins: packageNames => ipcRenderer.invoke(IPC.profileReorder, packageNames),
   discoverCatalog: (query, sort, page) => ipcRenderer.invoke(IPC.catalogDiscover, { query, sort, page }),
   analyzeCatalogRepository: (fullName, defaultBranch) => ipcRenderer.invoke(IPC.catalogAnalyze, { fullName, defaultBranch }),
+  importCatalogUrl: url => ipcRenderer.invoke(IPC.catalogImportUrl, { url }),
   installPlugin: request => ipcRenderer.invoke(IPC.pluginsInstall, request),
   uninstallPlugin: packageName => ipcRenderer.invoke(IPC.pluginsUninstall, packageName),
   installSkill: request => ipcRenderer.invoke(IPC.skillsInstall, request),

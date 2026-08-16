@@ -3,6 +3,7 @@ import type {
   AiInstallStatus,
   AppSettings,
   CatalogDiscoveryResult,
+  CatalogImportResult,
   CatalogRepositoryAnalysis,
   CatalogRepositoryResult,
   CredentialStatus,
@@ -20,6 +21,8 @@ import type {
   RuntimeState,
   SkillRepositoryAnalysis,
 } from './types'
+import { DSH_REPOSITORY } from './constants'
+import { parseGitHubImportUrl } from './lib/github-import'
 
 let demoSettings: AppSettings = {
   dshInstallPath: 'C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\dsh-runtime',
@@ -356,6 +359,30 @@ export const demoApi: LauncherApi = {
     }
   },
   analyzeCatalogRepository: async (fullName, defaultBranch) => demoCatalogAnalysis(fullName, defaultBranch),
+  importCatalogUrl: async (url): Promise<CatalogImportResult> => {
+    const parsed = parseGitHubImportUrl(url)
+    const branch = parsed.defaultBranch
+    const existing = demoRepositories.find(repo => repo.fullName.toLowerCase() === parsed.fullName.toLowerCase())
+    const repository: CatalogRepositoryResult = existing
+      ? { ...existing, defaultBranch: branch ?? existing.defaultBranch }
+      : {
+          id: -Math.abs(parsed.fullName.split('').reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) | 0, 0)),
+          fullName: parsed.fullName,
+          name: parsed.fullName.split('/')[1],
+          owner: parsed.fullName.split('/')[0],
+          description: '通过 GitHub 链接导入的仓库。',
+          url: `https://github.com/${parsed.fullName}`,
+          stars: 0,
+          language: null,
+          updatedAt: new Date().toISOString(),
+          topics: [],
+          defaultBranch: branch ?? 'main',
+          kind: parsed.fullName.toLowerCase() === DSH_REPOSITORY ? 'dsh' : 'repository',
+          candidateTypes: [],
+        }
+    const analysis = demoCatalogAnalysis(parsed.fullName, branch ?? repository.defaultBranch)
+    return { repository, analysis }
+  },
   installPlugin: async request => {
     const fullName = typeof request === 'string' ? request : request.repository
     const repo = demoRepositories.find(item => item.fullName === fullName)

@@ -173,6 +173,12 @@ export interface CatalogDiscoveryResult {
   installedSkills: InstalledSkill[]
 }
 
+/** 从 GitHub 链接导入的结果：市场行 + 已完成的仓库分析。 */
+export interface CatalogImportResult {
+  repository: CatalogRepositoryResult
+  analysis: CatalogRepositoryAnalysis
+}
+
 export interface InstallProgress {
   repository: string
   kind: 'plugin' | 'dsh' | 'skill'
@@ -304,6 +310,8 @@ export interface PackStatus {
   state: 'complete' | 'partial' | 'failed'
   plugins: PackInstalledPlugin[]
   skills?: PackInstalledSkill[]
+  /** state 为 partial/failed 时的失败项（含原因），完整包缺省省略。 */
+  failures?: { packageName: string; reason: string }[]
   installedAt: string
   updatedAt: string
 }
@@ -350,6 +358,7 @@ export interface LauncherApi {
   reorderPlugins(packageNames: string[]): Promise<ProfileState>
   discoverCatalog(query: string, sort: 'stars' | 'updated', page: number): Promise<CatalogDiscoveryResult>
   analyzeCatalogRepository(fullName: string, defaultBranch: string): Promise<CatalogRepositoryAnalysis>
+  importCatalogUrl(url: string): Promise<CatalogImportResult>
   installPlugin(request: string | PluginInstallRequest): Promise<RepositoryInstallResult>
   uninstallPlugin(packageName: string): Promise<ProfileState>
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>

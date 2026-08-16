@@ -6,6 +6,7 @@ import type { AppSettings, PackCreateRequest, PluginInstallRequest, SkillInstall
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
 import { searchCatalogRepositories, type DiscoverySort } from './discovery'
+import { importCatalogFromUrl } from './github-import'
 import type { Installer } from './installer'
 import type { AiInstaller } from './ai-install'
 import { assertMeaningfulPackName } from './pack-manifest'
@@ -108,6 +109,16 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.catalogAnalyze, async (_event, payload: { fullName: string; defaultBranch: string }) => {
     if (!isSafeRepositoryName(payload.fullName)) throw new Error('GitHub 仓库名称无效。')
     return installer.analyzeCatalogRepository(payload.fullName, payload.defaultBranch)
+  })
+  // 从 GitHub 链接导入：解析 → 取元数据 → 复用现有分析（只读，无需整合包互斥）。
+  ipcMain.handle(IPC.catalogImportUrl, async (_event, payload: { url: string }) => {
+    if (!payload || typeof payload.url !== 'string' || payload.url.trim().length === 0) {
+      throw new Error('请输入 GitHub 仓库链接。')
+    }
+    if (payload.url.length > 1000) throw new Error('GitHub 仓库链接过长。')
+    return importCatalogFromUrl(payload.url, (fullName, branch) =>
+      installer.analyzeCatalogRepository(fullName, branch),
+    )
   })
   ipcMain.handle(IPC.pluginsInstall, async (_event, request: string | PluginInstallRequest) => {
     if (packManager.isBusy()) throw new Error('整合包操作进行中')

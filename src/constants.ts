@@ -41,6 +41,7 @@ export const IPC = {
   profileReorder: 'profile:reorder',
   catalogDiscover: 'catalog:discover',
   catalogAnalyze: 'catalog:analyze',
+  catalogImportUrl: 'catalog:import-url',
   pluginsInstall: 'plugins:install',
   pluginsUninstall: 'plugins:uninstall',
   aiInstall: 'ai:install',
