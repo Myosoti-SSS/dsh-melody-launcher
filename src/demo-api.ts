@@ -12,6 +12,8 @@ import type {
   InstalledSkill,
   LauncherApi,
   ManagedPlugin,
+  PackProgressEvent,
+  PackStatus,
   ProfileState,
   RepositoryAnalysis,
   RuntimeOutput,
@@ -115,6 +117,41 @@ const outputListeners = new Set<(output: RuntimeOutput) => void>()
 const stateListeners = new Set<(state: RuntimeState) => void>()
 const installProgressListeners = new Set<(progress: InstallProgress) => void>()
 const aiEventListeners = new Set<(event: AiInstallEvent) => void>()
+const packProgressListeners = new Set<(event: PackProgressEvent) => void>()
+
+let demoPacks: PackStatus[] = [
+  {
+    id: 'pack-web-basic',
+    name: 'Web 基础包',
+    description: 'Web 工作台 + UI 集合，日常使用的基础组合。',
+    version: '1.0.0',
+    source: 'created',
+    enabled: true,
+    state: 'complete',
+    plugins: [
+      { packageName: '@deepseek-ai/dsh-base', enabled: true },
+      { packageName: '@deepseek-ai/dsh-web-app', enabled: true },
+      { packageName: '@zhu1090093659/dsh-web-ui', enabled: true },
+    ],
+    installedAt: '2026-08-10T08:00:00Z',
+    updatedAt: '2026-08-12T10:30:00Z',
+  },
+  {
+    id: 'pack-cc-tui',
+    name: 'CC TUI 终端包',
+    description: '终端交互界面专用组合。',
+    version: '0.9.0',
+    source: 'zip',
+    enabled: false,
+    state: 'complete',
+    plugins: [
+      { packageName: '@deepseek-harness-tui/dsh-tui', enabled: false },
+      { packageName: '@deepseek-ai/dsh-base', enabled: true },
+    ],
+    installedAt: '2026-08-11T14:00:00Z',
+    updatedAt: '2026-08-11T14:00:00Z',
+  },
+]
 let demoAiStatus: AiInstallStatus = { phase: 'idle', repository: null, startedAt: null, sessionId: null, message: '' }
 let demoAiResolve: ((allow: boolean) => void) | null = null
 let demoAiCancelled = false
@@ -467,6 +504,104 @@ export const demoApi: LauncherApi = {
   },
   aiStatus: async () => demoAiStatus,
   aiHasSnapshot: async () => demoAiStatus.phase !== 'idle',
+  listPacks: async () => demoPacks.map(pack => ({ ...pack, plugins: pack.plugins.map(plugin => ({ ...plugin })) })),
+  createPack: async request => {
+    const now = new Date().toISOString()
+    const id = `pack-${request.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled'}`
+    const pack: PackStatus = {
+      id,
+      name: request.name,
+      description: request.description ?? '',
+      version: '1.0.0',
+      source: 'created',
+      enabled: true,
+      state: 'complete',
+      plugins: request.packageNames.map(packageName => ({ packageName, enabled: true })),
+      installedAt: now,
+      updatedAt: now,
+    }
+    demoPacks = [...demoPacks.filter(item => item.id !== id), pack]
+    return { id, installed: request.packageNames, failures: [], state: 'complete' }
+  },
+  analyzePackImport: async () => ({
+    id: 'pack-import-demo',
+    name: '导入的示例包',
+    description: '从 zip / manifest 解析出的整合包。',
+    version: '0.1.0',
+    source: 'zip',
+    items: [
+      { packageName: '@deepseek-ai/dsh-web-app', available: true, offline: true },
+      { packageName: '@zhu1090093659/dsh-web-ui', available: true, offline: false },
+      { packageName: '@liustack/modlens', available: false, offline: false, reason: '插件本体不在包内且当前离线' },
+    ],
+  }),
+  importPack: async (_path, items) => {
+    const installed = items?.length ? items : ['@deepseek-ai/dsh-web-app', '@zhu1090093659/dsh-web-ui']
+    return { id: 'pack-import-demo', installed, failures: [], state: 'complete' }
+  },
+  exportPack: async packId => {
+    const pack = demoPacks.find(item => item.id === packId)
+    return pack ? `C:\\Users\\demo\\Desktop\\${pack.name}.zip` : null
+  },
+  pickPackFile: async () => 'C:\\Users\\demo\\Downloads\\example-pack.zip',
+  activatePack: async packId => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    demoPacks = demoPacks.map(item => ({ ...item, enabled: item.id === packId }))
+    demoSettings = { ...demoSettings, profileName: packId }
+    return demoSettings
+  },
+  deactivatePack: async () => {
+    demoPacks = demoPacks.map(item => ({ ...item, enabled: false }))
+    demoSettings = { ...demoSettings, profileName: 'web' }
+    return demoSettings
+  },
+  removePack: async packId => {
+    const before = demoPacks.length
+    demoPacks = demoPacks.filter(item => item.id !== packId)
+    return { removed: before - demoPacks.length }
+  },
+  rollbackPack: async () => ({ restored: 1, profileName: demoSettings.profileName }),
+  packHasSnapshot: async () => false,
+  addPackPlugin: async (packId, packageName) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const updated: PackStatus = {
+      ...pack,
+      plugins: pack.plugins.some(plugin => plugin.packageName === packageName)
+        ? pack.plugins
+        : [...pack.plugins, { packageName, enabled: true }],
+      updatedAt: new Date().toISOString(),
+    }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  togglePackItem: async (packId, packageName, enabled) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const updated: PackStatus = {
+      ...pack,
+      plugins: pack.plugins.map(plugin => (plugin.packageName === packageName ? { ...plugin, enabled } : plugin)),
+      updatedAt: new Date().toISOString(),
+    }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  removePackItem: async (packId, packageName) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const updated: PackStatus = {
+      ...pack,
+      plugins: pack.plugins.filter(plugin => plugin.packageName !== packageName),
+      updatedAt: new Date().toISOString(),
+    }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  onPackProgress: listener => {
+    packProgressListeners.add(listener)
+    return () => packProgressListeners.delete(listener)
+  },
   onAiInstallEvent: listener => {
     aiEventListeners.add(listener)
     return () => aiEventListeners.delete(listener)
