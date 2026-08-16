@@ -9,6 +9,8 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { AiInstallLogEntry } from '../../hooks/use-ai-install'
 import type { AiApprovalRequest, AiInstallStatus } from '../../types'
 
@@ -33,6 +35,10 @@ const PHASE_LABEL: Record<AiInstallStatus['phase'], string> = {
   done: '已完成',
   cancelled: '已取消',
   error: '出错',
+}
+
+function MarkdownLog({ text }: { text: string }) {
+  return <div className="ai-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div>
 }
 
 export function AiInstallDialog({ status, logs, pendingApproval, hasSnapshot, busy, onApprove, onCancel, onRollback, onClose }: AiInstallDialogProps) {
@@ -67,13 +73,15 @@ export function AiInstallDialog({ status, logs, pendingApproval, hasSnapshot, bu
           </p>
           <div className="ai-install-logs" role="log" aria-live="polite">
             {logs.length === 0 ? (
-              <div className="ai-log-empty"><LoaderCircle className="spin" size={17} />{status.message || '等待任务开始…'}</div>
+              <div className="ai-log-empty"><LoaderCircle className="spin" size={17} /><MarkdownLog text={status.message || '等待任务开始…'} /></div>
             ) : (
               logs.map(entry => (
                 <div key={entry.id} className={`ai-log-entry ${entry.kind}`}>
                   {entry.kind === 'auto-approved' && <ShieldCheck size={13} />}
                   {entry.kind === 'error' && <CircleAlert size={13} />}
-                  <span>{entry.text}</span>
+                  {entry.kind === 'log' || entry.kind === 'error'
+                    ? <MarkdownLog text={entry.text} />
+                    : <span>{entry.text}</span>}
                 </div>
               ))
             )}

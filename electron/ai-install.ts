@@ -1157,7 +1157,8 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
         onSessionUpdate: update => {
           if (update.text) {
             current.transcript = `${current.transcript}${update.text}`.slice(-200_000)
-            log(update.text)
+            options.emitOutput('info', `[ai] ${update.text}`)
+            options.emitEvent({ kind: 'log', text: update.text, stream: true })
           }
         },
         onClose: error => {

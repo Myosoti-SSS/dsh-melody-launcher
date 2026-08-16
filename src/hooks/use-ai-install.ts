@@ -9,6 +9,7 @@ export interface AiInstallLogEntry {
   id: number
   kind: 'log' | 'auto-approved' | 'error'
   text: string
+  stream?: boolean
 }
 
 /** 对话框关闭后的初始状态。 */
@@ -46,9 +47,19 @@ export function useAiInstall(onSettled: () => void, showToast: (toast: ToastStat
   settledRef.current = onSettled
   const nextLogId = useRef(0)
 
-  const appendLog = useCallback((kind: AiInstallLogEntry['kind'], text: string) => {
+  const appendLog = useCallback((kind: AiInstallLogEntry['kind'], text: string, stream = false) => {
     nextLogId.current += 1
-    setLogs(current => [...current, { id: nextLogId.current, kind, text }])
+    setLogs(current => {
+      const previous = current.at(-1)
+      if (kind === 'log' && previous?.kind === 'log') {
+        const separator = stream && previous.stream ? '' : '\n\n'
+        return [
+          ...current.slice(0, -1),
+          { ...previous, text: `${previous.text}${separator}${text}`, stream },
+        ]
+      }
+      return [...current, { id: nextLogId.current, kind, text, stream }]
+    })
   }, [])
 
   /** 渲染层刷新后主进程可能仍在跑任务，进入时同步一次状态。 */
@@ -68,7 +79,7 @@ export function useAiInstall(onSettled: () => void, showToast: (toast: ToastStat
           setStatus(event.status)
           break
         case 'log':
-          appendLog('log', event.text)
+          appendLog('log', event.text, event.stream)
           break
         case 'auto-approved':
           appendLog('auto-approved', `${event.toolName}：${event.reason}`)

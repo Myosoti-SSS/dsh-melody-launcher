@@ -225,7 +225,7 @@ export interface AiApprovalRequest {
 
 export type AiInstallEvent =
   | { kind: 'status'; status: AiInstallStatus }
-  | { kind: 'log'; text: string }
+  | { kind: 'log'; text: string; stream?: boolean }
   | { kind: 'auto-approved'; toolName: string; reason: string }
   | { kind: 'approval'; request: AiApprovalRequest }
   | { kind: 'snapshot'; snapshotId: string }
