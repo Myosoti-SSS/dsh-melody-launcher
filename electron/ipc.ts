@@ -1,14 +1,19 @@
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC } from '../src/constants'
-import type { AppSettings, PluginInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
+import type { AppSettings, PackCreateRequest, PluginInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
 import { searchCatalogRepositories, type DiscoverySort } from './discovery'
 import type { Installer } from './installer'
 import type { AiInstaller } from './ai-install'
+import { assertMeaningfulPackName } from './pack-manifest'
+import { MAX_RAW_ARCHIVE_BYTES } from './pack-scan'
+import type { PackManager } from './pack'
 import {
   isSafePackageName,
+  isSafeProfileName,
   isSafeRepositoryName,
   readProfile,
   reorderPlugins,
@@ -27,12 +32,13 @@ export interface IpcDependencies {
   runtime: RuntimeController
   installer: Installer
   aiInstaller: AiInstaller
+  packManager: PackManager
   getWindow: () => BrowserWindow | null
   setWindowMode: (mode: WindowMode) => void
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, runtime, installer, aiInstaller } = deps
+  const { settings, runtime, installer, aiInstaller, packManager } = deps
 
   ipcMain.handle(IPC.settingsGet, () => settings.read())
   ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => settings.save(next))
@@ -69,10 +75,11 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     const current = await settings.read()
     return readProfile(current.dshHome, current.profileName)
   })
-  ipcMain.handle(IPC.profileToggle, async (_event, payload: { packageName: string; enabled: boolean }) => {
+  ipcMain.handle(IPC.profileToggle, async (_event, payload: { packageName: string; enabled: boolean; profileName?: string }) => {
     if (!isSafePackageName(payload.packageName)) throw new Error('插件名称无效。')
+    if (payload.profileName !== undefined && !isSafeProfileName(payload.profileName)) throw new Error('Profile 名称无效。')
     const current = await settings.read()
-    return togglePlugin(current.dshHome, current.profileName, payload.packageName, Boolean(payload.enabled))
+    return togglePlugin(current.dshHome, payload.profileName ?? current.profileName, payload.packageName, Boolean(payload.enabled))
   })
   ipcMain.handle(IPC.profileReorder, async (_event, packageNames: string[]) => {
     if (!Array.isArray(packageNames) || packageNames.some(name => !isSafePackageName(name))) {
@@ -103,6 +110,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     return installer.analyzeCatalogRepository(payload.fullName, payload.defaultBranch)
   })
   ipcMain.handle(IPC.pluginsInstall, async (_event, request: string | PluginInstallRequest) => {
+    if (packManager.isBusy()) throw new Error('整合包操作进行中')
     const fullName = typeof request === 'string' ? request : request.repository
     if (!isSafeRepositoryName(fullName)) throw new Error('GitHub 仓库名称无效。')
     if (typeof request === 'string') return installer.install(fullName)
@@ -112,12 +120,17 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       targetId: request.targetId,
     })
   })
-  ipcMain.handle(IPC.pluginsUninstall, async (_event, packageName: string) => {
+  ipcMain.handle(IPC.pluginsUninstall, async (_event, payload: string | { packageName: string; profileName?: string }) => {
+    if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    const packageName = typeof payload === 'string' ? payload : payload?.packageName
     if (!isSafePackageName(packageName)) throw new Error('插件名称无效。')
-    return installer.remove(packageName)
+    const profileName = typeof payload === 'object' ? payload.profileName : undefined
+    if (profileName !== undefined && !isSafeProfileName(profileName)) throw new Error('Profile 名称无效。')
+    return installer.remove(packageName, profileName)
   })
 
   ipcMain.handle(IPC.skillsInstall, async (_event, request: SkillInstallRequest) => {
+    if (packManager.isBusy()) throw new Error('整合包操作进行中')
     if (!isSafeRepositoryName(request.repository)) throw new Error('GitHub 仓库名称无效。')
     return installer.installSkill(request)
   })
@@ -132,6 +145,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.aiStatus, () => aiInstaller.status())
   ipcMain.handle(IPC.aiHasSnapshot, () => aiInstaller.hasSnapshot())
   ipcMain.handle(IPC.aiInstall, async (_event, input: { repository: string; defaultBranch: string }) => {
+    if (packManager.isBusy()) throw new Error('整合包操作进行中')
     if (!input || !isSafeRepositoryName(input.repository)) throw new Error('GitHub 仓库名称无效。')
     if (typeof input.defaultBranch !== 'string' || input.defaultBranch.length === 0 || input.defaultBranch.length > 200) {
       throw new Error('分支无效。')
@@ -145,6 +159,110 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
   ipcMain.handle(IPC.aiCancel, () => aiInstaller.cancel())
   ipcMain.handle(IPC.aiRollback, () => aiInstaller.rollback())
+
+  /**
+   * 校验文件存在、为绝对路径，且文件体积不超过整合包上限（未读入前的第一道闸门）。
+   * 门禁放宽到 raw 扫描上限（4 GiB）：真实整合包远超标准包 64MB 限制；
+   * 标准包内部仍由 inspectPackZip 的严格限额保证。
+   */
+  async function assertPackFilePath(target: unknown): Promise<void> {
+    if (typeof target !== 'string' || !path.isAbsolute(target)) throw new Error('路径无效。')
+    let stats
+    try {
+      stats = await stat(target)
+    } catch {
+      throw new Error('文件不存在。')
+    }
+    if (!stats.isFile()) throw new Error('不是文件。')
+    if (stats.size > MAX_RAW_ARCHIVE_BYTES) throw new Error('整合包压缩包过大。')
+  }
+
+  ipcMain.handle(IPC.packsList, () => packManager.listPacks())
+
+  ipcMain.handle(IPC.packsCreate, async (_event, request: PackCreateRequest) => {
+    if (!request || typeof request !== 'object') throw new Error('请求格式无效。')
+    if (typeof request.name !== 'string') throw new Error('整合包名称无效。')
+    assertMeaningfulPackName(request.name) // 空名/纯中文等退化成无意义标识的名称会抛出中文错误
+    if (request.description !== undefined && typeof request.description !== 'string') throw new Error('整合包描述无效。')
+    if (!Array.isArray(request.packageNames) || request.packageNames.some(name => !isSafePackageName(name))) {
+      throw new Error('插件列表无效。')
+    }
+    return packManager.createPack(request)
+  })
+
+  ipcMain.handle(IPC.packsAnalyzeImport, async (_event, target: string) => {
+    await assertPackFilePath(target)
+    return packManager.analyzeImport(target)
+  })
+
+  ipcMain.handle(IPC.packsImport, async (_event, target: string, items?: string[], name?: unknown) => {
+    await assertPackFilePath(target)
+    if (items !== undefined && (!Array.isArray(items) || items.some(item => !isSafePackageName(item)))) {
+      throw new Error('插件列表无效。')
+    }
+    let nameOverride: string | undefined
+    if (name !== undefined && name !== null) {
+      if (typeof name !== 'string' || !name.trim()) throw new Error('整合包名称无效。')
+      assertMeaningfulPackName(name) // 空名/纯中文等退化成无意义标识的名称会抛出中文错误
+      nameOverride = name.trim()
+    }
+    return packManager.importPack(target, items, nameOverride === undefined ? undefined : { name: nameOverride })
+  })
+
+  ipcMain.handle(IPC.packsExport, async (_event, packId: string) => {
+    if (!isSafeProfileName(packId)) throw new Error('整合包标识无效。')
+    const { zip, fileName } = await packManager.exportPack(packId)
+    const window = deps.getWindow()
+    if (!window) return null
+    const result = await dialog.showSaveDialog(window, {
+      defaultPath: fileName,
+      filters: [{ name: '整合包', extensions: ['zip'] }],
+    })
+    if (result.canceled || !result.filePath) return null
+    await writeFile(result.filePath, zip)
+    return result.filePath
+  })
+
+  ipcMain.handle(IPC.packsPickFile, async () => {
+    const window = deps.getWindow()
+    if (!window) return null
+    const result = await dialog.showOpenDialog(window, {
+      properties: ['openFile'],
+      filters: [{ name: '整合包', extensions: ['zip', 'yaml', 'yml'] }],
+    })
+    return result.canceled ? null : result.filePaths[0]
+  })
+
+  ipcMain.handle(IPC.packsActivate, async (_event, packId: string) => {
+    if (!isSafeProfileName(packId)) throw new Error('整合包标识无效。')
+    return packManager.activatePack(packId)
+  })
+
+  ipcMain.handle(IPC.packsDeactivate, () => packManager.deactivatePack())
+
+  ipcMain.handle(IPC.packsRemove, async (_event, packId: string) => {
+    if (!isSafeProfileName(packId)) throw new Error('整合包标识无效。')
+    return packManager.removePack(packId)
+  })
+
+  ipcMain.handle(IPC.packsRollback, () => packManager.rollback())
+
+  ipcMain.handle(IPC.packsHasSnapshot, () => packManager.hasSnapshot())
+
+  ipcMain.handle(IPC.packsAddPlugin, async (_event, payload: { packId: string; packageName: string }) => {
+    if (!isSafeProfileName(payload.packId) || !isSafePackageName(payload.packageName)) throw new Error('参数无效。')
+    return packManager.addPackPlugin(payload.packId, payload.packageName)
+  })
+
+  ipcMain.handle(IPC.packsToggleItem, async (_event, payload: { packId: string; packageName: string; enabled: boolean }) => {
+    if (!isSafeProfileName(payload.packId) || !isSafePackageName(payload.packageName)) throw new Error('参数无效。')
+    return packManager.togglePackItem(payload.packId, payload.packageName, Boolean(payload.enabled))
+  })
+
+  ipcMain.handle(IPC.packsRemoveItem, async (_event, payload: { packId: string; packageName: string }) => {
+    if (!isSafeProfileName(payload.packId) || !isSafePackageName(payload.packageName)) throw new Error('参数无效。')
+    return packManager.removePackItem(payload.packId, payload.packageName)
+  })
 
   ipcMain.handle(IPC.runtimeState, () => runtime.state())
   ipcMain.handle(IPC.runtimeStart, () => runtime.start())

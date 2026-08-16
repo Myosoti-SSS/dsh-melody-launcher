@@ -6,7 +6,7 @@ import AdmZip from 'adm-zip'
 import type { InstalledSkill, SkillInstallTarget } from '../src/types'
 import { downloadGitHubArchive, githubArchiveUrl } from './github-archive'
 import { isSafeRepositoryName } from './profile'
-import { isSkillName, parseSkillDocument } from './skill-format'
+import { isSkillName, parseSkillDocument, type ParsedSkill } from './skill-format'
 
 const MAX_FILES = 5000
 const MAX_UNPACKED_BYTES = 100 * 1024 * 1024
@@ -208,5 +208,65 @@ export async function installSkillFromRepository(
   } finally {
     await rm(zipPath, { force: true }).catch(() => undefined)
     await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined)
+  }
+}
+
+/**
+ * 从本地目录/单文件安装 Skill（raw 整合包导入用）。
+ * 源必须在 dshHome 内（pack.ts 在 dshHome/.pack-raw-staging-* 解出，保证与 skills/ 同卷，
+ * replacePath 的 rename 不跨 EXDEV）。bundle：source 为含 SKILL.md 的目录；flat：source 为单个 .md。
+ * 落盘段对齐 installSkillFromRepository：冲突变体与 .disabled/ 旧副本一并清理。
+ */
+export async function installSkillFromDirectory(
+  dshHome: string,
+  name: string,
+  format: 'bundle' | 'flat',
+  source: string,
+): Promise<InstalledSkill> {
+  if (!isSkillName(name)) throw new Error('Skill 名称无效。')
+  if (format !== 'bundle' && format !== 'flat') throw new Error('Skill 格式无效。')
+  const resolvedSource = path.resolve(source)
+  assertInside(dshHome, resolvedSource)
+
+  const skillFile = format === 'bundle' ? path.join(resolvedSource, 'SKILL.md') : resolvedSource
+  let parsed: ParsedSkill | null = null
+  try {
+    parsed = parseSkillDocument(await readFile(skillFile, 'utf8'))
+  } catch {
+    parsed = null
+  }
+  if (!parsed) throw new Error('Skill 文档缺失或无效。')
+  if (parsed.name !== name) throw new Error('Skill 文档名称与入参不一致。')
+
+  const skillRoot = path.join(dshHome, 'skills')
+  await mkdir(skillRoot, { recursive: true })
+  const destination = format === 'bundle'
+    ? path.join(skillRoot, name)
+    : path.join(skillRoot, `${name}.md`)
+  const conflicting = format === 'bundle'
+    ? path.join(skillRoot, `${name}.md`)
+    : path.join(skillRoot, name)
+  const disabledRoot = path.join(skillRoot, '.disabled')
+  const disabledDestination = format === 'bundle'
+    ? path.join(disabledRoot, name)
+    : path.join(disabledRoot, `${name}.md`)
+  const disabledConflicting = format === 'bundle'
+    ? path.join(disabledRoot, `${name}.md`)
+    : path.join(disabledRoot, name)
+  for (const target of [destination, conflicting, disabledDestination, disabledConflicting]) {
+    assertInside(skillRoot, target)
+  }
+  await replacePath(resolvedSource, destination)
+  await rm(conflicting, { recursive: true, force: true })
+  await rm(disabledDestination, { recursive: true, force: true })
+  await rm(disabledConflicting, { recursive: true, force: true })
+  return {
+    name: parsed.name,
+    description: parsed.description,
+    path: destination,
+    format,
+    enabled: true,
+    modelInvocable: parsed.modelInvocable,
+    userInvocable: parsed.userInvocable,
   }
 }

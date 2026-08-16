@@ -1,20 +1,28 @@
 import { app, BrowserWindow, shell } from 'electron'
+import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AppSettings, RuntimeOutput, WindowMode } from '../src/types'
 import { ACP_RUNTIME_DIRNAME, CREDENTIALS_LOCK_DIRNAME, createAiInstaller, healCredentialsLock, type AiInstaller } from './ai-install'
 import { applyWindowMode, createMainWindow, createRendererChannel } from './app-window'
+import { runCommand } from './command'
 import { readDeepSeekApiKey } from './credentials'
 import { findInstalledDsh } from './dsh-install'
-import { createInstaller, type Installer } from './installer'
+import { buildPluginCommandArgs, createInstaller, validateLocalPluginDirectory, type Installer } from './installer'
 import { registerIpcHandlers } from './ipc'
 import {
   ensureNodeRuntime,
   findSystemNodeRuntime,
+  resolveNodeExecutable,
   type NodeRuntime,
   type NodeRuntimeProgress,
 } from './node-runtime'
+import { createPackManager, type InstallInstaller, type PackInstallTarget, type PackManager } from './pack'
+import { recordPluginInstall } from './plugin-receipts'
+import { withExecutableDirectoryOnPath } from './process'
+import { readProfile, togglePlugin } from './profile'
+import { installSkillFromDirectory } from './skill-install'
 import { createRendererEvents } from './renderer-events'
 import { createRuntimeController, type RuntimeController } from './runtime'
 import { createSettingsStore, defaultSettings, type SettingsStore } from './settings'
@@ -37,6 +45,7 @@ interface Services {
   runtime: RuntimeController
   installer: Installer
   aiInstaller: AiInstaller
+  packManager: PackManager
 }
 
 // app.getPath 依赖 app 就绪，因此服务在 whenReady 之后才装配。
@@ -118,6 +127,86 @@ function createServices(): Services {
     readApiKey: dshHome => readDeepSeekApiKey(dshHome),
   })
 
+  /**
+   * 整合包离线导入（zip 内的 plugin-bodies）用 `file:` specifier 安装。
+   * 真实 installer 的 installPluginTarget 只接受 GitHub 仓库分析，无法直接
+   * 安装本地目录，因此这里在组装层用 DSH CLI 插件命令补上最小通路。
+   */
+  async function installPackLocalDirectory(target: PackInstallTarget): Promise<void> {
+    const localDirectory = validateLocalPluginDirectory(target.localDirectory)
+    const current = await settings.read()
+    const nodeRuntime = await prepareNodeRuntime('plugin')
+    const executable = resolveNodeExecutable(current.launchExecutable, nodeRuntime)
+    const commandArgs = buildPluginCommandArgs(current, executable, ['add', `file:${localDirectory}`], target.profileName)
+    const result = await runCommand(executable, commandArgs, {
+      cwd: current.workspace,
+      env: withExecutableDirectoryOnPath(nodeRuntime.node, {
+        ...process.env,
+        DSH_HOME: current.dshHome,
+        FORCE_COLOR: '0',
+      }),
+    })
+    if (result.exitCode !== 0) throw new Error(`插件安装失败（代码 ${result.exitCode}），请查看运行日志。`)
+    let version: string | null = null
+    try {
+      const packageManifest = JSON.parse(await readFile(path.join(localDirectory, 'package.json'), 'utf8')) as { version?: unknown }
+      version = typeof packageManifest.version === 'string' ? packageManifest.version : null
+    } catch {
+      // 版本读取失败可忽略，receipt 的 version 允许为 null。
+    }
+    await recordPluginInstall(pluginReceiptsPath, {
+      repository: `file:${localDirectory}`,
+      packageName: target.packageName,
+      profileName: target.profileName,
+      source: 'local-directory',
+      subdirectory: null,
+      version,
+      commit: '',
+      installedAt: new Date().toISOString(),
+    })
+  }
+
+  const packInstaller: InstallInstaller = {
+    async installPluginTarget(target) {
+      if (target.source === 'local-directory') {
+        await installPackLocalDirectory(target)
+        return
+      }
+      if (!target.repository) throw new Error('缺少来源仓库，无法安装。')
+      // 真实 installer 按 analysis.targets 的 id 定位，id 形如 `<packageName>:<subdir|.>`。
+      const targetId = target.subdirectory ? `${target.packageName}:${target.subdirectory}` : `${target.packageName}:.`
+      const request: {
+        repository: string
+        defaultBranch: string
+        targetId: string
+        commit?: string
+        version?: string
+      } = { repository: target.repository, defaultBranch: 'main', targetId }
+      // 转发整合包声明的 pin：github 用固定 commit，npm 用固定 version（0.0.0 是占位符，不转发）。
+      if (target.source === 'github' && target.commit) request.commit = target.commit
+      if (target.source === 'npm' && target.version && target.version !== '0.0.0') request.version = target.version
+      await installer.installPluginTarget(request, target.profileName)
+    },
+    remove: (packageName, profileName) => installer.remove(packageName, profileName),
+    readProfile: (dshHome, profileName) => readProfile(dshHome, profileName),
+    togglePlugin: (dshHome, profileName, packageName, enabled) => togglePlugin(dshHome, profileName, packageName, enabled),
+    // raw 整合包导入的技能：从本地 staging 目录全局安装（bundle 目录或 flat 单文件）。
+    installSkillLocal: (dshHome, skill) => installSkillFromDirectory(dshHome, skill.name, skill.format, skill.sourceDir),
+  }
+
+  const packManager = createPackManager({
+    readSettings: () => settings.read(),
+    saveSettings: next => settings.save(next),
+    registryPath: path.join(userData, 'packs.json'),
+    snapshotRoot: path.join(userData, 'pack-snapshots'),
+    pluginReceiptsPath,
+    installer: packInstaller,
+    emitOutput: (level, text) => events.output('plugin', level, text),
+    emitEvent: event => events.packProgress(event),
+    isRuntimeRunning: () => runtime.isRunning(),
+    isInstallerBusy: () => installer.isBusy(),
+  })
+
   // 启动自愈：上次 AI 会话若在凭据锁期间崩溃（进程被杀、finally 未跑），
   // .credentials.yaml 会滞留在锁目录，这里把它还原回 dshHome。
   void settings
@@ -125,7 +214,7 @@ function createServices(): Services {
     .then(current => healCredentialsLock(current.dshHome, path.join(userData, CREDENTIALS_LOCK_DIRNAME)))
     .catch(() => { /* 设置未就绪可忽略，锁会在下次 AI 会话前置处理 */ })
 
-  return { settings, runtime, installer, aiInstaller }
+  return { settings, runtime, installer, aiInstaller, packManager }
 }
 
 function openMainWindow(): void {
@@ -159,12 +248,24 @@ app.on('window-all-closed', () => {
 app.on('before-quit', event => {
   const runtime = services?.runtime
   const aiInstaller = services?.aiInstaller
-  const hasWork = Boolean(runtime?.isRunning() || aiInstaller?.isBusy())
+  const packManager = services?.packManager
+  const hasWork = Boolean(runtime?.isRunning() || aiInstaller?.isBusy() || packManager?.isBusy())
   if (quitAfterRuntimeStops || !hasWork) return
   event.preventDefault()
   const waitRuntime = runtime?.isRunning() ? runtime.stop() : Promise.resolve()
   const waitAi = aiInstaller?.isBusy() ? aiInstaller.cancel() : Promise.resolve()
-  void Promise.allSettled([waitRuntime, waitAi]).finally(() => {
+  // 整合包操作没有 cancel 接口，轮询等待其自然结束（每项 install 是有限长的 DSH 命令）。
+  const waitPack = packManager?.isBusy()
+    ? new Promise<void>(resolve => {
+      const timer = setInterval(() => {
+        if (!packManager!.isBusy()) {
+          clearInterval(timer)
+          resolve()
+        }
+      }, 150)
+    })
+    : Promise.resolve()
+  void Promise.allSettled([waitRuntime, waitAi, waitPack]).finally(() => {
     quitAfterRuntimeStops = true
     app.quit()
   })
