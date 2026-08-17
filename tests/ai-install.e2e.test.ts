@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { expect, it } from 'vitest'
 import { createAiInstaller, type AiInstaller } from '../electron/ai-install'
-import { ensureNodeRuntime } from '../electron/node-runtime'
+import { ensureNodeRuntime, ensurePnpmRuntime } from '../electron/node-runtime'
 import type { AiInstallEvent, AppSettings, RepositoryAnalysis } from '../src/types'
 
 /**
@@ -60,6 +60,7 @@ integrationTest('drives the AI to research an invalid repo inside a throwaway pr
     workspace: dshHome,
     launchExecutable: 'npx',
     launchArgs: ['--yes', '@deepseek-ai/dsh', 'web'],
+    webPort: 3080,
     openAfterLaunch: false,
   }
 
@@ -106,6 +107,7 @@ integrationTest('drives the AI to research an invalid repo inside a throwaway pr
     installer = createAiInstaller({
       readSettings: async () => settings,
       prepareNodeRuntime: async () => nodeRuntime,
+      preparePnpmRuntime: async () => ensurePnpmRuntime(path.join(root, 'pnpm-runtime'), nodeRuntime),
       acpRuntimeRoot: path.join(root, 'acp-runtime'),
       snapshotRoot: path.join(root, 'snapshots'),
       emitOutput,

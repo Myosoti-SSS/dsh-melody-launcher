@@ -49,7 +49,7 @@ describe('createRendererEvents', () => {
   it('forwards runtime state and install progress unchanged', () => {
     const { channel, sent } = recordingChannel()
     const events = createRendererEvents(channel)
-    const state = { running: true, pid: 4321, startedAt: '2026-08-14T00:00:00.000Z', url: 'http://127.0.0.1:5173' }
+    const state = { running: true, pid: 4321, startedAt: '2026-08-14T00:00:00.000Z', url: 'http://127.0.0.1:5173', port: 5173 }
     const progress = {
       repository: 'someone/plugin',
       kind: 'plugin' as const,

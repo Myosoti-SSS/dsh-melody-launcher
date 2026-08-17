@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, safeStorage, shell } from 'electron'
 import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -11,14 +11,18 @@ import { readDeepSeekApiKey } from './credentials'
 import { findInstalledDsh } from './dsh-install'
 import { buildPluginCommandArgs, createInstaller, validateLocalPluginDirectory, type Installer } from './installer'
 import { registerIpcHandlers } from './ipc'
+import { createGitHubAuthService, type GitHubAuthService } from './github-auth'
 import {
   ensureNodeRuntime,
+  ensurePnpmRuntime,
   findSystemNodeRuntime,
   resolveNodeExecutable,
   type NodeRuntime,
   type NodeRuntimeProgress,
+  type PnpmRuntime,
 } from './node-runtime'
 import { createPackManager, type InstallInstaller, type PackInstallTarget, type PackManager } from './pack'
+import { createPluginTrialManager, type PluginTrialManager } from './plugin-trial'
 import { recordPluginInstall } from './plugin-receipts'
 import { withExecutableDirectoryOnPath } from './process'
 import { readProfile, togglePlugin } from './profile'
@@ -44,8 +48,10 @@ interface Services {
   settings: SettingsStore
   runtime: RuntimeController
   installer: Installer
+  pluginTrial: PluginTrialManager
   aiInstaller: AiInstaller
   packManager: PackManager
+  githubAuth: GitHubAuthService
 }
 
 // app.getPath 依赖 app 就绪，因此服务在 whenReady 之后才装配。
@@ -55,9 +61,19 @@ function createServices(): Services {
   const userData = app.getPath('userData')
   const managedDshRoot = path.join(userData, 'dsh-runtime')
   const managedNodeRoot = path.join(userData, 'node-runtime')
+  const managedPnpmRoot = path.join(userData, 'pnpm-runtime')
   const pluginSourceRoot = path.join(userData, 'plugin-sources')
   const pluginReceiptsPath = path.join(userData, 'plugin-installs.json')
   const skillSourceRoot = path.join(userData, 'skill-sources')
+  const githubAuth = createGitHubAuthService({
+    filePath: path.join(userData, 'github-auth.bin'),
+    clientId: process.env.DSH_LAUNCHER_GITHUB_CLIENT_ID,
+    cipher: {
+      isAvailable: () => safeStorage.isEncryptionAvailable(),
+      encrypt: value => safeStorage.encryptString(value),
+      decrypt: value => safeStorage.decryptString(value),
+    },
+  })
 
   /**
    * 准备 Node.js 运行环境，并把下载进度写进日志。
@@ -69,6 +85,22 @@ function createServices(): Services {
   ): Promise<NodeRuntime> => {
     let lastBucket = -1
     return ensureNodeRuntime(managedNodeRoot, progress => {
+      const bucket = Math.floor(progress.percent / 10)
+      if (bucket !== lastBucket || progress.percent === 100) {
+        lastBucket = bucket
+        events.output(source, 'info', `${progress.message}（${progress.percent}%）`)
+      }
+      onProgress?.(progress)
+    })
+  }
+
+  const preparePnpmRuntime = (
+    source: RuntimeOutput['channel'],
+    nodeRuntime: NodeRuntime,
+    onProgress?: (progress: NodeRuntimeProgress) => void,
+  ): Promise<PnpmRuntime> => {
+    let lastBucket = -1
+    return ensurePnpmRuntime(managedPnpmRoot, nodeRuntime, progress => {
       const bucket = Math.floor(progress.percent / 10)
       if (bucket !== lastBucket || progress.percent === 100) {
         lastBucket = bucket
@@ -106,17 +138,32 @@ function createServices(): Services {
     readSettings: () => settings.read(),
     saveSettings: next => settings.save(next),
     prepareNodeRuntime: onProgress => prepareNodeRuntime('plugin', onProgress),
+    preparePnpmRuntime: (nodeRuntime, onProgress) => preparePnpmRuntime('plugin', nodeRuntime, onProgress),
     pluginSourceRoot,
     pluginReceiptsPath,
     skillSourceRoot,
     emitOutput: (level, text) => events.output('plugin', level, text),
     emitProgress: progress => events.installProgress(progress),
     isRuntimeRunning: () => runtime.isRunning(),
+    githubFetch: githubAuth.fetch,
+  })
+
+  const pluginTrial = createPluginTrialManager({
+    readSettings: () => settings.read(),
+    prepareNodeRuntime: () => prepareNodeRuntime('plugin'),
+    preparePnpmRuntime: nodeRuntime => preparePnpmRuntime('plugin', nodeRuntime),
+    trialRoot: path.join(userData, 'plugin-trials'),
+    resultsPath: path.join(userData, 'plugin-trial-results.json'),
+    emitOutput: (level, text) => events.output('plugin', level, text),
+    emitResult: result => events.pluginTrial(result),
+    isRuntimeRunning: () => runtime.isRunning(),
+    isInstallerBusy: () => installer.isBusy(),
   })
 
   const aiInstaller = createAiInstaller({
     readSettings: () => settings.read(),
     prepareNodeRuntime: () => prepareNodeRuntime('ai'),
+    preparePnpmRuntime: nodeRuntime => preparePnpmRuntime('ai', nodeRuntime),
     acpRuntimeRoot: path.join(userData, ACP_RUNTIME_DIRNAME),
     snapshotRoot: path.join(userData, 'ai-snapshots'),
     emitOutput: (level, text) => events.output('ai', level, text),
@@ -125,6 +172,7 @@ function createServices(): Services {
     isInstallerBusy: () => installer.isBusy(),
     analyzePlugin: (repository, defaultBranch) => installer.analyzePlugin(repository, defaultBranch),
     readApiKey: dshHome => readDeepSeekApiKey(dshHome),
+    githubFetch: githubAuth.fetch,
   })
 
   /**
@@ -136,15 +184,19 @@ function createServices(): Services {
     const localDirectory = validateLocalPluginDirectory(target.localDirectory)
     const current = await settings.read()
     const nodeRuntime = await prepareNodeRuntime('plugin')
+    const pnpmRuntime = await preparePnpmRuntime('plugin', nodeRuntime)
     const executable = resolveNodeExecutable(current.launchExecutable, nodeRuntime)
     const commandArgs = buildPluginCommandArgs(current, executable, ['add', `file:${localDirectory}`], target.profileName)
     const result = await runCommand(executable, commandArgs, {
       cwd: current.workspace,
-      env: withExecutableDirectoryOnPath(nodeRuntime.node, {
-        ...process.env,
-        DSH_HOME: current.dshHome,
-        FORCE_COLOR: '0',
-      }),
+      env: withExecutableDirectoryOnPath(
+        pnpmRuntime.executable,
+        withExecutableDirectoryOnPath(nodeRuntime.node, {
+          ...process.env,
+          DSH_HOME: current.dshHome,
+          FORCE_COLOR: '0',
+        }),
+      ),
     })
     if (result.exitCode !== 0) throw new Error(`插件安装失败（代码 ${result.exitCode}），请查看运行日志。`)
     let version: string | null = null
@@ -214,7 +266,7 @@ function createServices(): Services {
     .then(current => healCredentialsLock(current.dshHome, path.join(userData, CREDENTIALS_LOCK_DIRNAME)))
     .catch(() => { /* 设置未就绪可忽略，锁会在下次 AI 会话前置处理 */ })
 
-  return { settings, runtime, installer, aiInstaller, packManager }
+  return { settings, runtime, installer, pluginTrial, aiInstaller, packManager, githubAuth }
 }
 
 function openMainWindow(): void {
@@ -248,12 +300,14 @@ app.on('window-all-closed', () => {
 app.on('before-quit', event => {
   const runtime = services?.runtime
   const aiInstaller = services?.aiInstaller
+  const pluginTrial = services?.pluginTrial
   const packManager = services?.packManager
-  const hasWork = Boolean(runtime?.isRunning() || aiInstaller?.isBusy() || packManager?.isBusy())
+  const hasWork = Boolean(runtime?.isRunning() || pluginTrial?.isBusy() || aiInstaller?.isBusy() || packManager?.isBusy())
   if (quitAfterRuntimeStops || !hasWork) return
   event.preventDefault()
   const waitRuntime = runtime?.isRunning() ? runtime.stop() : Promise.resolve()
   const waitAi = aiInstaller?.isBusy() ? aiInstaller.cancel() : Promise.resolve()
+  const waitTrial = pluginTrial?.isBusy() ? pluginTrial.cancel() : Promise.resolve()
   // 整合包操作没有 cancel 接口，轮询等待其自然结束（每项 install 是有限长的 DSH 命令）。
   const waitPack = packManager?.isBusy()
     ? new Promise<void>(resolve => {
@@ -265,7 +319,7 @@ app.on('before-quit', event => {
       }, 150)
     })
     : Promise.resolve()
-  void Promise.allSettled([waitRuntime, waitAi, waitPack]).finally(() => {
+  void Promise.allSettled([waitRuntime, waitTrial, waitAi, waitPack]).finally(() => {
     quitAfterRuntimeStops = true
     app.quit()
   })

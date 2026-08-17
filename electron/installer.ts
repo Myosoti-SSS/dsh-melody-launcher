@@ -28,10 +28,10 @@ import {
   packageManagerProgress,
 } from './dsh-install'
 import { checkDshUpdate } from './dsh-update'
-import { resolveNodeExecutable, type NodeRuntime, type NodeRuntimeProgress } from './node-runtime'
+import { resolveNodeExecutable, type NodeRuntime, type NodeRuntimeProgress, type PnpmRuntime } from './node-runtime'
 import { approveIgnoredGitHubBuilds } from './plugin-install'
 import { analyzeRepository } from './plugin-catalog'
-import { prepareSubdirectoryPlugin } from './plugin-source'
+import { prepareSubdirectoryPlugin, type PluginSourceProgress } from './plugin-source'
 import { readPluginReceipts, recordPluginInstall, removePluginReceipt } from './plugin-receipts'
 import { readProfile } from './profile'
 import { withExecutableDirectoryOnPath } from './process'
@@ -91,6 +91,11 @@ export interface InstallerOptions {
   saveSettings: (settings: AppSettings) => Promise<AppSettings>
   /** 确保 Node.js 可用；onProgress 用于把下载进度并入安装进度。 */
   prepareNodeRuntime: (onProgress?: (progress: NodeRuntimeProgress) => void) => Promise<NodeRuntime>
+  /** 确保 pnpm 可用；DSH 的 plugin 子命令会从 PATH 调用它。 */
+  preparePnpmRuntime: (
+    nodeRuntime: NodeRuntime,
+    onProgress?: (progress: NodeRuntimeProgress) => void,
+  ) => Promise<PnpmRuntime>
   /** 插件子目录安装的缓存根目录。 */
   pluginSourceRoot: string
   /** 插件安装凭据文件的路径。 */
@@ -102,6 +107,8 @@ export interface InstallerOptions {
   isRuntimeRunning: () => boolean
   /** 测试注入用的命令执行器替身；缺省用真实 runCommand。 */
   runCommand?: (executable: string, args: string[], options: CommandOptions) => Promise<CommandResult>
+  /** 所有 GitHub HTTP 请求统一从这里注入认证。 */
+  githubFetch?: typeof fetch
 }
 
 export interface Installer {
@@ -165,7 +172,12 @@ export function createInstaller(options: InstallerOptions): Installer {
     })
   }
 
-  const checkForDshUpdate = async () => checkDshUpdate(await detectDsh())
+  const checkForDshUpdate = async () => {
+    const installation = await detectDsh()
+    return options.githubFetch
+      ? checkDshUpdate(installation, options.githubFetch)
+      : checkDshUpdate(installation)
+  }
 
   /** 仓库结构检测结果缓存 5 分钟，避免同一仓库反复触发 GitHub 请求。 */
   const repositoryAnalysisCache = new Map<string, { expiresAt: number; analysis: RepositoryAnalysis }>()
@@ -176,7 +188,9 @@ export function createInstaller(options: InstallerOptions): Installer {
     const cacheKey = `${fullName.toLowerCase()}#${defaultBranch}#${settings.profileName}`
     const cached = repositoryAnalysisCache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) return cached.analysis
-    const analysis = await analyzeRepository(fullName, defaultBranch, settings.profileName)
+    const analysis = options.githubFetch
+      ? await analyzeRepository(fullName, defaultBranch, settings.profileName, options.githubFetch)
+      : await analyzeRepository(fullName, defaultBranch, settings.profileName)
     repositoryAnalysisCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60_000, analysis })
     return analysis
   }
@@ -185,7 +199,9 @@ export function createInstaller(options: InstallerOptions): Installer {
     const cacheKey = `${fullName.toLowerCase()}#${defaultBranch}`
     const cached = skillAnalysisCache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) return cached.analysis
-    const analysis = await analyzeSkillRepository(fullName, defaultBranch)
+    const analysis = options.githubFetch
+      ? await analyzeSkillRepository(fullName, defaultBranch, options.githubFetch)
+      : await analyzeSkillRepository(fullName, defaultBranch)
     skillAnalysisCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60_000, analysis })
     return analysis
   }
@@ -210,6 +226,20 @@ export function createInstaller(options: InstallerOptions): Installer {
 
   /** 准备 Node.js，同时把下载进度折算进当前安装任务的进度条。 */
   const prepareNode = (repository?: string) => options.prepareNodeRuntime(progress => {
+    if (!repository || !active) return
+    emit({
+      repository,
+      kind: active.kind,
+      phase: 'preparing',
+      percent: Math.min(
+        NODE_RUNTIME_PROGRESS_CEILING,
+        NODE_RUNTIME_PROGRESS_FLOOR + Math.round(progress.percent * 0.12),
+      ),
+      message: progress.message,
+    })
+  })
+
+  const preparePnpm = (nodeRuntime: NodeRuntime, repository?: string) => options.preparePnpmRuntime(nodeRuntime, progress => {
     if (!repository || !active) return
     emit({
       repository,
@@ -268,6 +298,7 @@ export function createInstaller(options: InstallerOptions): Installer {
     const settings = await options.readSettings()
     const targetProfile = profileName ?? settings.profileName
     const nodeRuntime = await prepareNode(installingRepository)
+    const pnpmRuntime = await preparePnpm(nodeRuntime, installingRepository)
     const executable = resolveNodeExecutable(settings.launchExecutable, nodeRuntime)
     const commandArgs = buildPluginCommandArgs(settings, executable, args, targetProfile)
 
@@ -284,11 +315,14 @@ export function createInstaller(options: InstallerOptions): Installer {
     try {
       result = await executeCommand(executable, commandArgs, {
         cwd: settings.workspace,
-        env: withExecutableDirectoryOnPath(nodeRuntime.node, {
-          ...process.env,
-          DSH_HOME: settings.dshHome,
-          FORCE_COLOR: '0',
-        }),
+        env: withExecutableDirectoryOnPath(
+          pnpmRuntime.executable,
+          withExecutableDirectoryOnPath(nodeRuntime.node, {
+            ...process.env,
+            DSH_HOME: settings.dshHome,
+            FORCE_COLOR: '0',
+          }),
+        ),
         onOutput: (text, level: OutputLevel) => {
           options.emitOutput(level, text)
           tracker?.handleOutput(text)
@@ -518,12 +552,11 @@ export function createInstaller(options: InstallerOptions): Installer {
         } else if (target.source === 'local-directory') {
           specifier = `file:${validateLocalPluginDirectory(target.localDirectory)}`
         } else {
-          const packageDirectory = await prepareSubdirectoryPlugin(
-            options.pluginSourceRoot,
-            fullName,
-            target,
-            progress => emit({ repository: fullName, kind: 'plugin', phase: 'downloading', ...progress }),
-          )
+          const onProgress = (progress: PluginSourceProgress) =>
+            emit({ repository: fullName, kind: 'plugin', phase: 'downloading', ...progress })
+          const packageDirectory = options.githubFetch
+            ? await prepareSubdirectoryPlugin(options.pluginSourceRoot, fullName, target, onProgress, options.githubFetch)
+            : await prepareSubdirectoryPlugin(options.pluginSourceRoot, fullName, target, onProgress)
           specifier = `file:${packageDirectory}`
         }
 
@@ -582,13 +615,11 @@ export function createInstaller(options: InstallerOptions): Installer {
         const target = analysis.targets.find(item => item.id === request.targetId)
         if (!target) throw new Error(analysis.summary || '所选 Skill 已失效，请重新检测仓库。')
         const settings = await options.readSettings()
-        const installedSkill = await installSkillFromRepository(
-          options.skillSourceRoot,
-          settings.dshHome,
-          request.repository,
-          target,
-          (percent, message) => emit({ repository: request.repository, kind: 'skill', phase: 'downloading', percent, message }),
-        )
+        const onProgress = (percent: number, message: string) =>
+          emit({ repository: request.repository, kind: 'skill', phase: 'downloading', percent, message })
+        const installedSkill = options.githubFetch
+          ? await installSkillFromRepository(options.skillSourceRoot, settings.dshHome, request.repository, target, onProgress, options.githubFetch)
+          : await installSkillFromRepository(options.skillSourceRoot, settings.dshHome, request.repository, target, onProgress)
         const installedSkills = await readLocalSkills(settings.dshHome)
         const verified = installedSkills.find(skill => skill.name === target.name)
         if (!verified) throw new Error('文件已写入，但 DSH 没有把它识别为有效 Skill。')

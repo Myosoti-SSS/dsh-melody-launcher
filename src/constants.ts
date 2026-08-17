@@ -20,7 +20,7 @@ export const MAX_LOG_LINES = 500
 export const AI_INSTALL_ENABLED = true
 
 /** 尚未取到主进程状态时的占位值。 */
-export const EMPTY_RUNTIME_STATE = { running: false, pid: null, startedAt: null, url: null } as const
+export const EMPTY_RUNTIME_STATE = { running: false, pid: null, startedAt: null, url: null, port: null } as const
 export const EMPTY_DSH_INSTALLATION = { installed: false, version: null, executable: null, source: null } as const
 
 /**
@@ -35,6 +35,12 @@ export const IPC = {
   credentialStatus: 'credentials:deepseek-status',
   credentialSet: 'credentials:deepseek-set',
   credentialClear: 'credentials:deepseek-clear',
+  githubAuthStatus: 'github-auth:status',
+  githubAuthTokenLogin: 'github-auth:token-login',
+  githubAuthDeviceBegin: 'github-auth:device-begin',
+  githubAuthDeviceComplete: 'github-auth:device-complete',
+  githubAuthDeviceCancel: 'github-auth:device-cancel',
+  githubAuthLogout: 'github-auth:logout',
   chooseDirectory: 'dialog:directory',
   profileRead: 'profile:read',
   profileToggle: 'profile:toggle',
@@ -44,7 +50,11 @@ export const IPC = {
   catalogImportUrl: 'catalog:import-url',
   pluginsInstall: 'plugins:install',
   pluginsUninstall: 'plugins:uninstall',
+  pluginsTrial: 'plugins:trial',
+  pluginsTrialRead: 'plugins:trial-read',
   aiInstall: 'ai:install',
+  aiAdaptPlugin: 'ai:adapt-plugin',
+  aiRepairRuntime: 'ai:repair-runtime',
   aiApprove: 'ai:approve',
   aiCancel: 'ai:cancel',
   aiRollback: 'ai:rollback',
@@ -81,6 +91,7 @@ export const IPC_EVENTS = {
   runtimeOutput: 'runtime:output',
   runtimeStateChanged: 'runtime:state-changed',
   installProgress: 'plugins:install-progress',
+  pluginTrialEvent: 'plugins:trial-event',
   aiInstallEvent: 'ai:install-event',
   packProgress: 'packs:progress',
 } as const

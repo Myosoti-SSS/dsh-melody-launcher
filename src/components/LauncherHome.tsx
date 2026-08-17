@@ -1,6 +1,6 @@
-import { Box, CircleStop, Download, ExternalLink, KeyRound, LoaderCircle, Play, RefreshCw, Settings, X } from 'lucide-react'
+import { Box, CircleStop, Download, ExternalLink, GitFork, KeyRound, LoaderCircle, Play, RefreshCw, Settings, X } from 'lucide-react'
 import packageMetadata from '../../package.json'
-import type { AppSettings, DshInstallationStatus, DshUpdateStatus, InstallProgress, ProfileState, RuntimeState } from '../types'
+import type { AppSettings, DshInstallationStatus, DshUpdateStatus, GitHubAuthStatus, InstallProgress, ProfileState, RuntimeState } from '../types'
 
 /** 启动页：无边框小窗口，只暴露最少的几个动作。 */
 
@@ -13,7 +13,9 @@ interface LauncherHomeProps {
   installProgress: InstallProgress | null
   busy: boolean
   installingDsh: boolean
+  githubAuthStatus: GitHubAuthStatus
   onCredential: () => void
+  onGitHubAccount: () => void
   onManage: () => void
   onToggleRuntime: () => void
   onUpdateDsh: () => void
@@ -30,7 +32,9 @@ export function LauncherHome({
   installProgress,
   busy,
   installingDsh,
+  githubAuthStatus,
   onCredential,
+  onGitHubAccount,
   onManage,
   onToggleRuntime,
   onUpdateDsh,
@@ -68,7 +72,7 @@ export function LauncherHome({
           <div className="launcher-runtime-state">
             <span className={`launcher-state-dot ${runtime.running ? 'running' : ''}`} />
             <div><small>运行状态</small><strong>{runtimeLabel}</strong></div>
-            <span>{runtime.running && runtime.pid ? `PID ${runtime.pid}` : settings.profileName}</span>
+            <span>{runtime.running && runtime.pid ? `PID ${runtime.pid}${runtime.port ? ` · :${runtime.port}` : ''}` : settings.profileName}</span>
           </div>
 
           <div className="launcher-action-grid">
@@ -85,7 +89,10 @@ export function LauncherHome({
               </span>
             </button>
             <button type="button" className="launcher-utility-button" onClick={onManage} disabled={busy}><Settings size={17} /><span>管理</span></button>
-            <button type="button" className="launcher-utility-button" onClick={onCredential} disabled={busy}><KeyRound size={17} /><span>API Key</span></button>
+            <div className="launcher-utility-pair">
+              <button type="button" className="launcher-utility-button" onClick={onCredential} disabled={busy} title="配置 DeepSeek API Key"><KeyRound size={17} /><span>API Key</span></button>
+              <button type="button" className={`launcher-utility-button ${githubAuthStatus.authenticated ? 'configured' : ''}`} onClick={onGitHubAccount} disabled={busy} title={githubAuthStatus.authenticated ? `GitHub：${githubAuthStatus.login}` : '登录 GitHub'}><GitFork size={17} /><span>{githubAuthStatus.authenticated ? githubAuthStatus.login : 'GitHub'}</span></button>
+            </div>
           </div>
 
           <div className="launcher-profile-row">

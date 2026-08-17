@@ -9,12 +9,14 @@ import type {
   CredentialStatus,
   DshInstallationStatus,
   DshUpdateStatus,
+  GitHubAuthStatus,
   InstallProgress,
   InstalledSkill,
   LauncherApi,
   ManagedPlugin,
   PackProgressEvent,
   PackStatus,
+  PluginTrialResult,
   ProfileState,
   RepositoryAnalysis,
   RuntimeOutput,
@@ -31,6 +33,7 @@ let demoSettings: AppSettings = {
   workspace: 'C:\\Users\\demo\\Projects',
   launchExecutable: 'C:\\Program Files\\nodejs\\npx.cmd',
   launchArgs: ['--yes', '@deepseek-ai/dsh', 'web'],
+  webPort: 3080,
   openAfterLaunch: true,
 }
 
@@ -112,13 +115,24 @@ const demoRepositories: CatalogRepositoryResult[] = [
 
 let demoInstalledSkills: InstalledSkill[] = []
 
-let demoRuntime: RuntimeState = { running: false, pid: null, startedAt: null, url: null }
+let demoRuntime: RuntimeState = { running: false, pid: null, startedAt: null, url: null, port: null }
 let demoCredential: CredentialStatus = { configured: false }
+let demoGitHubAuth: GitHubAuthStatus = {
+  authenticated: false,
+  login: null,
+  name: null,
+  avatarUrl: null,
+  scopes: [],
+  method: null,
+  oauthAvailable: true,
+  rateLimit: null,
+}
 let demoDshInstallation: DshInstallationStatus = { installed: false, version: null, executable: null, source: null }
 const demoRemoteDshVersion = '0.1.0-rc.7'
 const outputListeners = new Set<(output: RuntimeOutput) => void>()
 const stateListeners = new Set<(state: RuntimeState) => void>()
 const installProgressListeners = new Set<(progress: InstallProgress) => void>()
+const pluginTrialListeners = new Set<(result: PluginTrialResult) => void>()
 const aiEventListeners = new Set<(event: AiInstallEvent) => void>()
 const packProgressListeners = new Set<(event: PackProgressEvent) => void>()
 
@@ -155,7 +169,8 @@ let demoPacks: PackStatus[] = [
     updatedAt: '2026-08-11T14:00:00Z',
   },
 ]
-let demoAiStatus: AiInstallStatus = { phase: 'idle', repository: null, startedAt: null, sessionId: null, message: '' }
+let demoAiStatus: AiInstallStatus = { phase: 'idle', repository: null, taskKind: 'repository-install', subject: null, startedAt: null, sessionId: null, message: '' }
+const demoPluginTrials = new Map<string, PluginTrialResult>()
 let demoAiResolve: ((allow: boolean) => void) | null = null
 let demoAiCancelled = false
 
@@ -323,6 +338,55 @@ export const demoApi: LauncherApi = {
     demoCredential = { configured: false }
     return demoCredential
   },
+  getGitHubAuthStatus: async () => demoGitHubAuth,
+  loginGitHubWithToken: async token => {
+    if (token.trim().length < 20) throw new Error('GitHub 访问令牌格式无效。')
+    demoGitHubAuth = {
+      authenticated: true,
+      login: 'demo-user',
+      name: 'Demo User',
+      avatarUrl: null,
+      scopes: ['repo', 'workflow', 'read:user'],
+      method: 'token',
+      oauthAvailable: true,
+      rateLimit: { limit: 5000, remaining: 4998, resetAt: new Date(Date.now() + 3600_000).toISOString() },
+    }
+    return demoGitHubAuth
+  },
+  beginGitHubDeviceLogin: async () => ({
+    userCode: 'DSH-2026',
+    verificationUri: 'https://github.com/login/device',
+    expiresAt: new Date(Date.now() + 900_000).toISOString(),
+    intervalSeconds: 5,
+  }),
+  completeGitHubDeviceLogin: async () => {
+    await wait(900)
+    demoGitHubAuth = {
+      authenticated: true,
+      login: 'demo-user',
+      name: 'Demo User',
+      avatarUrl: null,
+      scopes: ['repo', 'workflow', 'read:user', 'user:email'],
+      method: 'oauth',
+      oauthAvailable: true,
+      rateLimit: { limit: 5000, remaining: 4999, resetAt: new Date(Date.now() + 3600_000).toISOString() },
+    }
+    return demoGitHubAuth
+  },
+  cancelGitHubDeviceLogin: async () => undefined,
+  logoutGitHub: async () => {
+    demoGitHubAuth = {
+      authenticated: false,
+      login: null,
+      name: null,
+      avatarUrl: null,
+      scopes: [],
+      method: null,
+      oauthAvailable: true,
+      rateLimit: null,
+    }
+    return demoGitHubAuth
+  },
   chooseDirectory: async kind => kind === 'dshInstallPath'
     ? 'D:\\DeepSeek Harness'
     : kind === 'dshHome'
@@ -426,6 +490,32 @@ export const demoApi: LauncherApi = {
     demoPlugins = renumber(demoPlugins.filter(plugin => plugin.packageName !== packageName))
     return profile()
   },
+  trialPlugin: async (packageName, profileName = demoSettings.profileName) => {
+    const startedAt = new Date().toISOString()
+    const running: PluginTrialResult = {
+      packageName, profileName, phase: 'running', message: '正在隔离启动 DSH 核心与当前插件…', diagnostics: '',
+      startedAt, testedAt: null, durationMs: null, url: null,
+    }
+    pluginTrialListeners.forEach(listener => listener(running))
+    await wait(900)
+    const failed = packageName.includes('desktop') || packageName.includes('tui')
+    const failureDiagnostic = packageName.includes('desktop')
+      ? 'dsh-plugin-desktop: pending (waiting for service: desktopRuntime)'
+      : 'terminal plugin cannot activate inside the isolated web host'
+    const result: PluginTrialResult = {
+      ...running,
+      phase: failed ? 'failed' : 'passed',
+      message: failed ? '插件依赖当前隔离 Web 宿主未提供的服务。' : '隔离 Web 服务已启动，插件通过试运行。',
+      diagnostics: failed ? failureDiagnostic : 'Web service listening on http://127.0.0.1:3180/',
+      testedAt: new Date().toISOString(),
+      durationMs: 900,
+      url: failed ? null : 'http://127.0.0.1:3180/',
+    }
+    demoPluginTrials.set(`${profileName}:${packageName}`, result)
+    pluginTrialListeners.forEach(listener => listener(result))
+    return result
+  },
+  readPluginTrials: async () => [...demoPluginTrials.values()],
   installSkill: async request => {
     const analysis = demoSkillAnalysis(request.repository, request.defaultBranch)
     const target = analysis.targets.find(item => item.id === request.targetId)
@@ -452,13 +542,13 @@ export const demoApi: LauncherApi = {
   },
   getRuntimeState: async () => demoRuntime,
   startRuntime: async () => {
-    demoRuntime = { running: true, pid: 18420, startedAt: new Date().toISOString(), url: 'http://127.0.0.1:3080' }
+    demoRuntime = { running: true, pid: 18420, startedAt: new Date().toISOString(), url: `http://127.0.0.1:${demoSettings.webPort}`, port: demoSettings.webPort }
     stateListeners.forEach(listener => listener(demoRuntime))
-    outputListeners.forEach(listener => listener({ channel: 'runtime', level: 'success', text: 'DeepSeek Harness Web UI: http://127.0.0.1:3080', timestamp: new Date().toISOString() }))
+    outputListeners.forEach(listener => listener({ channel: 'runtime', level: 'success', text: `DeepSeek Harness Web UI: http://127.0.0.1:${demoSettings.webPort}`, timestamp: new Date().toISOString() }))
     return demoRuntime
   },
   stopRuntime: async () => {
-    demoRuntime = { ...demoRuntime, running: false, pid: null }
+    demoRuntime = { ...demoRuntime, running: false, pid: null, port: null }
     stateListeners.forEach(listener => listener(demoRuntime))
     return demoRuntime
   },
@@ -478,9 +568,13 @@ export const demoApi: LauncherApi = {
     installProgressListeners.add(listener)
     return () => installProgressListeners.delete(listener)
   },
+  onPluginTrialEvent: listener => {
+    pluginTrialListeners.add(listener)
+    return () => pluginTrialListeners.delete(listener)
+  },
   aiInstall: async input => {
     demoAiCancelled = false
-    setDemoAiStatus({ phase: 'preparing', repository: input.repository, startedAt: new Date().toISOString(), sessionId: null, message: '正在准备 ACP 运行时…' })
+    setDemoAiStatus({ phase: 'preparing', repository: input.repository, taskKind: 'repository-install', subject: input.repository, startedAt: new Date().toISOString(), sessionId: null, message: '正在准备 ACP 运行时…' })
     emitAiEvent({ kind: 'log', text: `开始研究 ${input.repository}（分支 ${input.defaultBranch}）` })
     await wait(500)
     emitAiEvent({ kind: 'snapshot', snapshotId: `demo-${Date.now()}` })
@@ -507,6 +601,27 @@ export const demoApi: LauncherApi = {
     setDemoAiStatus({ phase: 'done', message: 'AI 已完成研究，但安装命令被拒绝。' })
     emitAiEvent({ kind: 'done', message: '安装命令被拒绝，任务结束。快照仍保留，可还原。' })
     return { ok: false, message: '安装命令被拒绝。' }
+  },
+  aiAdaptPlugin: async input => {
+    setDemoAiStatus({ phase: 'preparing', repository: null, taskKind: 'plugin-adaptation', subject: input.packageName, startedAt: new Date().toISOString(), sessionId: null, message: '正在准备插件适配环境…' })
+    emitAiEvent({ kind: 'log', text: `正在读取 ${input.packageName} 的隔离试运行诊断。` })
+    await wait(500)
+    setDemoAiStatus({ phase: 'running', sessionId: 'demo-adaptation', message: 'AI 正在分析试运行诊断并尝试适配插件…' })
+    emitAiEvent({ kind: 'log', text: '检测到插件依赖当前 Web 宿主没有提供的服务，建议从 Web bundles 中安全停用。' })
+    await wait(700)
+    setDemoAiStatus({ phase: 'done', message: 'AI 已完成插件适配分析。' })
+    emitAiEvent({ kind: 'done', message: 'AI 已完成分析与修复尝试。请检查结论和改动。' })
+    return { ok: true, message: 'AI 已完成插件适配分析。' }
+  },
+  aiRepairRuntime: async () => {
+    setDemoAiStatus({ phase: 'preparing', repository: null, taskKind: 'runtime-repair', subject: demoSettings.profileName, startedAt: new Date().toISOString(), sessionId: null, message: '正在准备启动修复环境…' })
+    await wait(500)
+    setDemoAiStatus({ phase: 'running', sessionId: 'demo-runtime-repair', message: 'AI 正在分析启动诊断并尝试修复…' })
+    emitAiEvent({ kind: 'log', text: '正在检查 Profile 的 Bundle 加载顺序和宿主服务依赖。' })
+    await wait(700)
+    setDemoAiStatus({ phase: 'done', message: 'AI 已完成启动修复。' })
+    emitAiEvent({ kind: 'done', message: 'AI 已完成分析与修复尝试。请重新启动验证。' })
+    return { ok: true, message: 'AI 已完成启动修复。' }
   },
   aiApprove: async (requestId, allow) => {
     if (requestId !== 'demo-1' || !demoAiResolve) return false

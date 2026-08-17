@@ -12,11 +12,13 @@ import {
   Layers3,
   Link2,
   LoaderCircle,
+  Play,
   RefreshCw,
   ScanSearch,
   Search,
   SquareTerminal,
   Star,
+  Wrench,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -34,6 +36,7 @@ import type {
   InstalledSkill,
   InstallProgress,
   PluginInstallTarget,
+  PluginTrialResult,
   ProfileState,
   RepositoryInstallResult,
   SkillInstallResult,
@@ -59,6 +62,7 @@ interface DiscoverViewProps {
   installProgress: InstallProgress | null
   installedRepositories: Set<string>
   installedSkills: InstalledSkill[]
+  pluginTrials: Record<string, PluginTrialResult>
   onAnalysis: (repository: string, analysis: CatalogRepositoryAnalysis) => void
   onInstallationState: (repositories: string[], skills: InstalledSkill[]) => void
   onInstallStarted: (progress: InstallProgress) => void
@@ -69,8 +73,11 @@ interface DiscoverViewProps {
   onOpenRepository: (url: string) => void
   /** 启动「AI 尝试」安装（仅非标准形态显示）。 */
   onAiInstall: (repo: CatalogRepositoryResult) => void
+  onTrialPlugin: (packageName: string, profileName: string) => void
+  onAdaptPlugin: (packageName: string, profileName: string) => void
   /** 正在跑 AI 任务的仓库，用于行内 spinner。 */
   aiRepository: string | null
+  aiSubject: string | null
   /** 是否有 AI 任务在跑（全局禁用普通安装与再次触发）。 */
   aiActive: boolean
 }
@@ -107,6 +114,7 @@ export function DiscoverView({
   installProgress,
   installedRepositories,
   installedSkills,
+  pluginTrials,
   onAnalysis,
   onInstallationState,
   onInstallStarted,
@@ -116,7 +124,10 @@ export function DiscoverView({
   onError,
   onOpenRepository,
   onAiInstall,
+  onTrialPlugin,
+  onAdaptPlugin,
   aiRepository,
+  aiSubject,
   aiActive,
 }: DiscoverViewProps) {
   const api = useLauncherApi()
@@ -426,6 +437,8 @@ export function DiscoverView({
           const needsDialog = analysis?.kind === 'hybrid' || totalTargets > 1
           const singlePlugin = plugins.length === 1 && skills.length === 0 ? plugins[0] : undefined
           const singleSkill = skills.length === 1 && plugins.length === 0 ? skills[0] : undefined
+          const trialTarget = plugins.length === 1 && anyInstalled ? plugins[0] : undefined
+          const trial = trialTarget ? pluginTrials[`${trialTarget.profileName}:${trialTarget.packageName}`] : undefined
           const actionLabel = repo.kind === 'dsh'
             ? dshInstallation.installed ? '更新 DSH' : '安装 DSH'
             : !analysis
@@ -516,9 +529,21 @@ export function DiscoverView({
                 ) : anyInstalled ? (
                   <div className="installed-actions">
                     <span className="installed-label"><Check size={16} />{installedLabel}</span>
-                    <button type="button" className="install-button update-button" disabled={actionDisabled} onClick={runAction} title={`管理 ${repo.name}`}>
-                      {isChecking ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}{actionLabel}
-                    </button>
+                    <div className="installed-command-row">
+                      {trialTarget && (
+                        <PluginTrialActions
+                          target={trialTarget}
+                          result={trial}
+                          disabled={actionDisabled}
+                          adapting={aiActive && aiSubject === trialTarget.packageName}
+                          onTrial={onTrialPlugin}
+                          onAdapt={onAdaptPlugin}
+                        />
+                      )}
+                      <button type="button" className="install-button update-button" disabled={actionDisabled || trial?.phase === 'running'} onClick={runAction} title={`管理 ${repo.name}`}>
+                        {isChecking ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}{actionLabel}
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="ai-ready-actions">
@@ -557,10 +582,15 @@ export function DiscoverView({
           profile={profile}
           installedRepositories={installedRepos}
           installedSkillNames={installedSkillNames}
+          pluginTrials={pluginTrials}
           busy={activeInstalling !== null}
+          aiActive={aiActive}
+          aiSubject={aiSubject}
           onClose={() => setTargetDialog(null)}
           onInstallPlugin={target => void installPlugin(targetDialog.repo, target)}
           onInstallSkill={target => void installSkill(targetDialog.repo, target)}
+          onTrialPlugin={onTrialPlugin}
+          onAdaptPlugin={onAdaptPlugin}
         />
       )}
 
@@ -630,26 +660,87 @@ const importUrlDialogStyle = `
 }
 `
 
+function PluginTrialActions({
+  target,
+  result,
+  disabled,
+  adapting,
+  onTrial,
+  onAdapt,
+}: {
+  target: PluginInstallTarget
+  result?: PluginTrialResult
+  disabled: boolean
+  adapting: boolean
+  onTrial: (packageName: string, profileName: string) => void
+  onAdapt: (packageName: string, profileName: string) => void
+}) {
+  const running = result?.phase === 'running'
+  const trialLabel = running
+    ? '试运行中'
+    : result?.phase === 'passed'
+      ? '再次试运行'
+      : result?.phase === 'failed'
+        ? '重新试运行'
+        : '试运行'
+  return (
+    <div className="plugin-trial-actions">
+      <button
+        type="button"
+        className={`secondary-button compact trial-button ${result?.phase ?? ''}`}
+        disabled={disabled || running || adapting}
+        onClick={() => onTrial(target.packageName, target.profileName)}
+        title={result?.message ?? `只加载 DSH Web 核心与 ${target.packageName} 进行隔离试运行`}
+      >
+        {running ? <LoaderCircle className="spin" size={14} /> : result?.phase === 'passed' ? <CircleCheck size={14} /> : result?.phase === 'failed' ? <CircleAlert size={14} /> : <Play size={14} />}
+        {trialLabel}
+      </button>
+      {result?.phase === 'failed' && (
+        <button
+          type="button"
+          className="secondary-button compact accent adapt-button"
+          disabled={disabled || adapting}
+          onClick={() => onAdapt(target.packageName, target.profileName)}
+          title="调用 DSH Flash 模型分析失败诊断并尝试做最小安全适配"
+        >
+          {adapting ? <LoaderCircle className="spin" size={14} /> : <Wrench size={14} />}
+          DSH 安装适配
+        </button>
+      )}
+    </div>
+  )
+}
+
 function CatalogTargetDialog({
   repo,
   analysis,
   profile,
   installedRepositories,
   installedSkillNames,
+  pluginTrials,
   busy,
+  aiActive,
+  aiSubject,
   onClose,
   onInstallPlugin,
   onInstallSkill,
+  onTrialPlugin,
+  onAdaptPlugin,
 }: {
   repo: CatalogRepositoryResult
   analysis: CatalogRepositoryAnalysis
   profile: ProfileState
   installedRepositories: Set<string>
   installedSkillNames: Set<string>
+  pluginTrials: Record<string, PluginTrialResult>
   busy: boolean
+  aiActive: boolean
+  aiSubject: string | null
   onClose: () => void
   onInstallPlugin: (target: PluginInstallTarget) => void
   onInstallSkill: (target: SkillInstallTarget) => void
+  onTrialPlugin: (packageName: string, profileName: string) => void
+  onAdaptPlugin: (packageName: string, profileName: string) => void
 }) {
   const plugins = pluginTargets(analysis)
   const skills = skillTargets(analysis)
@@ -674,6 +765,7 @@ function CatalogTargetDialog({
                     {plugins.map(target => {
                       const installed = profile.plugins.some(plugin => plugin.packageName === target.packageName)
                         || (plugins.length === 1 && repoInstalled)
+                      const trial = pluginTrials[`${target.profileName}:${target.packageName}`]
                       return (
                         <div className="plugin-target-row" key={`plugin:${target.id}`}>
                           <div className="plugin-target-icon">{target.platform === 'terminal' ? <SquareTerminal size={17} /> : <Box size={17} />}</div>
@@ -682,7 +774,19 @@ function CatalogTargetDialog({
                             <span>{target.source === 'npm' ? `npm ${target.version ?? ''}` : target.source === 'github' ? 'GitHub 仓库根目录' : `仓库子目录：${target.subdirectory}`}</span>
                             <small>{target.profileName} Profile{target.nodeRange ? ` · Node ${target.nodeRange}` : ''}{target.requiresBuild ? ` · 构建脚本：${target.buildScripts.join(', ')}` : ''}</small>
                           </div>
-                          <button type="button" className="install-button" disabled={busy} onClick={() => onInstallPlugin(target)}>{installed ? <RefreshCw size={15} /> : <Download size={15} />}{installed ? '更新' : '安装'}</button>
+                          <div className="plugin-target-actions">
+                            {installed && (
+                              <PluginTrialActions
+                                target={target}
+                                result={trial}
+                                disabled={busy || aiActive}
+                                adapting={aiActive && aiSubject === target.packageName}
+                                onTrial={onTrialPlugin}
+                                onAdapt={onAdaptPlugin}
+                              />
+                            )}
+                            <button type="button" className="install-button" disabled={busy || aiActive || trial?.phase === 'running'} onClick={() => onInstallPlugin(target)}>{installed ? <RefreshCw size={15} /> : <Download size={15} />}{installed ? '更新' : '安装'}</button>
+                          </div>
                         </div>
                       )
                     })}

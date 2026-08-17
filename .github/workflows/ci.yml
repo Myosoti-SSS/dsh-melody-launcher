@@ -63,6 +63,8 @@ jobs:
       # npm run build === tsc --noEmit && vite build
       # 同时覆盖类型检查、渲染层构建和主进程/preload 打包。
       - name: 类型检查与构建
+        env:
+          DSH_LAUNCHER_GITHUB_CLIENT_ID: ${{ vars.DSH_LAUNCHER_GITHUB_CLIENT_ID }}
         run: npm run build
 
       - name: 上传构建产物
@@ -103,6 +105,8 @@ jobs:
         run: npm ci
 
       - name: 打包便携版
+        env:
+          DSH_LAUNCHER_GITHUB_CLIENT_ID: ${{ vars.DSH_LAUNCHER_GITHUB_CLIENT_ID }}
         run: npm run package:win
 
       - name: 上传便携版
