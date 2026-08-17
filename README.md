@@ -80,14 +80,16 @@
 - **自动准备 Node.js** —— 系统没有 Node.js 也能用：自动从 Node.js 官网下载便携运行时，SHA-256 校验，支持断点续传
 - **自动准备 pnpm** —— 首次管理插件时安装启动器专用的 pnpm，不依赖系统全局命令，并统一提供给普通安装、整合包与 AI 尝试模式
 - **多路径 DSH 检测** —— 依次检查启动器运行目录、当前启动配置、`PATH`、`%APPDATA%\npm` 和系统 Node.js 目录
-- **进程生命周期管理** —— 启动、停止、实时日志（stdout/stderr 分级），退出启动器时自动收尾 DSH 进程
+- **进程生命周期管理** —— 启动、停止、实时日志（stdout/stderr 分级），停止或退出启动器时同步收尾 DSH 及由启动器拉起的伴随进程
 - **自动打开网页** —— 从日志中识别本地服务地址并自动在浏览器打开（可关闭）
 
 ### 统一资源市场与插件管理
 
-- **统一发现** —— 并行检索 [`dsh-plugin`](https://github.com/topics/dsh-plugin) 与 [`dsh-skill`](https://github.com/topics/dsh-skill)，在同一列表中浏览和搜索
-- **内容识别** —— Topic 只作为候选来源；检测后按真实仓库内容标记为 `Plugin`、`Skill`、`Plugin + Skill`、`DSH 本体` 或 `无效`
-- **按标签安装** —— Plugin 进入目标 Profile，Skill 写入 `$DSH_HOME/skills`；混合仓库由用户逐项选择组件，不会默认安装全部
+- **统一发现** —— 并行检索 [`dsh-plugin`](https://github.com/topics/dsh-plugin)、[`dsh-skill`](https://github.com/topics/dsh-skill) 与 `dsh-app`，在同一列表中浏览和搜索
+- **内容识别** —— Topic 只作为候选来源；检测后按真实仓库内容标记为 `Plugin`、`Skill`、`应用加载项`、`Agent 预设`、混合资源、`DSH 本体` 或 `无效`
+- **按标签安装** —— Plugin 进入目标 Profile，Skill 与预设写入各自目录；应用加载项使用独立运行目录，混合仓库由用户明确选择组件
+- **应用加载项管理** —— 支持替代 Web 启动、DSH 启动后伴随运行和独立应用三种模式；与同仓库 Plugin 协同时同步启停
+- **聚合仓库支持** —— 可展开 Git 子模块组成的资源套件，并从固定 revision 或 Release 资产安装 Plugin、Skill 与 Agent 预设
 - **严格 Skill 校验** —— 检查目录型 `<name>/SKILL.md` 或单文件 `<name>.md`，YAML frontmatter 必须包含 kebab-case 的 `name` 与非空 `description`
 - **分阶段安装进度** —— `准备 → 解析 → 下载 → 配置 → 完成` 五个阶段，带百分比与实时状态文本
 - **加载顺序编排** —— 直接读写 DSH 官方 Profile，调整启用状态与 Bundle 加载顺序
@@ -99,7 +101,8 @@
 
 - **双尺寸窗口** —— 无边框设计，启动模式（900×560）与管理模式（1380×860）自由切换
 - **GitHub 账号登录** —— 支持 OAuth Device Flow 与 Fine-grained Token，凭据使用 Electron 安全存储加密；市场搜索、仓库检测、下载与更新检查统一携带认证
-- **API Key 管理** —— 在软件内配置或清除 DeepSeek API Key
+- **API 管理** —— 在软件内配置 DeepSeek API Key，也可添加 OpenAI Completions、OpenAI Responses 或 Anthropic Messages 兼容的自定义服务
+- **启动器自更新** —— 启动时检查 GitHub Release，可在界面下载并应用新版便携程序
 - **完整运行配置** —— `DSH_HOME`、Profile 名称、工作目录、启动命令与参数，均可在界面调整
 - **便携版** —— 启动器自身无需安装，单文件 exe
 

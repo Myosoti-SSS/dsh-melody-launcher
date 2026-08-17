@@ -80,14 +80,16 @@ The problems it removes:
 - **Automatic Node.js provisioning** — works even without Node.js installed: downloads the official portable runtime, verifies it with SHA-256, and supports resuming interrupted downloads
 - **Automatic pnpm provisioning** — installs a launcher-managed pnpm on the first plugin operation, with no global command required, and shares it across regular installs, modpacks, and AI-assisted installation
 - **Multi-path DSH detection** — checks the launcher's runtime directory, the configured launch command, `PATH`, `%APPDATA%\npm`, and the system Node.js directory
-- **Process lifecycle management** — start, stop, and stream live logs (stdout/stderr, leveled); the DSH process is shut down cleanly when the launcher exits
+- **Process lifecycle management** — start, stop, and stream live logs (stdout/stderr, leveled); stopping or exiting also cleans up companion processes launched by the app
 - **Auto-open the web UI** — detects the local service URL from the log stream and opens it in your browser (optional)
 
 ### Unified Resource Market and Plugin Management
 
-- **Unified discovery** — searches both [`dsh-plugin`](https://github.com/topics/dsh-plugin) and [`dsh-skill`](https://github.com/topics/dsh-skill) and combines them in one catalog
-- **Content-based classification** — topics are candidate sources only; repository inspection labels each result as `Plugin`, `Skill`, `Plugin + Skill`, `DSH core`, or `Invalid`
-- **Type-routed installation** — plugins go to a DSH profile, skills go to `$DSH_HOME/skills`, and hybrid repositories always require explicit component selection
+- **Unified discovery** — searches [`dsh-plugin`](https://github.com/topics/dsh-plugin), [`dsh-skill`](https://github.com/topics/dsh-skill), and `dsh-app`, then combines them in one catalog
+- **Content-based classification** — topics are candidate sources only; repository inspection recognizes plugins, skills, application add-ons, agent presets, hybrid resources, DSH core, and invalid repositories
+- **Type-routed installation** — plugins go to a DSH profile, skills and presets use their dedicated directories, and application add-ons get isolated runtimes with explicit user selection
+- **Application add-on management** — supports runtime replacement, after-runtime companion, and standalone launch modes, with synchronized toggles for linked plugins
+- **Meta-repository support** — expands Git submodule suites and installs components from pinned revisions or GitHub Release assets
 - **Strict Skill validation** — validates directory `SKILL.md` bundles and flat Markdown skills, including required YAML frontmatter
 - **Staged install progress** — `preparing → resolving → downloading → configuring → complete`, with percentage and live status text
 - **Load order control** — reads and writes the official DSH profile directly to toggle plugins and reorder bundles
@@ -99,7 +101,8 @@ The problems it removes:
 
 - **Dual-size window** — frameless design that switches between launcher mode (900×560) and manager mode (1380×860)
 - **GitHub account login** — supports OAuth Device Flow and fine-grained tokens, encrypts credentials with Electron safe storage, and authenticates catalog, inspection, download, and update requests centrally
-- **API key management** — set or clear your DeepSeek API key inside the app
+- **API management** — configure the DeepSeek API key or add custom OpenAI Completions, OpenAI Responses, and Anthropic Messages-compatible providers
+- **Launcher self-update** — checks GitHub Releases on startup and can download and apply a new portable build from the app
 - **Full runtime configuration** — `DSH_HOME`, profile name, working directory, launch executable and arguments are all editable in the UI
 - **Portable** — the launcher itself needs no installation; a single exe
 
