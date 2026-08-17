@@ -3,6 +3,7 @@ import { createServer } from 'node:net'
 import path from 'node:path'
 import { DSH_PACKAGE_NAME } from '../src/constants'
 import type { AppSettings, RuntimeFailure, RuntimeOutput, RuntimeState } from '../src/types'
+import type { ApplicationLaunchPlan, ApplicationLaunchSpec } from './application-addons'
 import { requiresNodeRuntime, resolveNodeExecutable, type NodeRuntime } from './node-runtime'
 import { pathExists } from './profile'
 import { spawnCommand, withExecutableDirectoryOnPath } from './process'
@@ -82,6 +83,9 @@ export interface RuntimeControllerOptions {
   emitOutput: (level: RuntimeOutput['level'], text: string) => void
   emitState: (state: RuntimeState) => void
   openExternal: (url: string) => void
+  resolveApplicationLaunchPlan?: () => Promise<ApplicationLaunchPlan>
+  spawnProcess?: typeof spawnCommand
+  stopProcess?: (processToStop: ChildProcessWithoutNullStreams) => Promise<void>
 }
 
 export interface RuntimeController {
@@ -93,11 +97,17 @@ export interface RuntimeController {
 }
 
 export function createRuntimeController(options: RuntimeControllerOptions): RuntimeController {
+  const startProcess = options.spawnProcess ?? spawnCommand
   let child: ChildProcessWithoutNullStreams | null = null
+  const companions = new Map<string, ChildProcessWithoutNullStreams>()
+  let companionTimer: NodeJS.Timeout | null = null
   let startedAt: string | null = null
   let url: string | null = null
   let port: number | null = null
   let lastFailure: RuntimeFailure | null = null
+  let launchMode: RuntimeState['launchMode'] = 'web'
+  let applicationAddonId: string | null = null
+  let applicationAddonName: string | null = null
 
   const state = (): RuntimeState => ({
     running: child !== null,
@@ -105,27 +115,95 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
     startedAt,
     url,
     port,
+    launchMode,
+    applicationAddonId,
+    applicationAddonName,
     lastFailure,
   })
 
   const broadcast = () => options.emitState(state())
 
+  const killProcessTree = async (processToStop: ChildProcessWithoutNullStreams): Promise<void> => {
+    if (options.stopProcess) {
+      await options.stopProcess(processToStop)
+      return
+    }
+    if (process.platform === 'win32' && processToStop.pid) {
+      const killer = spawn('taskkill.exe', ['/pid', String(processToStop.pid), '/t', '/f'], { windowsHide: true })
+      await new Promise<void>(resolve => {
+        killer.once('error', () => resolve())
+        killer.once('exit', () => resolve())
+      })
+      return
+    }
+    processToStop.kill('SIGTERM')
+  }
+
+  const stopCompanions = async (): Promise<void> => {
+    if (companionTimer) {
+      clearTimeout(companionTimer)
+      companionTimer = null
+    }
+    const running = [...companions.values()]
+    companions.clear()
+    await Promise.allSettled(running.map(killProcessTree))
+  }
+
+  const startCompanions = (
+    specs: ApplicationLaunchSpec[],
+    settings: AppSettings,
+  ): void => {
+    if (companionTimer) {
+      clearTimeout(companionTimer)
+      companionTimer = null
+    }
+    for (const spec of specs) {
+      if (companions.has(spec.id)) continue
+      try {
+        const environment = withExecutableDirectoryOnPath(spec.executable, runtimeEnvironment(settings, process.env))
+        const companion = startProcess(spec.executable, spec.args, { cwd: spec.cwd, env: environment })
+        companions.set(spec.id, companion)
+        options.emitOutput('info', `伴随应用已启动：${spec.name}`)
+        companion.stdout.on('data', chunk => options.emitOutput('info', `[${spec.name}] ${chunk.toString('utf8')}`))
+        companion.stderr.on('data', chunk => options.emitOutput('error', `[${spec.name}] ${chunk.toString('utf8')}`))
+        companion.once('error', error => options.emitOutput('error', `${spec.name} 启动失败：${error.message}`))
+        companion.once('exit', code => {
+          companions.delete(spec.id)
+          options.emitOutput(code === 0 ? 'success' : 'error', `${spec.name} 已退出（代码 ${code ?? '未知'}）`)
+        })
+      } catch (error) {
+        options.emitOutput('error', `${spec.name} 启动失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+
   async function start(): Promise<RuntimeState> {
     if (child) return state()
 
     const settings = await options.readSettings()
-    const cwd = (await pathExists(settings.workspace)) ? settings.workspace : options.fallbackWorkspace()
+    const defaultCwd = (await pathExists(settings.workspace)) ? settings.workspace : options.fallbackWorkspace()
+    const applicationPlan = options.resolveApplicationLaunchPlan
+      ? await options.resolveApplicationLaunchPlan()
+      : { replacement: null, companions: [] }
+    const replacement = applicationPlan.replacement
+    const cwd = replacement?.cwd ?? defaultCwd
 
-    let executable = settings.launchExecutable
+    let executable = replacement?.executable ?? settings.launchExecutable
     let environment = runtimeEnvironment(settings, process.env)
-    if (requiresNodeRuntime(executable, settings.launchArgs)) {
+    let launchArgs = replacement?.args ?? settings.launchArgs
+    if (requiresNodeRuntime(executable, launchArgs)) {
       const nodeRuntime = await options.prepareNodeRuntime()
       executable = resolveNodeExecutable(executable, nodeRuntime)
       environment = withExecutableDirectoryOnPath(nodeRuntime.node, environment)
     }
 
-    let launchArgs = settings.launchArgs
-    if (isDshWebLaunch(executable, launchArgs)) {
+    launchMode = replacement ? 'application-replacement' : 'web'
+    applicationAddonId = replacement?.id ?? null
+    applicationAddonName = replacement?.name ?? null
+    if (replacement) {
+      port = null
+      options.emitOutput('info', `启动模式：${replacement.name} 替代普通 DSH Web`)
+    } else if (isDshWebLaunch(executable, launchArgs)) {
       const selectedPort = await findAvailableWebPort(settings.webPort)
       if (selectedPort === null) {
         const message = `从端口 ${settings.webPort} 开始连续检测 ${PORT_FALLBACK_ATTEMPTS} 个端口，均不可用。`
@@ -148,7 +226,7 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
     options.emitOutput('info', `工作目录：${cwd}`)
 
     lastFailure = null
-    const started = spawnCommand(executable, launchArgs, { cwd, env: environment })
+    const started = startProcess(executable, launchArgs, { cwd, env: environment })
     child = started
     startedAt = new Date().toISOString()
     url = null
@@ -165,7 +243,8 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
       if (foundUrl && foundUrl !== url) {
         url = foundUrl
         broadcast()
-        if (settings.openAfterLaunch) options.openExternal(foundUrl)
+        if (!replacement && settings.openAfterLaunch) options.openExternal(foundUrl)
+        startCompanions(applicationPlan.companions, settings)
       }
     }
     started.stdout.on('data', handleData('info'))
@@ -178,6 +257,7 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
         failedAt: new Date().toISOString(),
       }
       options.emitOutput('error', `启动失败：${error.message}`)
+      void stopCompanions()
       broadcast()
     })
     started.once('exit', code => {
@@ -185,6 +265,7 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
       const expected = child === null
       child = null
       port = null
+      void stopCompanions()
       if (!expected && code !== 0 && stderrOutput.includes('EADDRINUSE')) {
         options.emitOutput('error', '选中的本地端口在启动过程中被其他进程占用，请重新启动，启动器会继续选择其他可用端口。')
       }
@@ -201,29 +282,31 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
           failedAt: new Date().toISOString(),
         }
       }
-      options.emitOutput(code === 0 || expected ? 'success' : 'error', `DSH 已退出（代码 ${code ?? '未知'}）`)
+      const processName = replacement?.name ?? 'DSH'
+      options.emitOutput(code === 0 || expected ? 'success' : 'error', `${processName} 已退出（代码 ${code ?? '未知'}）`)
       broadcast()
     })
+
+    if (applicationPlan.companions.length > 0) {
+      companionTimer = setTimeout(() => startCompanions(applicationPlan.companions, settings), 5_000)
+      companionTimer.unref()
+    }
 
     return state()
   }
 
   async function stop(): Promise<RuntimeState> {
     const running = child
-    if (!running) return state()
+    if (!running) {
+      await stopCompanions()
+      return state()
+    }
     child = null
     port = null
+    applicationAddonId = null
+    applicationAddonName = null
 
-    if (process.platform === 'win32' && running.pid) {
-      // DSH 会派生子进程，必须整棵进程树一起结束。
-      const killer = spawn('taskkill.exe', ['/pid', String(running.pid), '/t', '/f'], { windowsHide: true })
-      await new Promise<void>(resolve => {
-        killer.once('error', () => resolve())
-        killer.once('exit', () => resolve())
-      })
-    } else {
-      running.kill('SIGTERM')
-    }
+    await Promise.allSettled([killProcessTree(running), stopCompanions()])
 
     options.emitOutput('info', '已发送停止请求。')
     broadcast()

@@ -4,6 +4,7 @@ import { DSH_REPOSITORY, EMPTY_DSH_INSTALLATION, EMPTY_RUNTIME_STATE, MAX_LOG_LI
 import { errorText } from '../lib/format'
 import { reorderProfilePlugins } from '../lib/profile-order'
 import type {
+  ApplicationInstallResult,
   AppSettings,
   CredentialStatus,
   DshInstallationStatus,
@@ -11,6 +12,7 @@ import type {
   GitHubAuthStatus,
   InstallProgress,
   InstalledSkill,
+  InstalledApplicationAddon,
   ManagedPlugin,
   PackStatus,
   PluginTrialResult,
@@ -49,6 +51,7 @@ export function useLauncherStore() {
   const [pluginTrials, setPluginTrials] = useState<Record<string, PluginTrialResult>>({})
   const [installedRepositories, setInstalledRepositories] = useState<Set<string>>(new Set())
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([])
+  const [installedApplications, setInstalledApplications] = useState<InstalledApplicationAddon[]>([])
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>({ configured: false })
   const [githubAuthStatus, setGitHubAuthStatus] = useState<GitHubAuthStatus>({
     authenticated: false,
@@ -65,6 +68,9 @@ export function useLauncherStore() {
   const [packs, setPacks] = useState<PackStatus[]>([])
   const [packSnapshotsAvailable, setPackSnapshotsAvailable] = useState(false)
   const [loading, setLoading] = useState(true)
+  const activeRuntimeReplacement = installedApplications.find(
+    application => application.enabled && application.launchMode === 'runtime-replacement',
+  ) ?? null
 
   /** 保留原选中项；它已不存在时退回列表首项。 */
   const adoptProfile = useCallback((next: ProfileState) => {
@@ -84,11 +90,12 @@ export function useLauncherStore() {
       api.getGitHubAuthStatus(),
       api.detectDshInstallation(),
       api.readInstalledSkills(),
+      api.readInstalledApplications(),
       api.listPacks(),
       api.packHasSnapshot(),
       api.readPluginTrials(),
     ])
-      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextGitHubAuthStatus, nextDshInstallation, nextInstalledSkills, nextPacks, nextPackSnapshot, nextPluginTrials]) => {
+      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextGitHubAuthStatus, nextDshInstallation, nextInstalledSkills, nextInstalledApplications, nextPacks, nextPackSnapshot, nextPluginTrials]) => {
         setSettings(nextSettings)
         setProfile(nextProfile)
         setRuntime(nextRuntime)
@@ -96,6 +103,7 @@ export function useLauncherStore() {
         setGitHubAuthStatus(nextGitHubAuthStatus)
         setDshInstallation(nextDshInstallation)
         setInstalledSkills(nextInstalledSkills)
+        setInstalledApplications(nextInstalledApplications)
         setSelectedPlugin(nextProfile.plugins[0]?.packageName ?? null)
         setPacks(nextPacks)
         setPackSnapshotsAvailable(nextPackSnapshot)
@@ -138,9 +146,14 @@ export function useLauncherStore() {
     setDshInstallation(result.dshInstallation)
   }, [adoptProfile])
 
-  const adoptCatalogInstallationState = useCallback((repositories: string[], skills: InstalledSkill[]) => {
+  const adoptCatalogInstallationState = useCallback((
+    repositories: string[],
+    skills: InstalledSkill[],
+    applications: InstalledApplicationAddon[],
+  ) => {
     setInstalledRepositories(new Set(repositories.map(repository => repository.toLowerCase())))
     setInstalledSkills(skills)
+    setInstalledApplications(applications)
   }, [])
 
   const applyCatalogPluginInstall = useCallback((repository: string, result: RepositoryInstallResult) => {
@@ -159,6 +172,12 @@ export function useLauncherStore() {
   const applyCatalogSkillInstall = useCallback((result: SkillInstallResult) => {
     setInstalledSkills(result.installedSkills)
   }, [])
+
+  const applyCatalogApplicationInstall = useCallback((result: ApplicationInstallResult) => {
+    setInstalledApplications(result.installedAddons)
+    adoptProfile(result.profile)
+    if (result.migrationWarning) showToast({ kind: 'error', message: result.migrationWarning })
+  }, [adoptProfile, showToast])
 
   const beginInstall = useCallback((progress: InstallProgress) => {
     setInstallProgress(progress)
@@ -189,7 +208,7 @@ export function useLauncherStore() {
    * 首页主按钮。尚未安装 DSH 时先完成部署，之后才是启动/停止。
    */
   const toggleRuntime = useCallback(async (): Promise<RuntimeToggleResult> => {
-    const needsInstallation = !runtime.running && !dshInstallation.installed
+    const needsInstallation = !runtime.running && !dshInstallation.installed && !activeRuntimeReplacement
     if (needsInstallation) {
       const result = await installDsh()
       if (!result) return 'failed'
@@ -201,7 +220,7 @@ export function useLauncherStore() {
     if (!next) return 'failed'
     setRuntime(next)
     return wasRunning ? 'stopped' : 'started'
-  }, [dshInstallation.installed, installDsh, run, runtime.running])
+  }, [activeRuntimeReplacement, dshInstallation.installed, installDsh, run, runtime.running])
 
   const updateDsh = useCallback(async (): Promise<boolean> => {
     const result = await installDsh()
@@ -250,6 +269,22 @@ export function useLauncherStore() {
       success: enabled ? `Skill「${skill.name}」已启用。` : `Skill「${skill.name}」已停用。`,
     })
     if (next) setInstalledSkills(next)
+  }, [api, run])
+
+  const toggleApplication = useCallback(async (application: InstalledApplicationAddon, enabled: boolean) => {
+    const next = await run(`application:${application.id}`, () => api.toggleApplication(application.id, enabled), {
+      success: enabled
+        ? `${application.name} 已激活，将按“${application.launchMode}”模式参与下次启动。`
+        : `${application.name} 已停用。`,
+    })
+    if (next) setInstalledApplications(next)
+  }, [api, run])
+
+  const uninstallApplication = useCallback(async (application: InstalledApplicationAddon) => {
+    const next = await run(`application-remove:${application.id}`, () => api.uninstallApplication(application.id), {
+      success: `${application.name} 已卸载。`,
+    })
+    if (next) setInstalledApplications(next)
   }, [api, run])
 
   /** 先本地重排让拖拽有即时反馈，主进程写盘失败再回滚。 */
@@ -392,6 +427,8 @@ export function useLauncherStore() {
     pluginTrials,
     installedRepositories,
     installedSkills,
+    installedApplications,
+    activeRuntimeReplacement,
     credentialStatus,
     githubAuthStatus,
     logs,
@@ -412,6 +449,7 @@ export function useLauncherStore() {
     adoptCatalogInstallationState,
     applyCatalogPluginInstall,
     applyCatalogSkillInstall,
+    applyCatalogApplicationInstall,
     beginInstall,
     finishInstall,
     toggleRuntime,
@@ -422,6 +460,8 @@ export function useLauncherStore() {
     setGitHubAuthStatus,
     togglePlugin,
     toggleSkill,
+    toggleApplication,
+    uninstallApplication,
     reorderPlugins,
     uninstallPlugin,
     trialPlugin,

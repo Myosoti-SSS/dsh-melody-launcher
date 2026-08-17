@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   ArrowDown,
   ArrowUp,
   BookOpenCheck,
@@ -24,7 +25,7 @@ import { useState } from 'react'
 import { PageHeading } from '../components/PageHeading'
 import { pluginInitial } from '../lib/format'
 import { movePackage, movePackageTo } from '../lib/profile-order'
-import type { InstalledSkill, ManagedPlugin, PluginTrialResult, ProfileState } from '../types'
+import type { InstalledApplicationAddon, InstalledSkill, ManagedPlugin, PluginTrialResult, ProfileState } from '../types'
 
 /** 插件加载顺序页：列表、排序、启停与详情。 */
 
@@ -32,12 +33,15 @@ interface PluginsViewProps {
   profile: ProfileState
   profileName: string
   installedSkills: InstalledSkill[]
+  installedApplications: InstalledApplicationAddon[]
   pluginTrials: Record<string, PluginTrialResult>
   selected: ManagedPlugin | null
   busy: string | null
   onSelect: (plugin: ManagedPlugin) => void
   onToggle: (plugin: ManagedPlugin, enabled: boolean) => void
   onToggleSkill: (skill: InstalledSkill, enabled: boolean) => void
+  onToggleApplication: (application: InstalledApplicationAddon, enabled: boolean) => void
+  onUninstallApplication: (application: InstalledApplicationAddon) => void
   onReorder: (names: string[]) => void
   onRefresh: () => void
   onBrowse: () => void
@@ -54,12 +58,15 @@ export function PluginsView({
   profile,
   profileName,
   installedSkills,
+  installedApplications,
   pluginTrials,
   selected,
   busy,
   onSelect,
   onToggle,
   onToggleSkill,
+  onToggleApplication,
+  onUninstallApplication,
   onReorder,
   onRefresh,
   onBrowse,
@@ -96,7 +103,7 @@ export function PluginsView({
       <PageHeading
         eyebrow="WEB PROFILE"
         title="插件加载顺序"
-        description="上方先加载，下方可覆盖前序配置。停用插件不会从本机删除。"
+        description="Plugin 按顺序加载；Skill 与应用加载项独立启停。应用宿主不会写入 Web Profile。"
         actions={(
           <>
             <button className="secondary-button" type="button" onClick={onRefresh}><RefreshCw size={17} />刷新</button>
@@ -168,7 +175,15 @@ export function PluginsView({
               ))}
             </div>
               </div>
-              <SkillList skills={installedSkills.filter(skill => visibleSkill(skill, filter))} busy={busy} onToggle={onToggleSkill} />
+              <div className="secondary-management-column">
+                <SkillList skills={installedSkills.filter(skill => visibleSkill(skill, filter))} busy={busy} onToggle={onToggleSkill} />
+                <ApplicationList
+                  applications={installedApplications.filter(application => visibleApplication(application, filter))}
+                  busy={busy}
+                  onToggle={onToggleApplication}
+                  onUninstall={onUninstallApplication}
+                />
+              </div>
             </div>
           </section>
           <PluginDetails
@@ -191,6 +206,62 @@ export function PluginsView({
 
 function visibleSkill(skill: InstalledSkill, filter: string): boolean {
   return !filter || `${skill.name} ${skill.description}`.toLowerCase().includes(filter.toLowerCase())
+}
+
+function visibleApplication(application: InstalledApplicationAddon, filter: string): boolean {
+  return !filter || `${application.name} ${application.packageName} ${application.description}`.toLowerCase().includes(filter.toLowerCase())
+}
+
+function ApplicationList({ applications, busy, onToggle, onUninstall }: {
+  applications: InstalledApplicationAddon[]
+  busy: string | null
+  onToggle: (application: InstalledApplicationAddon, enabled: boolean) => void
+  onUninstall: (application: InstalledApplicationAddon) => void
+}) {
+  return (
+    <div className="application-management-column">
+      <div className="skill-column-heading"><span><AppWindow size={14} />应用加载项</span><small>{applications.length} 个已安装</small></div>
+      {applications.length === 0 ? (
+        <div className="skill-empty">尚未安装应用加载项</div>
+      ) : (
+        <div className="application-rows">
+          {applications.map(application => (
+            <div className={`application-row ${application.enabled ? '' : 'disabled'}`} key={application.id}>
+              <div className="skill-identity">
+                <div className="skill-glyph application-icon"><AppWindow size={15} /></div>
+                <div>
+                  <strong>{application.name}</strong>
+                  <span>{application.launchMode === 'runtime-replacement' ? '替代 Web 启动' : application.launchMode === 'after-runtime' ? '启动后伴随运行' : '独立应用'} · {application.version}</span>
+                </div>
+              </div>
+              <div className="application-row-actions">
+                <label className="switch" title={application.enabled ? '停用应用加载项' : '启用应用加载项'}>
+                  <input
+                    type="checkbox"
+                    checked={application.enabled}
+                    disabled={busy === `application:${application.id}`}
+                    onChange={event => onToggle(application, event.target.checked)}
+                    aria-label={`${application.enabled ? '停用' : '启用'} ${application.name}`}
+                  />
+                  <span>{busy === `application:${application.id}` && <LoaderCircle className="spin" size={11} />}</span>
+                </label>
+                <button
+                  type="button"
+                  className="application-remove-button"
+                  disabled={busy === `application-remove:${application.id}`}
+                  onClick={() => onUninstall(application)}
+                  title={`卸载 ${application.name}`}
+                  aria-label={`卸载 ${application.name}`}
+                >
+                  {busy === `application-remove:${application.id}` ? <LoaderCircle className="spin" size={13} /> : <Trash2 size={13} />}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function SkillList({ skills, busy, onToggle }: {

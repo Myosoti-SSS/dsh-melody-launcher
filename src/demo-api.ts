@@ -1,4 +1,5 @@
 import type {
+  ApplicationRepositoryAnalysis,
   AiInstallEvent,
   AiInstallStatus,
   AppSettings,
@@ -12,6 +13,7 @@ import type {
   GitHubAuthStatus,
   InstallProgress,
   InstalledSkill,
+  InstalledApplicationAddon,
   LauncherApi,
   ManagedPlugin,
   PackProgressEvent,
@@ -111,9 +113,11 @@ const demoRepositories: CatalogRepositoryResult[] = [
   { id: 102, fullName: 'v587d/dsh-multimodal-skill', name: 'dsh-multimodal-skill', owner: 'v587d', description: 'Multimodal image and audio workflows.', url: 'https://github.com/v587d/dsh-multimodal-skill', stars: 96, language: 'Python', updatedAt: '2026-08-14T23:10:00Z', topics: ['dsh-skill', 'multimodal'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['skill'] },
   { id: 103, fullName: '2BingLing/dsh-market', name: 'dsh-market', owner: '2BingLing', description: '同时提供 Plugin 与 Skill 的 DSH 生态市场。', url: 'https://github.com/2BingLing/dsh-market', stars: 350, language: 'TypeScript', updatedAt: '2026-08-15T02:10:00Z', topics: ['dsh-plugin', 'dsh-skill', 'market'], defaultBranch: 'master', kind: 'repository', candidateTypes: ['plugin', 'skill'] },
   { id: 104, fullName: 'nexu-io/open-design', name: 'open-design', owner: 'nexu-io', description: '普通应用仓库，用于演示错误 topic 的无效候选。', url: 'https://github.com/nexu-io/open-design', stars: 28, sizeKb: 1_788_202, language: 'TypeScript', updatedAt: '2026-08-13T12:10:00Z', topics: ['dsh-plugin'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['plugin'] },
+  { id: 105, fullName: 'anywhere-labs/deepseek-harness-desktop', name: 'deepseek-harness-desktop', owner: 'anywhere-labs', description: 'DSH Desktop 原生桌面宿主。', url: 'https://github.com/anywhere-labs/deepseek-harness-desktop', stars: 196, sizeKb: 9_420, language: 'TypeScript', updatedAt: '2026-08-16T08:10:00Z', topics: ['dsh-plugin', 'desktop'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['plugin'] },
 ]
 
 let demoInstalledSkills: InstalledSkill[] = []
+let demoInstalledApplications: InstalledApplicationAddon[] = []
 
 let demoRuntime: RuntimeState = { running: false, pid: null, startedAt: null, url: null, port: null }
 let demoCredential: CredentialStatus = { configured: false }
@@ -206,6 +210,9 @@ function renumber(plugins: ManagedPlugin[]): ManagedPlugin[] {
 
 function demoAnalysis(fullName: string, defaultBranch: string): RepositoryAnalysis {
   const repo = demoRepositories.find(item => item.fullName === fullName)
+  if (fullName === 'anywhere-labs/deepseek-harness-desktop') {
+    return { repository: fullName, defaultBranch, installability: 'application', summary: '这是独立 DSH Desktop 宿主，不能加入 Web Profile。', targets: [] }
+  }
   if (fullName === 'nexu-io/open-design') {
     return { repository: fullName, defaultBranch, installability: 'application', summary: '这是独立应用，不是可加载的 DSH Plugin。', targets: [] }
   }
@@ -268,36 +275,74 @@ function demoSkillAnalysis(fullName: string, defaultBranch: string): SkillReposi
   }
 }
 
+function demoApplicationAnalysis(fullName: string, defaultBranch: string): ApplicationRepositoryAnalysis {
+  if (fullName !== 'anywhere-labs/deepseek-harness-desktop') {
+    return { repository: fullName, defaultBranch, installability: 'invalid', summary: '没有找到 .dsh-launcher/addon.json 应用加载项清单。', targets: [] }
+  }
+  return {
+    repository: fullName,
+    defaultBranch,
+    installability: 'ready',
+    summary: '检测到 DSH Desktop 独立宿主，将作为应用加载项安装，不会写入 Web Profile。',
+    targets: [{
+      id: 'dsh-desktop:.',
+      addonId: 'dsh-desktop',
+      name: 'DSH Desktop',
+      description: '为 DeepSeek Harness 提供原生窗口、托盘、终端与桌面运行时服务。',
+      provider: 'npm',
+      packageName: 'dsh-plugin-desktop',
+      version: '2.0.0',
+      binName: 'dsh-plugin-desktop',
+      launchMode: 'runtime-replacement',
+      launchArgs: [],
+      platforms: ['win32', 'darwin', 'linux'],
+      supported: true,
+      verified: true,
+      provides: ['desktopRuntime', 'desktopProfiles', 'desktopPnpmBootstrap'],
+    }],
+  }
+}
+
 function demoCatalogAnalysis(fullName: string, defaultBranch: string): CatalogRepositoryAnalysis {
   if (fullName === 'deepseek-ai/deepseek-harness') {
     return {
       repository: fullName,
       defaultBranch,
       kind: 'dsh',
+      componentKinds: [],
       summary: '这是 DeepSeek Harness 官方仓库，将作为 DSH 本体安装。',
       pluginAnalysis: null,
       skillAnalysis: null,
+      applicationAnalysis: null,
       warnings: [],
     }
   }
   const pluginAnalysis = demoAnalysis(fullName, defaultBranch)
   const skillAnalysis = demoSkillAnalysis(fullName, defaultBranch)
+  const applicationAnalysis = demoApplicationAnalysis(fullName, defaultBranch)
   const plugin = ['ready', 'choice', 'dynamic'].includes(pluginAnalysis.installability)
   const skill = ['ready', 'choice'].includes(skillAnalysis.installability)
-  const kind = plugin && skill ? 'hybrid' : plugin ? 'plugin' : skill ? 'skill' : 'invalid'
+  const application = ['ready', 'choice', 'unsupported'].includes(applicationAnalysis.installability)
+  const componentKinds = [plugin ? 'plugin' : null, skill ? 'skill' : null, application ? 'application' : null]
+    .filter((kind): kind is 'plugin' | 'skill' | 'application' => kind !== null)
+  const kind = componentKinds.length > 1 ? 'hybrid' : componentKinds[0] ?? 'invalid'
   return {
     repository: fullName,
     defaultBranch,
     kind,
+    componentKinds,
     summary: kind === 'hybrid'
       ? `确认包含 ${pluginAnalysis.targets.length} 个 Plugin 组件和 ${skillAnalysis.targets.length} 个 Skill 组件。`
       : kind === 'plugin'
         ? pluginAnalysis.summary
         : kind === 'skill'
           ? skillAnalysis.summary
-          : '没有找到符合 DSH 规范的 Plugin 或 Skill 组件。',
+          : kind === 'application'
+            ? applicationAnalysis.summary
+            : '没有找到符合 DSH 规范的 Plugin、Skill 或应用加载项。',
     pluginAnalysis,
     skillAnalysis,
+    applicationAnalysis,
     warnings: [],
   }
 }
@@ -412,7 +457,7 @@ export const demoApi: LauncherApi = {
     const repositories = matchingRepositories.slice(start, start + 30)
     return {
       repositories,
-      topicTotals: { plugin: 3_257, skill: 15 },
+      topicTotals: { plugin: 3_257, skill: 15, application: 8 },
       page: Math.max(1, page),
       pageCount: 67,
       rateRemaining: 9,
@@ -420,6 +465,7 @@ export const demoApi: LauncherApi = {
       dshInstallation: demoDshInstallation,
       installedRepositories: demoPlugins.map(plugin => plugin.repositoryFullName).filter((value): value is string => Boolean(value)),
       installedSkills: demoInstalledSkills,
+      installedApplications: demoInstalledApplications,
     }
   },
   analyzeCatalogRepository: async (fullName, defaultBranch) => demoCatalogAnalysis(fullName, defaultBranch),
@@ -540,11 +586,62 @@ export const demoApi: LauncherApi = {
     demoInstalledSkills = demoInstalledSkills.map(skill => skill.name === name ? { ...skill, enabled } : skill)
     return demoInstalledSkills
   },
+  installApplication: async request => {
+    const analysis = demoApplicationAnalysis(request.repository, request.defaultBranch)
+    const target = analysis.targets.find(item => item.id === request.targetId)
+    if (!target) throw new Error('应用加载项目标无效。')
+    installProgressListeners.forEach(listener => listener({ repository: request.repository, kind: 'application', phase: 'downloading', percent: 28, message: `正在下载并安装 ${target.name}`, indeterminate: true }))
+    await wait(650)
+    const now = new Date().toISOString()
+    const installedAddon: InstalledApplicationAddon = {
+      id: target.addonId,
+      name: target.name,
+      description: target.description,
+      repository: request.repository,
+      provider: target.provider,
+      packageName: target.packageName,
+      version: target.version ?? '2.0.0',
+      binName: target.binName,
+      entryPath: `C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\application-addons\\${target.addonId}\\runtime\\node_modules\\${target.packageName}\\lib\\bin.js`,
+      installPath: `C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\application-addons\\${target.addonId}`,
+      launchMode: target.launchMode,
+      launchArgs: target.launchArgs,
+      enabled: true,
+      verified: target.verified,
+      provides: target.provides,
+      installedAt: demoInstalledApplications.find(item => item.id === target.addonId)?.installedAt ?? now,
+      updatedAt: now,
+    }
+    demoInstalledApplications = demoInstalledApplications
+      .filter(item => item.id !== installedAddon.id)
+      .map(item => installedAddon.launchMode === 'runtime-replacement' && item.launchMode === 'runtime-replacement' ? { ...item, enabled: false } : item)
+    demoInstalledApplications.push(installedAddon)
+    demoPlugins = renumber(demoPlugins.filter(plugin => plugin.packageName !== 'dsh-plugin-desktop'))
+    installProgressListeners.forEach(listener => listener({ repository: request.repository, kind: 'application', phase: 'complete', percent: 100, message: `${target.name} 已作为应用加载项安装` }))
+    return { installedAddon, installedAddons: demoInstalledApplications, profile: profile() }
+  },
+  readInstalledApplications: async () => demoInstalledApplications,
+  toggleApplication: async (id, enabled) => {
+    const selected = demoInstalledApplications.find(application => application.id === id)
+    demoInstalledApplications = demoInstalledApplications.map(application => {
+      if (application.id === id) return { ...application, enabled }
+      if (enabled && selected?.launchMode === 'runtime-replacement' && application.launchMode === 'runtime-replacement') return { ...application, enabled: false }
+      return application
+    })
+    return demoInstalledApplications
+  },
+  uninstallApplication: async id => {
+    demoInstalledApplications = demoInstalledApplications.filter(application => application.id !== id)
+    return demoInstalledApplications
+  },
   getRuntimeState: async () => demoRuntime,
   startRuntime: async () => {
-    demoRuntime = { running: true, pid: 18420, startedAt: new Date().toISOString(), url: `http://127.0.0.1:${demoSettings.webPort}`, port: demoSettings.webPort }
+    const replacement = demoInstalledApplications.find(application => application.enabled && application.launchMode === 'runtime-replacement')
+    demoRuntime = replacement
+      ? { running: true, pid: 18420, startedAt: new Date().toISOString(), url: null, port: null, launchMode: 'application-replacement', applicationAddonId: replacement.id, applicationAddonName: replacement.name }
+      : { running: true, pid: 18420, startedAt: new Date().toISOString(), url: `http://127.0.0.1:${demoSettings.webPort}`, port: demoSettings.webPort, launchMode: 'web', applicationAddonId: null, applicationAddonName: null }
     stateListeners.forEach(listener => listener(demoRuntime))
-    outputListeners.forEach(listener => listener({ channel: 'runtime', level: 'success', text: `DeepSeek Harness Web UI: http://127.0.0.1:${demoSettings.webPort}`, timestamp: new Date().toISOString() }))
+    outputListeners.forEach(listener => listener({ channel: 'runtime', level: 'success', text: replacement ? `${replacement.name} 已启动。` : `DeepSeek Harness Web UI: http://127.0.0.1:${demoSettings.webPort}`, timestamp: new Date().toISOString() }))
     return demoRuntime
   },
   stopRuntime: async () => {

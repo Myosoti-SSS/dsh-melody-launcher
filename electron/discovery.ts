@@ -9,6 +9,7 @@ import { isDshRepository } from './dsh-install'
 const SEARCH_ENDPOINT = 'https://api.github.com/search/repositories'
 const PLUGIN_TOPIC = 'dsh-plugin'
 const SKILL_TOPIC = 'dsh-skill'
+const APPLICATION_TOPIC = 'dsh-app'
 export const CATALOG_SOURCE_PAGE_SIZE = 15
 export const GITHUB_SEARCH_RESULT_LIMIT = 1000
 export const CATALOG_MAX_PAGE = Math.ceil(GITHUB_SEARCH_RESULT_LIMIT / CATALOG_SOURCE_PAGE_SIZE)
@@ -143,14 +144,15 @@ function repositoryOrder(sort: DiscoverySort) {
 }
 
 function failureWarning(type: CatalogCandidateType, reason: unknown): string {
-  const label = type === 'plugin' ? 'Plugin' : 'Skill'
+  const label = type === 'plugin' ? 'Plugin' : type === 'skill' ? 'Skill' : '应用加载项'
   const message = reason instanceof Error ? reason.message : String(reason)
-  return `${label} 来源检索失败：${message}`
+  const sourceLabel = type === 'application' ? `${label}来源` : `${label} 来源`
+  return `${sourceLabel}检索失败：${message}`
 }
 
 /**
- * GitHub 不支持 topic OR 搜索，因此分别拉取两个 topic 后合并。
- * 同时带 dsh-skill 的 dsh-plugin 结果归入 Skill 流，避免它在不同页重复出现。
+ * GitHub 不支持 topic OR 搜索，因此分别拉取三个 topic 后合并。
+ * 多 topic 仓库只从优先级最高的来源流进入当前页，减少跨来源重复。
  */
 export async function searchCatalogRepositories(
   query: string,
@@ -159,50 +161,63 @@ export async function searchCatalogRepositories(
   fetchImpl: typeof fetch = fetch,
 ): Promise<DiscoveryResponse> {
   const normalizedPage = Math.min(CATALOG_MAX_PAGE, Math.max(1, Math.floor(Number(page) || 1)))
-  const [pluginResult, skillResult] = await Promise.allSettled([
+  const [pluginResult, skillResult, applicationResult] = await Promise.allSettled([
     searchRepositories(buildSearchUrl(query, sort, normalizedPage, PLUGIN_TOPIC), fetchImpl),
     searchRepositories(buildSearchUrl(query, sort, normalizedPage, SKILL_TOPIC), fetchImpl),
+    searchRepositories(buildSearchUrl(query, sort, normalizedPage, APPLICATION_TOPIC), fetchImpl),
   ])
 
-  if (pluginResult.status === 'rejected' && skillResult.status === 'rejected') {
+  if (pluginResult.status === 'rejected' && skillResult.status === 'rejected' && applicationResult.status === 'rejected') {
     throw new Error([
       failureWarning('plugin', pluginResult.reason),
       failureWarning('skill', skillResult.reason),
+      failureWarning('application', applicationResult.reason),
     ].join('；'))
   }
 
   const warnings: string[] = []
   if (pluginResult.status === 'rejected') warnings.push(failureWarning('plugin', pluginResult.reason))
   if (skillResult.status === 'rejected') warnings.push(failureWarning('skill', skillResult.reason))
+  if (applicationResult.status === 'rejected') warnings.push(failureWarning('application', applicationResult.reason))
 
   const pluginFound = pluginResult.status === 'fulfilled' ? pluginResult.value : null
   const skillFound = skillResult.status === 'fulfilled' ? skillResult.value : null
+  const applicationFound = applicationResult.status === 'fulfilled' ? applicationResult.value : null
   const repositories = new Map<string, CatalogRepositoryResult>()
 
   for (const item of pluginFound?.repositories ?? []) {
-    if ((item.topics ?? []).some(topic => topic.toLowerCase() === SKILL_TOPIC)) continue
+    const topics = (item.topics ?? []).map(topic => topic.toLowerCase())
+    if (topics.includes(SKILL_TOPIC) || topics.includes(APPLICATION_TOPIC)) continue
     mergeRepository(repositories, item, 'plugin')
   }
   for (const item of skillFound?.repositories ?? []) {
+    const topics = (item.topics ?? []).map(topic => topic.toLowerCase())
+    if (topics.includes(APPLICATION_TOPIC)) continue
     mergeRepository(repositories, item, 'skill')
-    if ((item.topics ?? []).some(topic => topic.toLowerCase() === PLUGIN_TOPIC)) {
-      mergeRepository(repositories, item, 'plugin')
-    }
+    if (topics.includes(PLUGIN_TOPIC)) mergeRepository(repositories, item, 'plugin')
+  }
+  for (const item of applicationFound?.repositories ?? []) {
+    const topics = (item.topics ?? []).map(topic => topic.toLowerCase())
+    mergeRepository(repositories, item, 'application')
+    if (topics.includes(PLUGIN_TOPIC)) mergeRepository(repositories, item, 'plugin')
+    if (topics.includes(SKILL_TOPIC)) mergeRepository(repositories, item, 'skill')
   }
 
-  const remaining = [pluginFound?.rateRemaining, skillFound?.rateRemaining]
+  const remaining = [pluginFound?.rateRemaining, skillFound?.rateRemaining, applicationFound?.rateRemaining]
     .filter((value): value is number => value !== undefined)
   return {
     repositories: [...repositories.values()].sort(repositoryOrder(sort)),
     topicTotals: {
       plugin: pluginFound?.totalCount ?? 0,
       skill: skillFound?.totalCount ?? 0,
+      application: applicationFound?.totalCount ?? 0,
     },
     page: normalizedPage,
     pageCount: Math.max(
       normalizedPage,
       pluginFound ? sourcePageCount(pluginFound.totalCount) : 1,
       skillFound ? sourcePageCount(skillFound.totalCount) : 1,
+      applicationFound ? sourcePageCount(applicationFound.totalCount) : 1,
     ),
     rateRemaining: remaining.length > 0 ? Math.min(...remaining) : undefined,
     warnings,

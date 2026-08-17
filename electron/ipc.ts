@@ -2,7 +2,9 @@ import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC } from '../src/constants'
-import type { AppSettings, PackCreateRequest, PluginInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
+import type { ApplicationInstallRequest, AppSettings, PackCreateRequest, PluginInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
+import { DSH_DESKTOP_PACKAGE } from './application-catalog'
+import type { ApplicationAddonManager } from './application-addons'
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
 import { searchCatalogRepositories, type DiscoverySort } from './discovery'
@@ -38,12 +40,13 @@ export interface IpcDependencies {
   aiInstaller: AiInstaller
   packManager: PackManager
   githubAuth: GitHubAuthService
+  applicationAddons: ApplicationAddonManager
   getWindow: () => BrowserWindow | null
   setWindowMode: (mode: WindowMode) => void
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, runtime, installer, pluginTrial, aiInstaller, packManager, githubAuth } = deps
+  const { settings, runtime, installer, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons } = deps
 
   ipcMain.handle(IPC.settingsGet, () => settings.read())
   ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => settings.save(next))
@@ -111,17 +114,19 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.catalogDiscover, async (_event, payload: { query: string; sort: DiscoverySort; page: number }) => {
     const sort: DiscoverySort = payload.sort === 'updated' ? 'updated' : 'stars'
     const page = Math.max(1, Math.floor(Number(payload.page) || 1))
-    const [found, dshInstallation, installedRepositories, installedSkills] = await Promise.all([
+    const [found, dshInstallation, installedRepositories, installedSkills, installedApplications] = await Promise.all([
       searchCatalogRepositories(payload.query ?? '', sort, page, githubAuth.fetch),
       installer.detectDsh(),
       installer.listInstalledRepositories(),
       installer.readInstalledSkills(),
+      applicationAddons.list(),
     ])
     return {
       ...found,
       dshInstallation,
       installedRepositories,
       installedSkills,
+      installedApplications,
     }
   })
   ipcMain.handle(IPC.catalogAnalyze, async (_event, payload: { fullName: string; defaultBranch: string }) => {
@@ -143,6 +148,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.pluginsInstall, async (_event, request: string | PluginInstallRequest) => {
     if (packManager.isBusy()) throw new Error('整合包操作进行中')
     if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
+    if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中')
     const fullName = typeof request === 'string' ? request : request.repository
     if (!isSafeRepositoryName(fullName)) throw new Error('GitHub 仓库名称无效。')
     if (typeof request === 'string') return installer.install(fullName)
@@ -155,6 +161,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.pluginsUninstall, async (_event, payload: string | { packageName: string; profileName?: string }) => {
     if (packManager.isBusy()) throw new Error('整合包操作进行中')
     if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
+    if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中')
     const packageName = typeof payload === 'string' ? payload : payload?.packageName
     if (!isSafePackageName(packageName)) throw new Error('插件名称无效。')
     const profileName = typeof payload === 'object' ? payload.profileName : undefined
@@ -167,11 +174,13 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     if (payload.profileName !== undefined && !isSafeProfileName(payload.profileName)) throw new Error('Profile 名称无效。')
     if (packManager.isBusy()) throw new Error('整合包操作进行中')
     if (aiInstaller.isBusy()) throw new Error('AI 任务进行中')
+    if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中')
     return pluginTrial.trial(payload.packageName, payload.profileName)
   })
 
   ipcMain.handle(IPC.skillsInstall, async (_event, request: SkillInstallRequest) => {
     if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中')
     if (!isSafeRepositoryName(request.repository)) throw new Error('GitHub 仓库名称无效。')
     return installer.installSkill(request)
   })
@@ -183,11 +192,44 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     return installer.toggleSkill(payload.name, Boolean(payload.enabled))
   })
 
+  ipcMain.handle(IPC.applicationsReadInstalled, () => applicationAddons.list())
+  ipcMain.handle(IPC.applicationsInstall, async (_event, request: ApplicationInstallRequest) => {
+    if (!request || !isSafeRepositoryName(request.repository)) throw new Error('GitHub 仓库名称无效。')
+    if (typeof request.defaultBranch !== 'string' || typeof request.targetId !== 'string') throw new Error('应用加载项请求无效。')
+    if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
+    if (aiInstaller.isBusy()) throw new Error('AI 任务进行中')
+    if (installer.isBusy()) throw new Error('插件安装操作进行中')
+
+    const installed = await applicationAddons.install(request)
+    const current = await settings.read()
+    let profile = await readProfile(current.dshHome, current.profileName)
+    let migrationWarning: string | undefined
+    if (installed.installedAddon.packageName === DSH_DESKTOP_PACKAGE
+      && profile.plugins.some(plugin => plugin.packageName === DSH_DESKTOP_PACKAGE)) {
+      try {
+        profile = await installer.remove(DSH_DESKTOP_PACKAGE, current.profileName)
+      } catch (error) {
+        migrationWarning = `DSH Desktop 已作为应用加载项安装，但旧 Web Profile 组件移除失败：${error instanceof Error ? error.message : String(error)}`
+      }
+    }
+    return { ...installed, profile, migrationWarning }
+  })
+  ipcMain.handle(IPC.applicationsToggle, async (_event, payload: { id: string; enabled: boolean }) => {
+    if (!payload || typeof payload.id !== 'string') throw new Error('应用加载项标识无效。')
+    return applicationAddons.toggle(payload.id, Boolean(payload.enabled))
+  })
+  ipcMain.handle(IPC.applicationsUninstall, async (_event, id: string) => {
+    if (typeof id !== 'string') throw new Error('应用加载项标识无效。')
+    return applicationAddons.uninstall(id)
+  })
+
   ipcMain.handle(IPC.aiStatus, () => aiInstaller.status())
   ipcMain.handle(IPC.aiHasSnapshot, () => aiInstaller.hasSnapshot())
   ipcMain.handle(IPC.aiInstall, async (_event, input: { repository: string; defaultBranch: string }) => {
     if (packManager.isBusy()) throw new Error('整合包操作进行中')
     if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
+    if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中')
     if (!input || !isSafeRepositoryName(input.repository)) throw new Error('GitHub 仓库名称无效。')
     if (typeof input.defaultBranch !== 'string' || input.defaultBranch.length === 0 || input.defaultBranch.length > 200) {
       throw new Error('分支无效。')
@@ -329,6 +371,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.runtimeStart, () => {
     if (pluginTrial.isBusy()) throw new Error('请先等待插件试运行结束。')
     if (aiInstaller.isBusy()) throw new Error('请先等待 AI 任务结束。')
+    if (applicationAddons.isBusy()) throw new Error('请先等待应用加载项操作结束。')
     return runtime.start()
   })
   ipcMain.handle(IPC.runtimeStop, () => runtime.stop())

@@ -64,8 +64,9 @@ export interface ProfileState {
   disabledCount: number
 }
 
-export type CatalogCandidateType = 'plugin' | 'skill'
-export type CatalogKind = 'plugin' | 'skill' | 'hybrid' | 'dsh' | 'invalid'
+export type CatalogCandidateType = 'plugin' | 'skill' | 'application'
+export type CatalogComponentKind = 'plugin' | 'skill' | 'application'
+export type CatalogKind = CatalogComponentKind | 'hybrid' | 'dsh' | 'invalid'
 
 export interface CatalogRepositoryResult {
   id: number
@@ -176,13 +177,76 @@ export interface SkillInstallResult {
   installedSkills: InstalledSkill[]
 }
 
+export type ApplicationLaunchMode = 'runtime-replacement' | 'after-runtime' | 'standalone'
+export type ApplicationInstallProvider = 'npm'
+
+export interface ApplicationInstallTarget {
+  id: string
+  addonId: string
+  name: string
+  description: string
+  provider: ApplicationInstallProvider
+  packageName: string
+  version: string | null
+  binName: string
+  launchMode: ApplicationLaunchMode
+  launchArgs: string[]
+  platforms: Array<'win32' | 'darwin' | 'linux'>
+  supported: boolean
+  verified: boolean
+  provides: string[]
+}
+
+export interface ApplicationRepositoryAnalysis {
+  repository: string
+  defaultBranch: string
+  installability: 'ready' | 'choice' | 'unsupported' | 'invalid'
+  summary: string
+  targets: ApplicationInstallTarget[]
+}
+
+export interface InstalledApplicationAddon {
+  id: string
+  name: string
+  description: string
+  repository: string
+  provider: ApplicationInstallProvider
+  packageName: string
+  version: string
+  binName: string
+  entryPath: string
+  installPath: string
+  launchMode: ApplicationLaunchMode
+  launchArgs: string[]
+  enabled: boolean
+  verified: boolean
+  provides: string[]
+  installedAt: string
+  updatedAt: string
+}
+
+export interface ApplicationInstallRequest {
+  repository: string
+  defaultBranch: string
+  targetId: string
+}
+
+export interface ApplicationInstallResult {
+  installedAddon: InstalledApplicationAddon
+  installedAddons: InstalledApplicationAddon[]
+  profile: ProfileState
+  migrationWarning?: string
+}
+
 export interface CatalogRepositoryAnalysis {
   repository: string
   defaultBranch: string
   kind: CatalogKind
+  componentKinds: CatalogComponentKind[]
   summary: string
   pluginAnalysis: RepositoryAnalysis | null
   skillAnalysis: SkillRepositoryAnalysis | null
+  applicationAnalysis: ApplicationRepositoryAnalysis | null
   warnings: string[]
 }
 
@@ -196,6 +260,7 @@ export interface CatalogDiscoveryResult {
   dshInstallation: DshInstallationStatus
   installedRepositories: string[]
   installedSkills: InstalledSkill[]
+  installedApplications: InstalledApplicationAddon[]
 }
 
 /** 从 GitHub 链接导入的结果：市场行 + 已完成的仓库分析。 */
@@ -206,7 +271,7 @@ export interface CatalogImportResult {
 
 export interface InstallProgress {
   repository: string
-  kind: 'plugin' | 'dsh' | 'skill'
+  kind: 'plugin' | 'dsh' | 'skill' | 'application'
   phase: 'preparing' | 'resolving' | 'downloading' | 'building' | 'configuring' | 'verifying' | 'complete' | 'error'
   percent: number
   message: string
@@ -230,6 +295,9 @@ export interface RuntimeState {
   startedAt: string | null
   url: string | null
   port: number | null
+  launchMode?: 'web' | 'application-replacement'
+  applicationAddonId?: string | null
+  applicationAddonName?: string | null
   /** 最近一次非正常退出，供界面显示 AI 修复入口。新一轮启动时清空。 */
   lastFailure?: RuntimeFailure | null
 }
@@ -423,6 +491,10 @@ export interface LauncherApi {
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
   readInstalledSkills(): Promise<InstalledSkill[]>
   toggleSkill(name: string, enabled: boolean): Promise<InstalledSkill[]>
+  installApplication(request: ApplicationInstallRequest): Promise<ApplicationInstallResult>
+  readInstalledApplications(): Promise<InstalledApplicationAddon[]>
+  toggleApplication(id: string, enabled: boolean): Promise<InstalledApplicationAddon[]>
+  uninstallApplication(id: string): Promise<InstalledApplicationAddon[]>
   getRuntimeState(): Promise<RuntimeState>
   startRuntime(): Promise<RuntimeState>
   stopRuntime(): Promise<RuntimeState>

@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AppSettings, RuntimeOutput, WindowMode } from '../src/types'
 import { ACP_RUNTIME_DIRNAME, CREDENTIALS_LOCK_DIRNAME, createAiInstaller, healCredentialsLock, type AiInstaller } from './ai-install'
+import { createApplicationAddonManager, type ApplicationAddonManager } from './application-addons'
 import { applyWindowMode, createMainWindow, createRendererChannel } from './app-window'
 import { runCommand } from './command'
 import { readDeepSeekApiKey } from './credentials'
@@ -52,6 +53,7 @@ interface Services {
   aiInstaller: AiInstaller
   packManager: PackManager
   githubAuth: GitHubAuthService
+  applicationAddons: ApplicationAddonManager
 }
 
 // app.getPath 依赖 app 就绪，因此服务在 whenReady 之后才装配。
@@ -65,6 +67,7 @@ function createServices(): Services {
   const pluginSourceRoot = path.join(userData, 'plugin-sources')
   const pluginReceiptsPath = path.join(userData, 'plugin-installs.json')
   const skillSourceRoot = path.join(userData, 'skill-sources')
+  const applicationRoot = path.join(userData, 'application-addons')
   const githubAuth = createGitHubAuthService({
     filePath: path.join(userData, 'github-auth.bin'),
     clientId: process.env.DSH_LAUNCHER_GITHUB_CLIENT_ID,
@@ -125,6 +128,7 @@ function createServices(): Services {
     }),
   })
 
+  let applicationAddons: ApplicationAddonManager
   const runtime = createRuntimeController({
     readSettings: () => settings.read(),
     prepareNodeRuntime: () => prepareNodeRuntime('runtime'),
@@ -132,6 +136,19 @@ function createServices(): Services {
     emitOutput: (level, text) => events.output('runtime', level, text),
     emitState: state => events.runtimeState(state),
     openExternal: url => void shell.openExternal(url),
+    resolveApplicationLaunchPlan: () => applicationAddons.launchPlan(),
+  })
+
+  applicationAddons = createApplicationAddonManager({
+    registryPath: path.join(userData, 'application-addons.json'),
+    installRoot: applicationRoot,
+    readSettings: () => settings.read(),
+    prepareNodeRuntime: onProgress => prepareNodeRuntime('plugin', onProgress),
+    preparePnpmRuntime: (nodeRuntime, onProgress) => preparePnpmRuntime('plugin', nodeRuntime, onProgress),
+    emitOutput: (level, text) => events.output('plugin', level, text),
+    emitProgress: progress => events.installProgress(progress),
+    isRuntimeRunning: () => runtime.isRunning(),
+    githubFetch: githubAuth.fetch,
   })
 
   const installer = createInstaller({
@@ -266,7 +283,7 @@ function createServices(): Services {
     .then(current => healCredentialsLock(current.dshHome, path.join(userData, CREDENTIALS_LOCK_DIRNAME)))
     .catch(() => { /* 设置未就绪可忽略，锁会在下次 AI 会话前置处理 */ })
 
-  return { settings, runtime, installer, pluginTrial, aiInstaller, packManager, githubAuth }
+  return { settings, runtime, installer, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons }
 }
 
 function openMainWindow(): void {

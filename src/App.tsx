@@ -62,7 +62,8 @@ function LauncherShell() {
 
   const installingDsh = store.busy === BUSY.dshInstall
     || (isInstallProgressActive(store.installProgress) && store.installProgress.kind === 'dsh')
-  const runtimeBusy = store.busy === BUSY.runtime || installingDsh
+  const installingApplication = isInstallProgressActive(store.installProgress) && store.installProgress.kind === 'application'
+  const runtimeBusy = store.busy === BUSY.runtime || installingDsh || installingApplication || Boolean(store.busy?.startsWith('application'))
 
   const toggleRuntime = async () => {
     // 刚启动时自动切到日志视图，让用户看到启动过程。
@@ -108,6 +109,7 @@ function LauncherShell() {
           installingDsh={installingDsh}
           onCredential={() => setCredentialOpen(true)}
           githubAuthStatus={store.githubAuthStatus}
+          activeRuntimeReplacement={store.activeRuntimeReplacement}
           onGitHubAccount={() => setGitHubAccountOpen(true)}
           onManage={navigation.showManager}
           onToggleRuntime={toggleRuntime}
@@ -120,11 +122,12 @@ function LauncherShell() {
           <AppHeader
             runtime={store.runtime}
             busy={runtimeBusy}
-            dshInstalled={store.dshInstallation.installed}
+            dshInstalled={store.dshInstallation.installed || store.activeRuntimeReplacement !== null}
             installingDsh={installingDsh}
             profileName={settings.profileName}
             credentialStatus={store.credentialStatus}
             githubAuthStatus={store.githubAuthStatus}
+            activeRuntimeReplacement={store.activeRuntimeReplacement}
             onBack={navigation.showLauncher}
             onCredential={() => setCredentialOpen(true)}
             onGitHubAccount={() => setGitHubAccountOpen(true)}
@@ -146,12 +149,15 @@ function LauncherShell() {
                   profile={profile}
                   profileName={settings.profileName}
                   installedSkills={store.installedSkills}
+                  installedApplications={store.installedApplications}
                   pluginTrials={store.pluginTrials}
                   selected={store.selected}
                   busy={store.busy}
                   onSelect={plugin => store.selectPlugin(plugin.packageName)}
                   onToggle={store.togglePlugin}
                   onToggleSkill={store.toggleSkill}
+                  onToggleApplication={store.toggleApplication}
+                  onUninstallApplication={store.uninstallApplication}
                   onReorder={store.reorderPlugins}
                   onRefresh={store.refreshProfile}
                   onBrowse={() => navigation.setView('discover')}
@@ -171,6 +177,7 @@ function LauncherShell() {
                   installProgress={store.installProgress}
                   installedRepositories={store.installedRepositories}
                   installedSkills={store.installedSkills}
+                  installedApplications={store.installedApplications}
                   pluginTrials={store.pluginTrials}
                   onAnalysis={(repository, analysis) => {
                     setRepositoryAnalyses(current => ({ ...current, [repository]: analysis }))
@@ -190,6 +197,13 @@ function LauncherShell() {
                   onSkillInstalled={result => {
                     store.applyCatalogSkillInstall(result)
                     store.showToast({ kind: 'success', message: `${result.installedSkill.name} 已安装到本地 Skill 目录。` })
+                  }}
+                  onApplicationInstalled={result => {
+                    store.applyCatalogApplicationInstall(result)
+                    store.showToast({
+                      kind: 'success',
+                      message: `${result.installedAddon.name} 已作为应用加载项安装${result.installedAddon.enabled ? '并激活' : ''}。`,
+                    })
                   }}
                   onError={message => store.showToast({ kind: 'error', message })}
                   onOpenRepository={url => void api.openExternal(url)}
@@ -213,6 +227,7 @@ function LauncherShell() {
                   onOpenSettings={() => setSettingsOpen(true)}
                   onRepairRuntime={() => { void ai.repairRuntime(settings.profileName) }}
                   aiActive={ai.active}
+                  activeRuntimeReplacement={store.activeRuntimeReplacement}
                 />
               )}
               {navigation.view === 'packs' && (

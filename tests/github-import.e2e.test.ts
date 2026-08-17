@@ -6,6 +6,7 @@ import type { CommandOptions } from '../electron/command'
 import { importCatalogFromUrl } from '../electron/github-import'
 import { createInstaller } from '../electron/installer'
 import { analyzeRepository } from '../electron/plugin-catalog'
+import { analyzeApplicationRepository } from '../electron/application-catalog'
 import { recordPluginInstall } from '../electron/plugin-receipts'
 import { readProfile } from '../electron/profile'
 import { analyzeSkillRepository } from '../electron/skill-catalog'
@@ -36,6 +37,11 @@ vi.mock('../electron/plugin-catalog', async importOriginal => {
 vi.mock('../electron/skill-catalog', async importOriginal => {
   const actual = await importOriginal<typeof import('../electron/skill-catalog')>()
   return { ...actual, analyzeSkillRepository: vi.fn() }
+})
+
+vi.mock('../electron/application-catalog', async importOriginal => {
+  const actual = await importOriginal<typeof import('../electron/application-catalog')>()
+  return { ...actual, analyzeApplicationRepository: vi.fn() }
 })
 
 vi.mock('../electron/plugin-receipts', async importOriginal => {
@@ -71,6 +77,13 @@ beforeEach(async () => {
     openAfterLaunch: true,
   }
   vi.resetAllMocks()
+  vi.mocked(analyzeApplicationRepository).mockResolvedValue({
+    repository: 'demo/resource',
+    defaultBranch: 'main',
+    installability: 'invalid',
+    summary: 'no application addon',
+    targets: [],
+  })
 })
 
 afterEach(async () => {

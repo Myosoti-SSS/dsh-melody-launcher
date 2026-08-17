@@ -989,9 +989,15 @@ input:focus-visible {
   grid-template-columns: 62px minmax(140px, 1fr) 72px 58px 56px;
 }
 
-.skill-management-column {
+.secondary-management-column,
+.skill-management-column,
+.application-management-column {
   min-width: 0;
   background: #fbfcfb;
+}
+
+.application-management-column {
+  border-top: 1px solid var(--line);
 }
 
 .skill-column-heading {
@@ -1038,6 +1044,59 @@ input:focus-visible {
 .skill-row.disabled {
   color: var(--muted);
   background: #f7f9f7;
+}
+
+.application-row {
+  display: flex;
+  min-height: 67px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px 7px 12px;
+  gap: 8px;
+  border-bottom: 1px solid #e8ebe8;
+  background: #fff;
+}
+
+.application-row.disabled {
+  color: var(--muted);
+  background: #f7f9f7;
+}
+
+.application-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.application-remove-button {
+  display: inline-grid;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #e3c9c5;
+  border-radius: 5px;
+  color: var(--danger);
+  background: #fff8f7;
+  cursor: pointer;
+}
+
+.application-remove-button:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.application-remove-button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.skill-glyph.application-icon,
+.plugin-target-icon.application-icon,
+.repo-icon.application-icon {
+  color: #4d5687;
+  border-color: #cbd0e8;
+  background: #f2f3fb;
 }
 
 .skill-identity {
@@ -1923,6 +1982,12 @@ input:focus-visible {
   color: #236a76;
   border-color: #bddae0;
   background: #edf7f8;
+}
+
+.repository-analysis-badge.application {
+  color: #4d5687;
+  border-color: #cbd0e8;
+  background: #f2f3fb;
 }
 
 .repository-analysis-badge.hybrid {
@@ -3272,7 +3337,7 @@ input:focus-visible {
     border-right: 0;
   }
 
-  .skill-management-column {
+  .secondary-management-column {
     border-top: 1px solid var(--line);
   }
 

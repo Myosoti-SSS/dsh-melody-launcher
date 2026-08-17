@@ -4,6 +4,7 @@ import type {
   PluginInstallTarget,
   RepositoryAnalysis,
 } from '../src/types'
+import { isDshDesktopRepository } from './application-catalog'
 import { isSafePackageName, isSafeRepositoryName, repositoryFullNameFromSpecifier } from './profile'
 
 interface PackageManifest {
@@ -246,6 +247,15 @@ export async function analyzeRepository(
   fetchImpl: typeof fetch = fetch,
 ): Promise<RepositoryAnalysis> {
   if (!isSafeRepositoryName(repository) || !safeBranch(defaultBranch)) throw new Error('仓库名称或默认分支无效。')
+  if (isDshDesktopRepository(repository)) {
+    return {
+      repository,
+      defaultBranch,
+      installability: 'application',
+      summary: '这是独立 DSH Desktop 宿主，必须作为应用加载项安装，不能加入 Web Profile。',
+      targets: [],
+    }
+  }
 
   let commit: string
   try {

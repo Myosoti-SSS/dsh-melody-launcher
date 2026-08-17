@@ -35,11 +35,17 @@ function searchResponse(items: GitHubRepositoryItem[], total = items.length, rem
   })
 }
 
-function searchFetch(plugin: Response, skill: Response): typeof fetch {
+function searchFetch(
+  plugin: Response,
+  skill: Response,
+  application: Response = searchResponse([], 0, 9),
+): typeof fetch {
   return (async (input: string | URL | Request) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url)
     const query = url.searchParams.get('q') ?? ''
-    return (query.includes('topic:dsh-skill') ? skill : plugin).clone()
+    if (query.includes('topic:dsh-skill')) return skill.clone()
+    if (query.includes('topic:dsh-app')) return application.clone()
+    return plugin.clone()
   }) as typeof fetch
 }
 
@@ -97,7 +103,7 @@ describe('catalog repository mapping', () => {
 })
 
 describe('unified catalog search', () => {
-  it('merges both topics, deduplicates hybrid repositories, and sorts the page', async () => {
+  it('merges all topics, deduplicates hybrid repositories, and sorts the page', async () => {
     const core = { ...item, id: 1, full_name: 'deepseek-ai/deepseek-harness', stargazers_count: 100 }
     const plugin = { ...item, id: 2, full_name: 'demo/plugin', stargazers_count: 20 }
     const hybrid = { ...item, id: 3, full_name: 'demo/hybrid', stargazers_count: 30, topics: ['dsh-plugin', 'dsh-skill'] }
@@ -114,7 +120,7 @@ describe('unified catalog search', () => {
       'demo/skill',
     ])
     expect(result.repositories.find(repo => repo.fullName === 'demo/hybrid')?.candidateTypes).toEqual(['skill', 'plugin'])
-    expect(result.topicTotals).toEqual({ plugin: 3, skill: 2 })
+    expect(result.topicTotals).toEqual({ plugin: 3, skill: 2, application: 0 })
     expect(result.rateRemaining).toBe(5)
     expect(result.warnings).toEqual([])
   })
@@ -134,15 +140,35 @@ describe('unified catalog search', () => {
       searchResponse([skill], 1),
     ))
     expect(result.repositories).toHaveLength(1)
-    expect(result.topicTotals).toEqual({ plugin: 0, skill: 1 })
+    expect(result.topicTotals).toEqual({ plugin: 0, skill: 1, application: 0 })
     expect(result.warnings[0]).toMatch(/Plugin 来源检索失败/)
   })
 
-  it('fails only when both topic searches fail', async () => {
+  it('merges application candidates and preserves all topic labels', async () => {
+    const application = {
+      ...item,
+      id: 9,
+      full_name: 'demo/desktop-host',
+      topics: ['dsh-plugin', 'dsh-skill', 'dsh-app'],
+    }
+    const result = await searchCatalogRepositories('', 'stars', 1, searchFetch(
+      searchResponse([application], 1, 8),
+      searchResponse([application], 1, 7),
+      searchResponse([application], 1, 6),
+    ))
+
+    expect(result.repositories).toHaveLength(1)
+    expect(result.repositories[0].candidateTypes).toEqual(['application', 'plugin', 'skill'])
+    expect(result.topicTotals).toEqual({ plugin: 1, skill: 1, application: 1 })
+    expect(result.rateRemaining).toBe(6)
+  })
+
+  it('fails only when all topic searches fail', async () => {
     await expect(searchCatalogRepositories('', 'stars', 1, searchFetch(
       new Response('failed', { status: 500 }),
       new Response('limited', { status: 403 }),
-    ))).rejects.toThrow(/Plugin 来源检索失败.*Skill 来源检索失败/)
+      new Response('unavailable', { status: 502 }),
+    ))).rejects.toThrow(/Plugin 来源检索失败.*Skill 来源检索失败.*应用加载项来源检索失败/)
   })
 })
 
