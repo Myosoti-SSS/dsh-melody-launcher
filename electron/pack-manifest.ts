@@ -4,10 +4,19 @@
 
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
-import type { PackManifest, PackPluginEntry, PackPresetEntry } from '../src/types'
+import type {
+  ApplicationLaunchMode,
+  InstalledApplicationAddon,
+  PackApplicationEntry,
+  PackManifest,
+  PackPluginEntry,
+  PackPresetEntry,
+  PackSkillEntry,
+} from '../src/types'
 import { isSafePackageName, isSafeProfileName, isSafeRepositoryName } from './profile'
 import type { PluginInstallReceipt } from './plugin-receipts'
 import type { PresetInstallReceipt } from './preset-receipts'
+import type { SkillInstallReceipt } from './skill-receipts'
 
 /** 压缩包内的清单文件名（导出 / 导入共用）。 */
 export const PACK_MANIFEST_FILENAME = 'dsh-pack.yaml'
@@ -95,6 +104,88 @@ function parsePackPreset(item: unknown, index: number): PackPresetEntry {
   return entry
 }
 
+function parsePackSkill(item: unknown, index: number): PackSkillEntry {
+  if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+    throw new Error(`skills[${index}] 必须是映射（对象）。`)
+  }
+  const raw = item as Record<string, unknown>
+  const name = raw.name
+  if (typeof name !== 'string' || !PACK_PRESET_NAME_RE.test(name)) {
+    throw new Error(`skills[${index}] 的 name 缺失或格式非法（须为 kebab-case）。`)
+  }
+  const format = raw.format
+  if (format !== 'bundle' && format !== 'flat') {
+    throw new Error(`skills[${index}] 的 format 只能是 bundle / flat。`)
+  }
+  const entry: PackSkillEntry = { name, format }
+  if (raw.repository !== undefined) {
+    if (typeof raw.repository !== 'string' || !isSafeRepositoryName(raw.repository)) {
+      throw new Error(`skills[${index}] 的 repository 格式非法。`)
+    }
+    entry.repository = raw.repository
+  }
+  if (raw.sourcePath !== undefined) {
+    if (typeof raw.sourcePath !== 'string' || !safeSubdirectory(raw.sourcePath)) {
+      throw new Error(`skills[${index}] 的 sourcePath 格式非法。`)
+    }
+    entry.sourcePath = raw.sourcePath
+  }
+  if (raw.revision !== undefined) {
+    if (typeof raw.revision !== 'string' || !safeCommit(raw.revision)) {
+      throw new Error(`skills[${index}] 的 revision 格式非法。`)
+    }
+    entry.revision = raw.revision
+  }
+  return entry
+}
+
+const PACK_APPLICATION_ID_RE = /^[a-z0-9](?:[a-z0-9._-]{0,78}[a-z0-9])?$/
+const PACK_LAUNCH_MODES = new Set<ApplicationLaunchMode>(['runtime-replacement', 'after-runtime', 'standalone'])
+
+function parsePackApplication(item: unknown, index: number): PackApplicationEntry {
+  if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+    throw new Error(`applications[${index}] 必须是映射（对象）。`)
+  }
+  const raw = item as Record<string, unknown>
+  const id = raw.id
+  if (typeof id !== 'string' || !PACK_APPLICATION_ID_RE.test(id)) {
+    throw new Error(`applications[${index}] 的 id 缺失或格式非法。`)
+  }
+  const name = raw.name
+  const repository = raw.repository
+  const packageName = raw.packageName
+  const version = raw.version
+  const binName = raw.binName
+  const launchMode = raw.launchMode
+  const launchArgs = raw.launchArgs
+  const provides = raw.provides
+  if (typeof name !== 'string' || !name.trim()) throw new Error(`applications[${index}] 的 name 缺失。`)
+  if (typeof repository !== 'string' || !isSafeRepositoryName(repository)) throw new Error(`applications[${index}] 的 repository 格式非法。`)
+  if (typeof packageName !== 'string' || !isSafePackageName(packageName)) throw new Error(`applications[${index}] 的 packageName 格式非法。`)
+  if (typeof version !== 'string' || !PACK_VERSION_RE.test(version)) throw new Error(`applications[${index}] 的 version 格式非法。`)
+  if (typeof binName !== 'string' || !binName.trim()) throw new Error(`applications[${index}] 的 binName 缺失。`)
+  if (typeof launchMode !== 'string' || !PACK_LAUNCH_MODES.has(launchMode as ApplicationLaunchMode)) {
+    throw new Error(`applications[${index}] 的 launchMode 格式非法。`)
+  }
+  if (!Array.isArray(launchArgs) || launchArgs.some(value => typeof value !== 'string')) {
+    throw new Error(`applications[${index}] 的 launchArgs 必须是字符串数组。`)
+  }
+  if (!Array.isArray(provides) || provides.some(value => typeof value !== 'string')) {
+    throw new Error(`applications[${index}] 的 provides 必须是字符串数组。`)
+  }
+  return {
+    id,
+    name,
+    repository,
+    packageName,
+    version,
+    binName,
+    launchMode: launchMode as ApplicationLaunchMode,
+    launchArgs,
+    provides,
+  }
+}
+
 function parsePackPlugin(item: unknown, index: number): PackPluginEntry {
   if (typeof item !== 'object' || item === null || Array.isArray(item)) {
     throw new Error(`plugins[${index}] 必须是映射（对象）。`)
@@ -179,7 +270,14 @@ export function parsePackManifest(text: string): PackManifest {
     if (!Array.isArray(raw.presets)) throw new Error('整合包 presets 必须是数组。')
     manifest.presets = raw.presets.map((item, index) => parsePackPreset(item, index))
   }
-  // skills 字段 v1 预留，这里忽略（未知字段一律忽略）。
+  if (raw.skills !== undefined) {
+    if (!Array.isArray(raw.skills)) throw new Error('整合包 skills 必须是数组。')
+    manifest.skills = raw.skills.map((item, index) => parsePackSkill(item, index))
+  }
+  if (raw.applications !== undefined) {
+    if (!Array.isArray(raw.applications)) throw new Error('整合包 applications 必须是数组。')
+    manifest.applications = raw.applications.map((item, index) => parsePackApplication(item, index))
+  }
   return manifest
 }
 
@@ -194,6 +292,7 @@ export function serializePackManifest(manifest: PackManifest): string {
   if (manifest.author) output.author = manifest.author
   if (manifest.presets !== undefined) output.presets = manifest.presets
   if (manifest.skills !== undefined) output.skills = manifest.skills
+  if (manifest.applications !== undefined) output.applications = manifest.applications
   return stringify(output, { lineWidth: 0 })
 }
 
@@ -229,6 +328,8 @@ export function buildManifestFromReceipts(
   packId: string,
   receipts: PluginInstallReceipt[],
   presetReceipts: PresetInstallReceipt[] = [],
+  skillReceipts: SkillInstallReceipt[] = [],
+  applicationAddons: InstalledApplicationAddon[] = [],
 ): PackManifest {
   const plugins = receipts.map(receiptToPluginEntry)
   const presets = presetReceipts.map(receipt => ({
@@ -237,11 +338,35 @@ export function buildManifestFromReceipts(
     sourcePath: receipt.sourcePath,
     revision: receipt.revision,
   }))
+  const skills = skillReceipts.map(receipt => ({
+    name: receipt.name,
+    format: receipt.format,
+    repository: receipt.repository,
+    sourcePath: receipt.sourcePath,
+    revision: receipt.revision,
+  }))
+  const applications = applicationAddons.map(addon => ({
+    id: addon.id,
+    name: addon.name,
+    repository: addon.repository,
+    packageName: addon.packageName,
+    version: addon.version,
+    binName: addon.binName,
+    launchMode: addon.launchMode,
+    launchArgs: addon.launchArgs,
+    provides: addon.provides,
+  }))
+  const extra: string[] = []
+  if (presetReceipts.length > 0) extra.push(`${presetReceipts.length} 个预设`)
+  if (skillReceipts.length > 0) extra.push(`${skillReceipts.length} 个技能`)
+  if (applicationAddons.length > 0) extra.push(`${applicationAddons.length} 个应用`)
   return {
     name: manifestNameFromPackId(packId),
-    description: `由 DSH Launcher 从已安装插件导出（${receipts.length} 个插件${presetReceipts.length > 0 ? `、${presetReceipts.length} 个预设` : ''}）。`,
+    description: `由 DSH Launcher 从已安装插件导出（${receipts.length} 个插件${extra.length > 0 ? `、${extra.join('、')}` : ''}）。`,
     version: '1.0.0',
     plugins,
     ...(presetReceipts.length > 0 ? { presets } : {}),
+    ...(skillReceipts.length > 0 ? { skills } : {}),
+    ...(applicationAddons.length > 0 ? { applications } : {}),
   }
 }

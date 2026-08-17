@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import AdmZip from 'adm-zip'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AppSettings, PackManifest, PackPluginEntry, ProfileState } from '../src/types'
+import type { AppSettings, InstalledSkill, PackManifest, PackPluginEntry, ProfileState } from '../src/types'
 import { createPackManager, type PackInstallTarget } from '../electron/pack'
 import { buildPackZip, inspectPackZip } from '../electron/pack-zip'
 import { readPackRegistry, upsertPackRecord, type PackRecord } from '../electron/pack-registry'
@@ -33,6 +33,7 @@ async function makeEnv(): Promise<{
   snapshotRoot: string
   pluginReceiptsPath: string
   presetReceiptsPath: string
+  skillReceiptsPath: string
 }> {
   const root = await temporaryDirectory()
   const dshHome = path.join(root, 'dsh-home')
@@ -44,6 +45,7 @@ async function makeEnv(): Promise<{
     snapshotRoot: path.join(root, 'pack-snapshots'),
     pluginReceiptsPath: path.join(root, 'plugin-installs.json'),
     presetReceiptsPath: path.join(root, 'preset-installs.json'),
+    skillReceiptsPath: path.join(root, 'skill-installs.json'),
   }
 }
 
@@ -65,11 +67,45 @@ function makeInstallerStub() {
     installedPresets: [],
   }))
   const installPresetLocal = vi.fn(async (_dshHome: string, _preset: { name: string; sourceDir: string }): Promise<void> => {})
+  const installSkill = vi.fn(async (_request: { repository: string; targetId: string }): Promise<{ installedSkill: InstalledSkill; installedSkills: never[] }> => ({
+    installedSkill: {
+      name: _request.targetId,
+      description: '',
+      path: path.join(process.cwd(), _request.targetId),
+      format: 'bundle',
+      enabled: true,
+      modelInvocable: false,
+      userInvocable: false,
+    },
+    installedSkills: [],
+  }))
+  const installSkillPinned = vi.fn(async (_request: { repository: string; target: { name: string } }): Promise<InstalledSkill> => ({
+    name: _request.target.name,
+    description: '',
+    path: path.join(process.cwd(), _request.target.name),
+    format: 'bundle',
+    enabled: true,
+    modelInvocable: false,
+    userInvocable: false,
+  }))
+  const toggleSkill = vi.fn(async (_name: string, _enabled: boolean): Promise<never[]> => [])
   const togglePreset = vi.fn(async (_name: string, _enabled: boolean): Promise<never[]> => [])
   const remove = vi.fn(async (_packageName: string, _profileName?: string): Promise<void> => {})
   const readProfile = vi.fn(async (): Promise<ProfileState> => defaultProfile)
   const togglePlugin = vi.fn(async (): Promise<ProfileState> => defaultProfile)
-  return { installPluginTarget, installSkillLocal, installPreset, installPresetLocal, togglePreset, remove, readProfile, togglePlugin }
+  return {
+    installPluginTarget,
+    installSkillLocal,
+    installSkill,
+    installSkillPinned,
+    toggleSkill,
+    installPreset,
+    installPresetLocal,
+    togglePreset,
+    remove,
+    readProfile,
+    togglePlugin,
+  }
 }
 
 type InstallerStub = ReturnType<typeof makeInstallerStub>
@@ -106,6 +142,12 @@ function makeManager(
     snapshotRoot: env.snapshotRoot,
     pluginReceiptsPath: env.pluginReceiptsPath,
     presetReceiptsPath: env.presetReceiptsPath,
+    skillReceiptsPath: env.skillReceiptsPath,
+    applicationAddons: {
+      list: vi.fn(async () => []),
+      install: vi.fn(async () => {}),
+      uninstall: vi.fn(async () => []),
+    },
     installer,
     emitEvent,
     isRuntimeRunning: options.isRuntimeRunning ?? (() => false),

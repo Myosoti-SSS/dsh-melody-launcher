@@ -261,11 +261,19 @@ function LauncherShell() {
                   onRemove={packId => void store.removePack(packId)}
                   onAddPlugin={(packId, packageName) => void store.addPackPlugin(packId, packageName)}
                   onAddPreset={(packId, presetName) => void store.addPackPreset(packId, presetName)}
+                  onAddSkill={(packId, skillName) => void store.addPackSkill(packId, skillName)}
+                  onAddApplication={(packId, addonId) => void store.addPackApplication(packId, addonId)}
                   onToggleItem={(packId, packageName, enabled) => void store.togglePackItem(packId, packageName, enabled)}
                   onTogglePreset={(packId, presetName, enabled) => void store.togglePackPreset(packId, presetName, enabled)}
+                  onToggleSkill={(packId, skillName, enabled) => void store.togglePackSkill(packId, skillName, enabled)}
+                  onToggleApplication={(packId, addonId, enabled) => void store.togglePackApplication(packId, addonId, enabled)}
                   onRemoveItem={(packId, packageName) => void store.removePackItem(packId, packageName)}
                   onRemovePreset={(packId, presetName) => void store.removePackPreset(packId, presetName)}
+                  onRemoveSkill={(packId, skillName) => void store.removePackSkill(packId, skillName)}
+                  onRemoveApplication={(packId, addonId) => void store.removePackApplication(packId, addonId)}
                   installedPresets={store.installedPresets}
+                  installedSkills={store.installedSkills}
+                  installedApplications={store.installedApplications}
                 />
               )}
             </main>
@@ -330,10 +338,19 @@ function LauncherShell() {
         <CreatePackDialog
           plugins={profile.plugins}
           presets={store.installedPresets}
+          skills={store.installedSkills}
+          applications={store.installedApplications}
           onClose={() => setCreatePackOpen(false)}
           onConfirm={request => {
             setCreatePackOpen(false)
-            void packInstall.startCreate(request.name, request.description, request.packageNames, request.presetNames)
+            void packInstall.startCreate(
+              request.name,
+              request.description,
+              request.packageNames,
+              request.presetNames,
+              request.skillNames,
+              request.applicationIds,
+            )
           }}
         />
       )}

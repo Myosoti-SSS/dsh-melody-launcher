@@ -56,6 +56,7 @@ async function makeEnv(): Promise<{
   snapshotRoot: string
   pluginReceiptsPath: string
   presetReceiptsPath: string
+  skillReceiptsPath: string
 }> {
   const root = await temporaryDirectory()
   const dshHome = path.join(root, 'dsh-home')
@@ -67,6 +68,7 @@ async function makeEnv(): Promise<{
     snapshotRoot: path.join(root, 'pack-snapshots'),
     pluginReceiptsPath: path.join(root, 'plugin-installs.json'),
     presetReceiptsPath: path.join(root, 'preset-installs.json'),
+    skillReceiptsPath: path.join(root, 'skill-installs.json'),
   }
 }
 
@@ -97,6 +99,12 @@ function makeManager(env: Env, installer: InstallInstaller, store: SettingsStore
     snapshotRoot: env.snapshotRoot,
     pluginReceiptsPath: env.pluginReceiptsPath,
     presetReceiptsPath: env.presetReceiptsPath,
+    skillReceiptsPath: env.skillReceiptsPath,
+    applicationAddons: {
+      list: async () => [],
+      install: async () => ({}),
+      uninstall: async () => [],
+    },
     installer,
     emitEvent,
     isRuntimeRunning: () => false,
@@ -222,6 +230,39 @@ function createDshSimulator(dshHome: string, receiptsPath: string): DshSimulator
     return {}
   }
 
+  const installSkill: InstallInstaller['installSkill'] = async request => {
+    if (failOn.has(request.targetId)) throw new Error(`模拟安装失败：${request.targetId}`)
+    return {
+      installedSkill: {
+        name: request.targetId,
+        description: '',
+        path: path.join(dshHome, 'skills', request.targetId),
+        format: 'bundle',
+        enabled: true,
+        modelInvocable: false,
+        userInvocable: false,
+      },
+      installedSkills: [],
+    }
+  }
+
+  const installSkillPinned: InstallInstaller['installSkillPinned'] = async ({ target }) => {
+    if (failOn.has(target.name)) throw new Error(`模拟安装失败：${target.name}`)
+    const destination = path.join(dshHome, 'skills', target.name)
+    await mkdir(destination, { recursive: true })
+    await writeFile(path.join(destination, 'SKILL.md'), `---\nname: ${target.name}\ndescription: x\n---\n`)
+    return {
+      name: target.name,
+      description: '',
+      path: destination,
+      format: target.format,
+      enabled: true,
+      modelInvocable: false,
+      userInvocable: false,
+    }
+  }
+
+  const toggleSkill: InstallInstaller['toggleSkill'] = async () => []
   const togglePreset: InstallInstaller['togglePreset'] = async () => []
 
   return {
@@ -229,6 +270,9 @@ function createDshSimulator(dshHome: string, receiptsPath: string): DshSimulator
     installCalls,
     installPluginTarget,
     installSkillLocal,
+    installSkill,
+    installSkillPinned,
+    toggleSkill,
     installPreset,
     installPresetLocal,
     togglePreset,

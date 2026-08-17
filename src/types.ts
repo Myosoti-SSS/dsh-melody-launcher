@@ -215,6 +215,10 @@ export interface InstalledSkill {
   enabled: boolean
   modelInvocable: boolean
   userInvocable: boolean
+  /** 以下字段来自 skill receipts；仅在通过启动器安装过且有来源记录时存在。 */
+  repository?: string
+  sourcePath?: string
+  revision?: string
 }
 
 export interface SkillInstallRequest {
@@ -514,6 +518,29 @@ export interface PackPresetEntry {
   revision?: string
 }
 
+export interface PackSkillEntry {
+  name: string
+  format: 'bundle' | 'flat'
+  /** 子模块仓库（meta-repo 分析确定）。 */
+  repository?: string
+  /** 子模块内 Skill 源路径，如 `skills/git-workflow` 或 `skills/quick-ref.md`。 */
+  sourcePath?: string
+  /** 精确 pin commit。 */
+  revision?: string
+}
+
+export interface PackApplicationEntry {
+  id: string
+  name: string
+  repository: string
+  packageName: string
+  version: string
+  binName: string
+  launchMode: ApplicationLaunchMode
+  launchArgs: string[]
+  provides: string[]
+}
+
 export interface PackManifest {
   name: string
   description: string
@@ -521,14 +548,15 @@ export interface PackManifest {
   author?: string
   plugins: PackPluginEntry[]
   presets?: PackPresetEntry[]
-  skills?: unknown[]          // v1 预留，忽略
+  skills?: PackSkillEntry[]
+  applications?: PackApplicationEntry[]
 }
 
 export interface PackAnalysisItem {
   packageName: string
   available: boolean          // 能否安装
   offline: boolean            // 插件本体是否在 zip 内（离线装）
-  kind?: 'plugin' | 'skill' | 'preset'   // 缺省为插件；技能/预设项的 packageName 即名称
+  kind?: 'plugin' | 'skill' | 'preset' | 'application'   // 缺省为插件；技能/预设/应用项的 packageName 即名称
   reason?: string             // 不可装原因
 }
 
@@ -562,6 +590,13 @@ export interface PackInstalledPreset {
   description?: string
 }
 
+/** 整合包记录的 Application Addon（独立安装目录，记入包以支持导出与删包清理）。 */
+export interface PackInstalledApplication {
+  id: string
+  name: string
+  enabled: boolean
+}
+
 export interface PackStatus {
   id: string
   name: string
@@ -573,6 +608,7 @@ export interface PackStatus {
   plugins: PackInstalledPlugin[]
   skills?: PackInstalledSkill[]
   presets?: PackInstalledPreset[]
+  applications?: PackInstalledApplication[]
   /** state 为 partial/failed 时的失败项（含原因），完整包缺省省略。 */
   failures?: { packageName: string; reason: string }[]
   installedAt: string
@@ -584,6 +620,8 @@ export interface PackCreateRequest {
   description?: string
   packageNames: string[]      // 从已安装插件勾选的包名
   presetNames?: string[]      // 从已安装且有来源记录的 Agent 预设勾选
+  skillNames?: string[]       // 从已安装且有来源记录的 Skill 勾选
+  applicationIds?: string[]   // 从已安装的 Application Addon 勾选
 }
 
 /** importPack 的可选覆盖项（raw 导入时的包名覆盖）。 */
@@ -678,10 +716,16 @@ export interface LauncherApi {
   packHasSnapshot(): Promise<boolean>
   addPackPlugin(packId: string, packageName: string): Promise<PackStatus>
   addPackPreset(packId: string, presetName: string): Promise<PackStatus>
+  addPackSkill(packId: string, skillName: string): Promise<PackStatus>
+  addPackApplication(packId: string, addonId: string): Promise<PackStatus>
   togglePackItem(packId: string, packageName: string, enabled: boolean): Promise<PackStatus>
   togglePackPreset(packId: string, presetName: string, enabled: boolean): Promise<PackStatus>
+  togglePackSkill(packId: string, skillName: string, enabled: boolean): Promise<PackStatus>
+  togglePackApplication(packId: string, addonId: string, enabled: boolean): Promise<PackStatus>
   removePackItem(packId: string, packageName: string): Promise<PackStatus>
   removePackPreset(packId: string, presetName: string): Promise<PackStatus>
+  removePackSkill(packId: string, skillName: string): Promise<PackStatus>
+  removePackApplication(packId: string, addonId: string): Promise<PackStatus>
   onCatalogAnalysisProgress(listener: (progress: CatalogAnalysisProgress) => void): () => void
   onPackProgress(listener: (event: PackProgressEvent) => void): () => void
   onRuntimeOutput(listener: (output: RuntimeOutput) => void): () => void
