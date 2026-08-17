@@ -631,7 +631,6 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             await rm(path.join(skillRoot, '.disabled', skill.name), { recursive: true, force: true }).catch(() => undefined)
           }
         }
-        void record
         return { removed: profile.plugins.length }
       } finally {
         active = false
