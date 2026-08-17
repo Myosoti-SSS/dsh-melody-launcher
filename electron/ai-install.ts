@@ -37,7 +37,7 @@ import {
   type AcpPermissionRequest,
   type AcpTransport,
 } from './acp-client'
-import { prepareAiRepositorySource, type AiRepositorySource } from './ai-repository-source'
+import { prepareAiRepositorySource, type AiRepositorySource, type SubmoduleInfo } from './ai-repository-source'
 import { runCommand } from './command'
 import type { NodeRuntime, PnpmRuntime } from './node-runtime'
 import { spawnCommand, withExecutableDirectoryOnPath } from './process'
@@ -263,6 +263,10 @@ export interface AiInstallPromptInput {
   shell?: 'bash' | 'pwsh'
   /** 可用的 DSH 命令行前缀（如 `npx --yes @deepseek-ai/dsh`），agent 借它调 plugin add。 */
   dshCliCommand?: string
+  /** 聚合仓库：已预取的 git 子模块（内容已解压到 repositoryPath 对应子目录）。 */
+  submodules?: SubmoduleInfo[]
+  /** 聚合仓库：未能预取的子模块（非 GitHub / 下载失败），agent 不应尝试联网下载。 */
+  skippedSubmodules?: { path: string; reason: string }[]
 }
 
 function classificationLabel(installability: PluginInstallability): string {
@@ -315,6 +319,18 @@ export function buildInstallPrompt(input: AiInstallPromptInput): string {
     ...(analysis.targets.length ? [`市场已识别到可安装目标：${formatTargets(analysis.targets)}`] : []),
     ...(repositoryPath ? [
       `启动器已把仓库安全下载到本地：\`${repositoryPath}\`。必须优先检查这个本地副本，不要重新 clone 或下载仓库。`,
+    ] : []),
+    ...(input.submodules?.length ? [
+      '',
+      '## 聚合仓库（git submodules）',
+      `该仓库通过 .gitmodules 声明了 ${input.submodules.length} 个子模块，每个子模块都是独立的 GitHub 仓库。启动器已把它们的仓库内容预取到本地副本的对应子目录：`,
+      ...input.submodules.map(submodule =>
+        `- \`${repositoryPath}/${submodule.path}/\` ← ${submodule.repository}（${submodule.revision.slice(0, 12)}）`),
+      '可安装的 DSH Bundle 或 Skill 很可能位于这些子模块目录内。请逐个检查子模块目录，找到可安装目标后按研究指引安装；不同子模块可能是插件、也可能是 Skill。',
+    ] : []),
+    ...(input.skippedSubmodules?.length ? [
+      '',
+      `以下子模块未能预取（${input.skippedSubmodules.map(skipped => `${skipped.path}：${skipped.reason}`).join('；')}）。它们的目录是空的，请勿尝试联网下载或 clone。`,
     ] : []),
     '',
     '## 研究指引',
@@ -1423,8 +1439,12 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
           options.emitOutput('info', `[ai] 仓库下载 ${percent}%（${received}/${total} bytes）`)
         },
         options.githubFetch,
+        text => log(text),
       )
       log(`仓库本地副本已准备：${repositorySource.repositoryPath}`)
+      if (repositorySource.submodules.length > 0 || repositorySource.skippedSubmodules.length > 0) {
+        log(`聚合仓库：${repositorySource.submodules.length} 个子模块已预取，${repositorySource.skippedSubmodules.length} 个跳过`)
+      }
 
       const prompt = buildInstallPrompt({
         repository: input.repository,
@@ -1433,6 +1453,8 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
         profileName: settings.profileName,
         workspace: settings.dshHome,
         repositoryPath: repositorySource.repositoryPath,
+        submodules: repositorySource.submodules,
+        skippedSubmodules: repositorySource.skippedSubmodules,
         shell: process.platform === 'win32' ? 'pwsh' : 'bash',
         dshCliCommand: dshCliCommandHint(settings),
       })
