@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import AdmZip from 'adm-zip'
 import { afterEach, describe, expect, it } from 'vitest'
-import { installPresetFromRepository, readInstalledPresets, toggleInstalledPreset } from '../electron/preset-install'
+import { installPresetFromDirectory, installPresetFromRepository, readInstalledPresets, toggleInstalledPreset } from '../electron/preset-install'
 import type { PresetInstallTarget } from '../src/types'
 
 const temporaryRoots: string[] = []
@@ -50,6 +50,19 @@ async function freshRoots(): Promise<{ dshHome: string; cacheRoot: string }> {
   temporaryRoots.push(root)
   return { dshHome: path.join(root, 'home'), cacheRoot: path.join(root, 'cache') }
 }
+
+it('从本地目录安装预设：复制到 .agent-presets/<name>', async () => {
+  const { dshHome } = await freshRoots()
+  const sourceDir = await mkdtemp(path.join(os.tmpdir(), 'dsh-preset-local-'))
+  temporaryRoots.push(sourceDir)
+  await writeFile(path.join(sourceDir, 'preset.yml'), 'name: router-standard\n')
+  await writeFile(path.join(sourceDir, 'rules.yml'), 'rules')
+
+  const installed = await installPresetFromDirectory(dshHome, 'router-standard', sourceDir)
+  expect(installed.enabled).toBe(true)
+  expect(await readFile(path.join(dshHome, '.agent-presets', 'router-standard', 'preset.yml'), 'utf8')).toContain('router-standard')
+  expect(await readFile(path.join(dshHome, '.agent-presets', 'router-standard', 'rules.yml'), 'utf8')).toBe('rules')
+})
 
 it('把 preset/<variant> 目录复制到 .agent-presets/<name>，跳过预设目录外的文件', async () => {
   const { dshHome, cacheRoot } = await freshRoots()

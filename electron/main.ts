@@ -30,6 +30,7 @@ import { recordPluginInstall } from './plugin-receipts'
 import { configureProcessTracker, withExecutableDirectoryOnPath } from './process'
 import { createProcessSupervisor, type ProcessSupervisor } from './process-supervisor'
 import { readProfile, togglePlugin } from './profile'
+import { installPresetFromDirectory } from './preset-install'
 import { installSkillFromDirectory } from './skill-install'
 import { createRendererEvents } from './renderer-events'
 import { createRuntimeController, type RuntimeController } from './runtime'
@@ -272,6 +273,7 @@ function createServices(): Services {
     // raw 整合包导入的技能：从本地 staging 目录全局安装（bundle 目录或 flat 单文件）。
     installSkillLocal: (dshHome, skill) => installSkillFromDirectory(dshHome, skill.name, skill.format, skill.sourceDir),
     installPreset: request => installer.installPreset(request),
+    installPresetLocal: (dshHome, preset) => installPresetFromDirectory(dshHome, preset.name, preset.sourceDir),
     togglePreset: (name, enabled) => installer.togglePreset(name, enabled),
   }
 

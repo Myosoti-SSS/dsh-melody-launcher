@@ -64,11 +64,12 @@ function makeInstallerStub() {
     installedPreset: { name: request.name, path: path.join(process.cwd(), request.name), enabled: true },
     installedPresets: [],
   }))
+  const installPresetLocal = vi.fn(async (_dshHome: string, _preset: { name: string; sourceDir: string }): Promise<void> => {})
   const togglePreset = vi.fn(async (_name: string, _enabled: boolean): Promise<never[]> => [])
   const remove = vi.fn(async (_packageName: string, _profileName?: string): Promise<void> => {})
   const readProfile = vi.fn(async (): Promise<ProfileState> => defaultProfile)
   const togglePlugin = vi.fn(async (): Promise<ProfileState> => defaultProfile)
-  return { installPluginTarget, installSkillLocal, installPreset, togglePreset, remove, readProfile, togglePlugin }
+  return { installPluginTarget, installSkillLocal, installPreset, installPresetLocal, togglePreset, remove, readProfile, togglePlugin }
 }
 
 type InstallerStub = ReturnType<typeof makeInstallerStub>
@@ -483,6 +484,28 @@ describe('importPack', () => {
     expect(records[0].skills).toEqual([{ name: 'my-skill', format: 'bundle', enabled: true }])
   })
 
+  it('raw 分支：preset.yml 目录被识别并本地安装', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const zipPath = await writeRawZip(env, 'raw-preset.zip', {
+      'presets/router-standard/preset.yml': 'name: router-standard\n',
+      'presets/router-standard/helper.js': 'export {}',
+    })
+
+    const result = await manager.importPack(zipPath)
+    expect(result.installed).toEqual(['router-standard'])
+    expect(result.state).toBe('complete')
+    expect(stub.installPresetLocal).toHaveBeenCalledTimes(1)
+    expect(stub.installPresetLocal.mock.calls[0][1]).toMatchObject({ name: 'router-standard' })
+
+    const records = await readPackRegistry(env.registryPath)
+    expect(records[0].source).toBe('raw')
+    expect(records[0].presets).toEqual([{ name: 'router-standard', enabled: true }])
+  })
+
   it('raw 分支：items 只装选中的插件/技能', async () => {
     const env = await makeEnv()
     const stub = makeInstallerStub()
@@ -547,7 +570,7 @@ describe('importPack', () => {
       'readme.txt': 'just a file',
       'locales/en.pak': 'binary',
     })
-    await expect(manager.importPack(zipPath)).rejects.toThrow('未在压缩包内发现可安装的插件或技能')
+    await expect(manager.importPack(zipPath)).rejects.toThrow('未在压缩包内发现可安装的插件、技能或预设')
   })
 
   it('raw 分支：flat 技能安装为单 .md', async () => {
