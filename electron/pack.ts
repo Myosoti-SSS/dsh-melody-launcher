@@ -30,7 +30,7 @@ import type {
 } from '../src/types'
 import { assertMeaningfulPackName, buildManifestFromReceipts, packProfileName } from './pack-manifest'
 import { extractPackBodiesFromPath, findManifestInArchiveFromPath, inspectPackZipFromPath } from './pack-zip'
-import { cleanPackNameHint, extractRawPluginBodiesFromPath, extractRawSkillSourcesFromPath, scanRawPackZipFromPath, type ExtractByteBudget } from './pack-scan'
+import { cleanPackNameHint, extractRawPluginBodiesFromPath, extractRawPresetSourcesFromPath, extractRawSkillSourcesFromPath, scanRawPackZipFromPath, type ExtractByteBudget } from './pack-scan'
 import { buildPackExportToFile } from './pack-export'
 import {
   readPackRegistry,
@@ -60,6 +60,8 @@ export interface InstallInstaller {
   installSkillLocal(dshHome: string, skill: { name: string; format: 'bundle' | 'flat'; sourceDir: string }): Promise<unknown>
   /** 安装一个 Agent 预设（全局安装到 DSH 预设目录）。 */
   installPreset(request: PresetInstallRequest): Promise<PresetInstallResult>
+  /** 从本地 staging 目录安装 Agent 预设（raw 整合包导入用）。 */
+  installPresetLocal(dshHome: string, preset: { name: string; sourceDir: string }): Promise<unknown>
   /** 启用或停用一个本地 Agent 预设。 */
   togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]>
   remove(packageName: string, profileName?: string): Promise<unknown>
@@ -321,13 +323,16 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         for (const skill of scan.skills) {
           items.push({ packageName: skill.name, available: true, offline: true, kind: 'skill' })
         }
+        for (const preset of scan.presets) {
+          items.push({ packageName: preset.name, available: true, offline: true, kind: 'preset' })
+        }
         for (const skippedItem of scan.skipped) {
           items.push({ packageName: skippedItem.entryPrefix, available: false, offline: false, reason: skippedItem.reason })
         }
         return {
           id: nameHint ? packProfileName(nameHint) : '',
           name: nameHint,
-          description: `非标准整合包：扫描到 ${scan.plugins.length} 个插件、${scan.skills.length} 个技能。`,
+          description: `非标准整合包：扫描到 ${scan.plugins.length} 个插件、${scan.skills.length} 个技能${scan.presets.length > 0 ? `、${scan.presets.length} 个预设` : ''}。`,
           version: '1.0.0',
           source: 'raw',
           items,
@@ -384,6 +389,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       beginTask()
       profileWasNew = true
       let skillStaging: string | null = null
+      let presetStaging: string | null = null
       try {
         // 不再整体读入内存：先探测清单，再按分支用文件路径流式解析。
         // 文件被并发删除/移动时（通过 IPC stat 门禁后）这里会抛错，
@@ -392,8 +398,8 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         if (!manifestText) {
           // ---- raw 分支：扫描非标准包内的插件与技能，离线安装，注册为我们格式的整合包。----
           const scan = await scanRawPackZipFromPath(filePath)
-          if (scan.plugins.length === 0 && scan.skills.length === 0) {
-            throw new Error('未在压缩包内发现可安装的插件或技能。')
+          if (scan.plugins.length === 0 && scan.skills.length === 0 && scan.presets.length === 0) {
+            throw new Error('未在压缩包内发现可安装的插件、技能或预设。')
           }
           const nameHint = cleanPackNameHint(path.basename(filePath)) ?? cleanPackNameHint(scan.topName ?? '') ?? ''
           const packName = (importOptions?.name ?? '').trim() || nameHint
@@ -404,9 +410,10 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           if (existing.some(record => record.id === packId)) throw new Error('整合包已存在。')
 
           const dshHome = await getDshHome()
-          // items 缺省 = 全装；插件名与技能名各自独立过滤（理论上可能撞名）。
+          // items 缺省 = 全装；插件名、技能名、预设名各自独立过滤（理论上可能撞名）。
           const wantedPlugins = scan.plugins.filter(plugin => !items || items.includes(plugin.packageName))
           const wantedSkills = scan.skills.filter(skill => !items || items.includes(skill.name))
+          const wantedPresets = scan.presets.filter(preset => !items || items.includes(preset.name))
 
           await mkdir(path.join(dshHome, 'profiles', packId), { recursive: true })
           options.emitEvent({ kind: 'status', message: `正在扫描并导入非标准整合包「${packName}」…` })
@@ -463,6 +470,20 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             }
           }
 
+          // 预设解到 dshHome 内 staging，再逐项全局安装到 .agent-presets。
+          if (wantedPresets.length > 0) {
+            presetStaging = await mkdtemp(path.join(dshHome, '.pack-raw-preset-staging-'))
+            const sources = await extractRawPresetSourcesFromPath(filePath, wantedPresets, presetStaging, undefined, extractBudget)
+            for (const preset of wantedPresets) {
+              const sourceDir = sources.get(preset.name)
+              if (!sourceDir) {
+                installables.push({ packageName: preset.name, offline: true, install: async () => { throw new Error('预设来源解出失败。') } })
+                continue
+              }
+              installables.push({ packageName: preset.name, offline: true, install: async () => { await options.installer.installPresetLocal(dshHome, { name: preset.name, sourceDir }) } })
+            }
+          }
+
           const { installed, failures } = await runSerialInstall(installables, { emitEvent: options.emitEvent })
           const result = buildInstallResult(packId, installed, failures)
 
@@ -472,11 +493,14 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           const installedSkills: PackInstalledSkill[] = wantedSkills
             .filter(skill => installed.includes(skill.name))
             .map(skill => ({ name: skill.name, format: skill.format, enabled: true }))
+          const installedPresets: PackInstalledPreset[] = wantedPresets
+            .filter(preset => installed.includes(preset.name))
+            .map(preset => ({ name: preset.name, enabled: true }))
 
           const record: PackRecord = {
             id: packId,
             name: packName,
-            description: `非标准整合包：扫描到 ${scan.plugins.length} 个插件、${scan.skills.length} 个技能。`,
+            description: `非标准整合包：扫描到 ${scan.plugins.length} 个插件、${scan.skills.length} 个技能${scan.presets.length > 0 ? `、${scan.presets.length} 个预设` : ''}。`,
             version: '1.0.0',
             source: 'raw',
             installedAt: new Date().toISOString(),
@@ -484,6 +508,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             state: result.state,
             plugins: toInstalledPlugins(installedPluginNames),
             skills: installedSkills,
+            ...(installedPresets.length > 0 ? { presets: installedPresets } : {}),
             failures: result.failures.length > 0 ? result.failures : undefined,
           }
           await upsertPackRecord(options.registryPath, record)
@@ -628,6 +653,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         throw error
       } finally {
         if (skillStaging) await rm(skillStaging, { recursive: true, force: true }).catch(() => undefined)
+        if (presetStaging) await rm(presetStaging, { recursive: true, force: true }).catch(() => undefined)
         active = false
       }
     },

@@ -214,6 +214,14 @@ function createDshSimulator(dshHome: string, receiptsPath: string): DshSimulator
     }
   }
 
+  const installPresetLocal: InstallInstaller['installPresetLocal'] = async (home, preset) => {
+    if (failOn.has(preset.name)) throw new Error(`模拟安装失败：${preset.name}`)
+    const destination = path.join(home, '.agent-presets', preset.name)
+    await mkdir(destination, { recursive: true })
+    await cp(preset.sourceDir, destination, { recursive: true })
+    return {}
+  }
+
   const togglePreset: InstallInstaller['togglePreset'] = async () => []
 
   return {
@@ -222,6 +230,7 @@ function createDshSimulator(dshHome: string, receiptsPath: string): DshSimulator
     installPluginTarget,
     installSkillLocal,
     installPreset,
+    installPresetLocal,
     togglePreset,
     remove,
     readProfile: (home, profileName) => readProfile(home, profileName),
