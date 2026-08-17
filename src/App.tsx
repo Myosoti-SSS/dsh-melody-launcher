@@ -146,12 +146,14 @@ function LauncherShell() {
                   profile={profile}
                   profileName={settings.profileName}
                   installedSkills={store.installedSkills}
+                  installedPresets={store.installedPresets}
                   pluginTrials={store.pluginTrials}
                   selected={store.selected}
                   busy={store.busy}
                   onSelect={plugin => store.selectPlugin(plugin.packageName)}
                   onToggle={store.togglePlugin}
                   onToggleSkill={store.toggleSkill}
+                  onTogglePreset={store.togglePreset}
                   onReorder={store.reorderPlugins}
                   onRefresh={store.refreshProfile}
                   onBrowse={() => navigation.setView('discover')}
@@ -171,6 +173,7 @@ function LauncherShell() {
                   installProgress={store.installProgress}
                   installedRepositories={store.installedRepositories}
                   installedSkills={store.installedSkills}
+                  installedPresets={store.installedPresets}
                   pluginTrials={store.pluginTrials}
                   onAnalysis={(repository, analysis) => {
                     setRepositoryAnalyses(current => ({ ...current, [repository]: analysis }))
@@ -190,6 +193,10 @@ function LauncherShell() {
                   onSkillInstalled={result => {
                     store.applyCatalogSkillInstall(result)
                     store.showToast({ kind: 'success', message: `${result.installedSkill.name} 已安装到本地 Skill 目录。` })
+                  }}
+                  onPresetInstalled={result => {
+                    store.applyCatalogPresetInstall(result)
+                    store.showToast({ kind: 'success', message: `Agent 预设 ${result.installedPreset.name} 已安装到 DSH 预设目录。` })
                   }}
                   onError={message => store.showToast({ kind: 'error', message })}
                   onOpenRepository={url => void api.openExternal(url)}

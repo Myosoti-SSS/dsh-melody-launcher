@@ -165,7 +165,7 @@ function githubTreeUrl(repository: string): string {
  * 即子模块，sha 为父仓库钉住的 commit。失败或树被截断返回 null，调用方回退到
  * 子模块默认分支。
  */
-async function resolveSubmodulePins(repository: string, fetchImpl: typeof fetch): Promise<Map<string, string> | null> {
+export async function resolveSubmodulePins(repository: string, fetchImpl: typeof fetch): Promise<Map<string, string> | null> {
   try {
     const response = await fetchImpl(githubTreeUrl(repository), { headers: GITHUB_API_HEADERS })
     if (!response.ok) return null

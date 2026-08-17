@@ -2,7 +2,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC } from '../src/constants'
-import type { AppSettings, PackCreateRequest, PluginInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
+import type { AppSettings, PackCreateRequest, PluginInstallRequest, PresetInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
 import { searchCatalogRepositories, type DiscoverySort } from './discovery'
@@ -111,17 +111,19 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.catalogDiscover, async (_event, payload: { query: string; sort: DiscoverySort; page: number }) => {
     const sort: DiscoverySort = payload.sort === 'updated' ? 'updated' : 'stars'
     const page = Math.max(1, Math.floor(Number(payload.page) || 1))
-    const [found, dshInstallation, installedRepositories, installedSkills] = await Promise.all([
+    const [found, dshInstallation, installedRepositories, installedSkills, installedPresets] = await Promise.all([
       searchCatalogRepositories(payload.query ?? '', sort, page, githubAuth.fetch),
       installer.detectDsh(),
       installer.listInstalledRepositories(),
       installer.readInstalledSkills(),
+      installer.readInstalledPresets(),
     ])
     return {
       ...found,
       dshInstallation,
       installedRepositories,
       installedSkills,
+      installedPresets,
     }
   })
   ipcMain.handle(IPC.catalogAnalyze, async (_event, payload: { fullName: string; defaultBranch: string }) => {
@@ -150,6 +152,8 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       repository: request.repository,
       defaultBranch: request.defaultBranch,
       targetId: request.targetId,
+      // release 源插件：meta-repo 分析得到的 tgz 直链，覆盖重分析得到的 github 源。
+      tarballUrl: typeof request.tarballUrl === 'string' ? request.tarballUrl : undefined,
     })
   })
   ipcMain.handle(IPC.pluginsUninstall, async (_event, payload: string | { packageName: string; profileName?: string }) => {
@@ -181,6 +185,23 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       throw new Error('Skill 名称无效。')
     }
     return installer.toggleSkill(payload.name, Boolean(payload.enabled))
+  })
+
+  ipcMain.handle(IPC.presetsInstall, async (_event, request: PresetInstallRequest) => {
+    if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    if (!request || typeof request !== 'object') throw new Error('请求格式无效。')
+    if (!isSafeRepositoryName(request.repository)) throw new Error('GitHub 仓库名称无效。')
+    if (typeof request.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(request.name)) {
+      throw new Error('预设名称无效。')
+    }
+    return installer.installPreset(request)
+  })
+  ipcMain.handle(IPC.presetsReadInstalled, () => installer.readInstalledPresets())
+  ipcMain.handle(IPC.presetsToggle, async (_event, payload: { name: string; enabled: boolean }) => {
+    if (!payload || typeof payload.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.name)) {
+      throw new Error('预设名称无效。')
+    }
+    return installer.togglePreset(payload.name, Boolean(payload.enabled))
   })
 
   ipcMain.handle(IPC.aiStatus, () => aiInstaller.status())

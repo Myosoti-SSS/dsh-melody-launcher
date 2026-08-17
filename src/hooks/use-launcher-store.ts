@@ -10,10 +10,12 @@ import type {
   DshUpdateStatus,
   GitHubAuthStatus,
   InstallProgress,
+  InstalledPreset,
   InstalledSkill,
   ManagedPlugin,
   PackStatus,
   PluginTrialResult,
+  PresetInstallResult,
   ProfileState,
   RepositoryInstallResult,
   RuntimeOutput,
@@ -49,6 +51,7 @@ export function useLauncherStore() {
   const [pluginTrials, setPluginTrials] = useState<Record<string, PluginTrialResult>>({})
   const [installedRepositories, setInstalledRepositories] = useState<Set<string>>(new Set())
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([])
+  const [installedPresets, setInstalledPresets] = useState<InstalledPreset[]>([])
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>({ configured: false })
   const [githubAuthStatus, setGitHubAuthStatus] = useState<GitHubAuthStatus>({
     authenticated: false,
@@ -138,9 +141,10 @@ export function useLauncherStore() {
     setDshInstallation(result.dshInstallation)
   }, [adoptProfile])
 
-  const adoptCatalogInstallationState = useCallback((repositories: string[], skills: InstalledSkill[]) => {
+  const adoptCatalogInstallationState = useCallback((repositories: string[], skills: InstalledSkill[], presets: InstalledPreset[]) => {
     setInstalledRepositories(new Set(repositories.map(repository => repository.toLowerCase())))
     setInstalledSkills(skills)
+    setInstalledPresets(presets)
   }, [])
 
   const applyCatalogPluginInstall = useCallback((repository: string, result: RepositoryInstallResult) => {
@@ -158,6 +162,10 @@ export function useLauncherStore() {
 
   const applyCatalogSkillInstall = useCallback((result: SkillInstallResult) => {
     setInstalledSkills(result.installedSkills)
+  }, [])
+
+  const applyCatalogPresetInstall = useCallback((result: PresetInstallResult) => {
+    setInstalledPresets(result.installedPresets)
   }, [])
 
   const beginInstall = useCallback((progress: InstallProgress) => {
@@ -250,6 +258,13 @@ export function useLauncherStore() {
       success: enabled ? `Skill「${skill.name}」已启用。` : `Skill「${skill.name}」已停用。`,
     })
     if (next) setInstalledSkills(next)
+  }, [api, run])
+
+  const togglePreset = useCallback(async (preset: InstalledPreset, enabled: boolean) => {
+    const next = await run(`preset:${preset.name}`, () => api.togglePreset(preset.name, enabled), {
+      success: enabled ? `预设「${preset.name}」已启用。` : `预设「${preset.name}」已停用。`,
+    })
+    if (next) setInstalledPresets(next)
   }, [api, run])
 
   /** 先本地重排让拖拽有即时反馈，主进程写盘失败再回滚。 */
@@ -392,6 +407,7 @@ export function useLauncherStore() {
     pluginTrials,
     installedRepositories,
     installedSkills,
+    installedPresets,
     credentialStatus,
     githubAuthStatus,
     logs,
@@ -412,6 +428,7 @@ export function useLauncherStore() {
     adoptCatalogInstallationState,
     applyCatalogPluginInstall,
     applyCatalogSkillInstall,
+    applyCatalogPresetInstall,
     beginInstall,
     finishInstall,
     toggleRuntime,
@@ -422,6 +439,7 @@ export function useLauncherStore() {
     setGitHubAuthStatus,
     togglePlugin,
     toggleSkill,
+    togglePreset,
     reorderPlugins,
     uninstallPlugin,
     trialPlugin,

@@ -2,6 +2,7 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpenCheck,
+  Boxes,
   CircleAlert,
   CircleCheck,
   Download,
@@ -24,7 +25,7 @@ import { useState } from 'react'
 import { PageHeading } from '../components/PageHeading'
 import { pluginInitial } from '../lib/format'
 import { movePackage, movePackageTo } from '../lib/profile-order'
-import type { InstalledSkill, ManagedPlugin, PluginTrialResult, ProfileState } from '../types'
+import type { InstalledPreset, InstalledSkill, ManagedPlugin, PluginTrialResult, ProfileState } from '../types'
 
 /** 插件加载顺序页：列表、排序、启停与详情。 */
 
@@ -32,12 +33,14 @@ interface PluginsViewProps {
   profile: ProfileState
   profileName: string
   installedSkills: InstalledSkill[]
+  installedPresets: InstalledPreset[]
   pluginTrials: Record<string, PluginTrialResult>
   selected: ManagedPlugin | null
   busy: string | null
   onSelect: (plugin: ManagedPlugin) => void
   onToggle: (plugin: ManagedPlugin, enabled: boolean) => void
   onToggleSkill: (skill: InstalledSkill, enabled: boolean) => void
+  onTogglePreset: (preset: InstalledPreset, enabled: boolean) => void
   onReorder: (names: string[]) => void
   onRefresh: () => void
   onBrowse: () => void
@@ -54,12 +57,14 @@ export function PluginsView({
   profile,
   profileName,
   installedSkills,
+  installedPresets,
   pluginTrials,
   selected,
   busy,
   onSelect,
   onToggle,
   onToggleSkill,
+  onTogglePreset,
   onReorder,
   onRefresh,
   onBrowse,
@@ -169,6 +174,7 @@ export function PluginsView({
             </div>
               </div>
               <SkillList skills={installedSkills.filter(skill => visibleSkill(skill, filter))} busy={busy} onToggle={onToggleSkill} />
+              <PresetList presets={installedPresets.filter(preset => visiblePreset(preset, filter))} busy={busy} onToggle={onTogglePreset} />
             </div>
           </section>
           <PluginDetails
@@ -191,6 +197,47 @@ export function PluginsView({
 
 function visibleSkill(skill: InstalledSkill, filter: string): boolean {
   return !filter || `${skill.name} ${skill.description}`.toLowerCase().includes(filter.toLowerCase())
+}
+
+function visiblePreset(preset: InstalledPreset, filter: string): boolean {
+  return !filter || preset.name.toLowerCase().includes(filter.toLowerCase())
+}
+
+/** Agent 预设列：与 Skill 相同的开关机制（目录在 .agent-presets/.disabled 下时停用）。 */
+function PresetList({ presets, busy, onToggle }: {
+  presets: InstalledPreset[]
+  busy: string | null
+  onToggle: (preset: InstalledPreset, enabled: boolean) => void
+}) {
+  return (
+    <div className="skill-management-column preset-management-column">
+      <div className="skill-column-heading"><span><Boxes size={14} />预设</span><small>{presets.length} 个已安装</small></div>
+      {presets.length === 0 ? (
+        <div className="skill-empty">尚未安装预设</div>
+      ) : (
+        <div className="skill-rows">
+          {presets.map(preset => (
+            <div className={`skill-row ${preset.enabled ? '' : 'disabled'}`} key={preset.name}>
+              <div className="skill-identity">
+                <div className="skill-glyph preset-glyph"><Boxes size={15} /></div>
+                <div><strong>{preset.name}</strong><span>{preset.enabled ? '已启用' : '已停用'}</span></div>
+              </div>
+              <label className="switch" title={preset.enabled ? '停用预设' : '启用预设'}>
+                <input
+                  type="checkbox"
+                  checked={preset.enabled}
+                  disabled={busy === `preset:${preset.name}`}
+                  onChange={event => onToggle(preset, event.target.checked)}
+                  aria-label={`${preset.enabled ? '停用' : '启用'} 预设 ${preset.name}`}
+                />
+                <span>{busy === `preset:${preset.name}` && <LoaderCircle className="spin" size={11} />}</span>
+              </label>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function SkillList({ skills, busy, onToggle }: {
