@@ -8,6 +8,8 @@ import type { InstalledApplicationAddon, InstalledPreset, InstalledSkill, Manage
  * 安装中/结果态由 PackInstallDialog 展示。
  */
 
+type ResourceTab = 'plugins' | 'presets' | 'skills' | 'applications'
+
 export interface CreatePackDialogProps {
   /** 当前 profile 已安装插件（含内置），用 packageName 作为选择键。 */
   plugins: ManagedPlugin[]
@@ -39,6 +41,7 @@ export function CreatePackDialog({ plugins, presets, skills, applications, onCon
   const [selectedPresets, setSelectedPresets] = useState<Set<string>>(() => new Set())
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(() => new Set())
   const [selectedApplications, setSelectedApplications] = useState<Set<string>>(() => new Set())
+  const [resourceTab, setResourceTab] = useState<ResourceTab>('plugins')
 
   const toggle = (packageName: string) => {
     setSelected(current => {
@@ -115,108 +118,136 @@ export function CreatePackDialog({ plugins, presets, skills, applications, onCon
             </label>
           </div>
           <div className="form-section divided">
-            <h3>包含插件（已选 {selected.size} / {plugins.length}）</h3>
-            <p>从当前已安装插件中挑选；创建后会把这些插件组合进新的整合包 Profile。</p>
-            {plugins.length === 0 ? (
-              <div className="pack-checklist-empty">当前 Profile 还没有可挑选的插件，先安装一些插件再来创建。</div>
-            ) : (
-              <div className="pack-plugin-checklist">
-                {plugins.map(plugin => {
-                  const checked = selected.has(plugin.packageName)
-                  return (
-                    <label className={`pack-checklist-item ${checked ? 'checked' : ''} ${plugin.enabled ? '' : 'muted'}`} key={plugin.packageName}>
-                      <input type="checkbox" checked={checked} onChange={() => toggle(plugin.packageName)} aria-label={`${checked ? '取消' : '选择'} ${plugin.packageName}`} />
-                      <span className="pack-item-glyph">{plugin.displayName.slice(0, 2).toUpperCase()}</span>
-                      <span className="pack-checklist-copy">
-                        <strong>{plugin.displayName}</strong>
-                        <small>{plugin.packageName}{plugin.enabled ? '' : ' · 已停用'}</small>
-                      </span>
-                    </label>
-                  )
-                })}
+            <div className="pack-resource-tabs" role="tablist" aria-label="选择要加入整合包的资源类型">
+              <button type="button" role="tab" aria-selected={resourceTab === 'plugins'} className={resourceTab === 'plugins' ? 'active' : ''} onClick={() => setResourceTab('plugins')}>
+                插件 <span>{selected.size}/{plugins.length}</span>
+              </button>
+              <button type="button" role="tab" aria-selected={resourceTab === 'presets'} className={resourceTab === 'presets' ? 'active' : ''} onClick={() => setResourceTab('presets')}>
+                预设 <span>{selectedPresets.size}/{presets.length}</span>
+              </button>
+              <button type="button" role="tab" aria-selected={resourceTab === 'skills'} className={resourceTab === 'skills' ? 'active' : ''} onClick={() => setResourceTab('skills')}>
+                技能 <span>{selectedSkills.size}/{skills.length}</span>
+              </button>
+              <button type="button" role="tab" aria-selected={resourceTab === 'applications'} className={resourceTab === 'applications' ? 'active' : ''} onClick={() => setResourceTab('applications')}>
+                应用 <span>{selectedApplications.size}/{applications.length}</span>
+              </button>
+            </div>
+
+            {resourceTab === 'plugins' && (
+              <div className="pack-resource-panel">
+                <h3>包含插件（已选 {selected.size} / {plugins.length}）</h3>
+                <p>从当前已安装插件中挑选；创建后会把这些插件组合进新的整合包 Profile。</p>
+                {plugins.length === 0 ? (
+                  <div className="pack-checklist-empty">当前 Profile 还没有可挑选的插件，先安装一些插件再来创建。</div>
+                ) : (
+                  <div className="pack-plugin-checklist">
+                    {plugins.map(plugin => {
+                      const checked = selected.has(plugin.packageName)
+                      return (
+                        <label className={`pack-checklist-item ${checked ? 'checked' : ''} ${plugin.enabled ? '' : 'muted'}`} key={plugin.packageName}>
+                          <input type="checkbox" checked={checked} onChange={() => toggle(plugin.packageName)} aria-label={`${checked ? '取消' : '选择'} ${plugin.packageName}`} />
+                          <span className="pack-item-glyph">{plugin.displayName.slice(0, 2).toUpperCase()}</span>
+                          <span className="pack-checklist-copy">
+                            <strong>{plugin.displayName}</strong>
+                            <small>{plugin.packageName}{plugin.enabled ? '' : ' · 已停用'}</small>
+                          </span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )}
-          </div>
-          <div className="form-section divided">
-            <h3>包含预设（已选 {selectedPresets.size} / {presets.length}）</h3>
-            <p>从已安装且有来源记录的 Agent 预设中挑选；没有来源记录的预设无法随包导出/重装。</p>
-            {presets.length === 0 ? (
-              <div className="pack-checklist-empty">当前环境还没有可加入整合包的 Agent 预设。</div>
-            ) : (
-              <div className="pack-plugin-checklist">
-                {presets.map(preset => {
-                  const addable = Boolean(preset.repository && preset.sourcePath && preset.revision)
-                  const checked = selectedPresets.has(preset.name)
-                  return (
-                    <label className={`pack-checklist-item ${checked ? 'checked' : ''} ${addable ? '' : 'muted'}`} key={preset.name}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={!addable}
-                        onChange={() => togglePreset(preset.name)}
-                        aria-label={`${checked ? '取消' : '选择'} 预设 ${preset.name}`}
-                      />
-                      <span className="pack-item-glyph">{preset.name.slice(0, 2).toUpperCase()}</span>
-                      <span className="pack-checklist-copy">
-                        <strong>{preset.name}</strong>
-                        <small>{addable ? `${preset.repository} · ${preset.sourcePath}` : '无来源记录，不可加入'}</small>
-                      </span>
-                    </label>
-                  )
-                })}
+
+            {resourceTab === 'presets' && (
+              <div className="pack-resource-panel">
+                <h3>包含预设（已选 {selectedPresets.size} / {presets.length}）</h3>
+                <p>从已安装且有来源记录的 Agent 预设中挑选；没有来源记录的预设无法随包导出/重装。</p>
+                {presets.length === 0 ? (
+                  <div className="pack-checklist-empty">当前环境还没有可加入整合包的 Agent 预设。</div>
+                ) : (
+                  <div className="pack-plugin-checklist">
+                    {presets.map(preset => {
+                      const addable = Boolean(preset.repository && preset.sourcePath && preset.revision)
+                      const checked = selectedPresets.has(preset.name)
+                      return (
+                        <label className={`pack-checklist-item ${checked ? 'checked' : ''} ${addable ? '' : 'muted'}`} key={preset.name}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={!addable}
+                            onChange={() => togglePreset(preset.name)}
+                            aria-label={`${checked ? '取消' : '选择'} 预设 ${preset.name}`}
+                          />
+                          <span className="pack-item-glyph">{preset.name.slice(0, 2).toUpperCase()}</span>
+                          <span className="pack-checklist-copy">
+                            <strong>{preset.name}</strong>
+                            <small>{addable ? `${preset.repository} · ${preset.sourcePath}` : '无来源记录，不可加入'}</small>
+                          </span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )}
-          </div>
-          <div className="form-section divided">
-            <h3>包含技能（已选 {selectedSkills.size} / {skills.length}）</h3>
-            <p>从已安装且有来源记录的 Skill 中挑选。</p>
-            {skills.length === 0 ? (
-              <div className="pack-checklist-empty">当前环境还没有可加入整合包的 Skill。</div>
-            ) : (
-              <div className="pack-plugin-checklist">
-                {skills.map(skill => {
-                  const addable = Boolean(skill.repository && skill.sourcePath && skill.revision)
-                  const checked = selectedSkills.has(skill.name)
-                  return (
-                    <label className={`pack-checklist-item ${checked ? 'checked' : ''} ${addable ? '' : 'muted'}`} key={skill.name}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={!addable}
-                        onChange={() => toggleSkill(skill.name)}
-                        aria-label={`${checked ? '取消' : '选择'} Skill ${skill.name}`}
-                      />
-                      <span className="pack-item-glyph">{skill.name.slice(0, 2).toUpperCase()}</span>
-                      <span className="pack-checklist-copy">
-                        <strong>{skill.name}</strong>
-                        <small>{addable ? `${skill.repository} · ${skill.sourcePath}` : '无来源记录，不可加入'}</small>
-                      </span>
-                    </label>
-                  )
-                })}
+
+            {resourceTab === 'skills' && (
+              <div className="pack-resource-panel">
+                <h3>包含技能（已选 {selectedSkills.size} / {skills.length}）</h3>
+                <p>从已安装且有来源记录的 Skill 中挑选。</p>
+                {skills.length === 0 ? (
+                  <div className="pack-checklist-empty">当前环境还没有可加入整合包的 Skill。</div>
+                ) : (
+                  <div className="pack-plugin-checklist">
+                    {skills.map(skill => {
+                      const addable = Boolean(skill.repository && skill.sourcePath && skill.revision)
+                      const checked = selectedSkills.has(skill.name)
+                      return (
+                        <label className={`pack-checklist-item ${checked ? 'checked' : ''} ${addable ? '' : 'muted'}`} key={skill.name}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={!addable}
+                            onChange={() => toggleSkill(skill.name)}
+                            aria-label={`${checked ? '取消' : '选择'} Skill ${skill.name}`}
+                          />
+                          <span className="pack-item-glyph">{skill.name.slice(0, 2).toUpperCase()}</span>
+                          <span className="pack-checklist-copy">
+                            <strong>{skill.name}</strong>
+                            <small>{addable ? `${skill.repository} · ${skill.sourcePath}` : '无来源记录，不可加入'}</small>
+                          </span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )}
-          </div>
-          <div className="form-section divided">
-            <h3>包含应用（已选 {selectedApplications.size} / {applications.length}）</h3>
-            <p>从已安装的 Application Addon 中挑选。</p>
-            {applications.length === 0 ? (
-              <div className="pack-checklist-empty">当前环境还没有可加入整合包的应用加载项。</div>
-            ) : (
-              <div className="pack-plugin-checklist">
-                {applications.map(addon => {
-                  const checked = selectedApplications.has(addon.id)
-                  return (
-                    <label className={`pack-checklist-item ${checked ? 'checked' : ''}`} key={addon.id}>
-                      <input type="checkbox" checked={checked} onChange={() => toggleApplication(addon.id)} aria-label={`${checked ? '取消' : '选择'} 应用 ${addon.name}`} />
-                      <span className="pack-item-glyph">{addon.name.slice(0, 2).toUpperCase()}</span>
-                      <span className="pack-checklist-copy">
-                        <strong>{addon.name}</strong>
-                        <small>{addon.repository}</small>
-                      </span>
-                    </label>
-                  )
-                })}
+
+            {resourceTab === 'applications' && (
+              <div className="pack-resource-panel">
+                <h3>包含应用（已选 {selectedApplications.size} / {applications.length}）</h3>
+                <p>从已安装的 Application Addon 中挑选。</p>
+                {applications.length === 0 ? (
+                  <div className="pack-checklist-empty">当前环境还没有可加入整合包的应用加载项。</div>
+                ) : (
+                  <div className="pack-plugin-checklist">
+                    {applications.map(addon => {
+                      const checked = selectedApplications.has(addon.id)
+                      return (
+                        <label className={`pack-checklist-item ${checked ? 'checked' : ''}`} key={addon.id}>
+                          <input type="checkbox" checked={checked} onChange={() => toggleApplication(addon.id)} aria-label={`${checked ? '取消' : '选择'} 应用 ${addon.name}`} />
+                          <span className="pack-item-glyph">{addon.name.slice(0, 2).toUpperCase()}</span>
+                          <span className="pack-checklist-copy">
+                            <strong>{addon.name}</strong>
+                            <small>{addon.repository}</small>
+                          </span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -282,4 +313,17 @@ const createPackStyle = `
   margin-top: 9px; border: 1px dashed var(--line-strong); border-radius: 6px;
   color: var(--muted); font-size: 11px;
 }
+.pack-resource-tabs {
+  display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap;
+}
+.pack-resource-tabs button {
+  padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface-soft); color: var(--muted); font-size: 11px; cursor: pointer;
+}
+.pack-resource-tabs button.active {
+  border-color: #b9d7c7; color: var(--accent); background: var(--accent-soft); font-weight: 650;
+}
+.pack-resource-tabs button span { margin-left: 4px; opacity: 0.75; }
+.pack-resource-panel h3 { margin: 0; font-size: 12px; }
+.pack-resource-panel p { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 16px; }
 `
