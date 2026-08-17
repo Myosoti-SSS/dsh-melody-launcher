@@ -331,6 +331,11 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     if (!Array.isArray(request.packageNames) || request.packageNames.some(name => !isSafePackageName(name))) {
       throw new Error('插件列表无效。')
     }
+    if (request.presetNames !== undefined && (
+      !Array.isArray(request.presetNames) || request.presetNames.some(name => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
+    )) {
+      throw new Error('预设列表无效。')
+    }
     return packManager.createPack(request)
   })
 
@@ -403,6 +408,21 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.packsAddPlugin, async (_event, payload: { packId: string; packageName: string }) => {
     if (!isSafeProfileName(payload.packId) || !isSafePackageName(payload.packageName)) throw new Error('参数无效。')
     return packManager.addPackPlugin(payload.packId, payload.packageName)
+  })
+
+  ipcMain.handle(IPC.packsAddPreset, async (_event, payload: { packId: string; presetName: string }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.presetName)) throw new Error('参数无效。')
+    return packManager.addPackPreset(payload.packId, payload.presetName)
+  })
+
+  ipcMain.handle(IPC.packsTogglePreset, async (_event, payload: { packId: string; presetName: string; enabled: boolean }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.presetName)) throw new Error('参数无效。')
+    return packManager.togglePackPreset(payload.packId, payload.presetName, Boolean(payload.enabled))
+  })
+
+  ipcMain.handle(IPC.packsRemovePreset, async (_event, payload: { packId: string; presetName: string }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.presetName)) throw new Error('参数无效。')
+    return packManager.removePackPreset(payload.packId, payload.presetName)
   })
 
   ipcMain.handle(IPC.packsToggleItem, async (_event, payload: { packId: string; packageName: string; enabled: boolean }) => {

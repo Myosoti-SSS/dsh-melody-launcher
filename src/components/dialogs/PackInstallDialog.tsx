@@ -268,6 +268,7 @@ function PreviewRow({ item, checked, onToggle }: {
             ? <span className="pack-item-state ok">可安装</span>
             : <span className="pack-item-state bad">不可用</span>}
           {item.kind === 'skill' && <span className="pack-item-kind">技能</span>}
+          {item.kind === 'preset' && <span className="pack-item-kind">预设</span>}
           {item.offline && <span className="pack-item-offline">离线本体</span>}
         </span>
       </span>

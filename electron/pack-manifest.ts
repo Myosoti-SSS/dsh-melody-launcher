@@ -4,9 +4,10 @@
 
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
-import type { PackManifest, PackPluginEntry } from '../src/types'
+import type { PackManifest, PackPluginEntry, PackPresetEntry } from '../src/types'
 import { isSafePackageName, isSafeProfileName, isSafeRepositoryName } from './profile'
 import type { PluginInstallReceipt } from './plugin-receipts'
+import type { PresetInstallReceipt } from './preset-receipts'
 
 /** 压缩包内的清单文件名（导出 / 导入共用）。 */
 export const PACK_MANIFEST_FILENAME = 'dsh-pack.yaml'
@@ -59,6 +60,39 @@ export function assertMeaningfulPackName(name: string): string {
     throw new Error('整合包名称需包含字母或数字，否则无法生成包标识。')
   }
   return packId
+}
+
+const PACK_PRESET_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+function parsePackPreset(item: unknown, index: number): PackPresetEntry {
+  if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+    throw new Error(`presets[${index}] 必须是映射（对象）。`)
+  }
+  const raw = item as Record<string, unknown>
+  const name = raw.name
+  if (typeof name !== 'string' || !PACK_PRESET_NAME_RE.test(name)) {
+    throw new Error(`presets[${index}] 的 name 缺失或格式非法（须为 kebab-case）。`)
+  }
+  const entry: PackPresetEntry = { name }
+  if (raw.repository !== undefined) {
+    if (typeof raw.repository !== 'string' || !isSafeRepositoryName(raw.repository)) {
+      throw new Error(`presets[${index}] 的 repository 格式非法。`)
+    }
+    entry.repository = raw.repository
+  }
+  if (raw.sourcePath !== undefined) {
+    if (typeof raw.sourcePath !== 'string' || !safeSubdirectory(raw.sourcePath)) {
+      throw new Error(`presets[${index}] 的 sourcePath 格式非法。`)
+    }
+    entry.sourcePath = raw.sourcePath
+  }
+  if (raw.revision !== undefined) {
+    if (typeof raw.revision !== 'string' || !safeCommit(raw.revision)) {
+      throw new Error(`presets[${index}] 的 revision 格式非法。`)
+    }
+    entry.revision = raw.revision
+  }
+  return entry
 }
 
 function parsePackPlugin(item: unknown, index: number): PackPluginEntry {
@@ -141,6 +175,10 @@ export function parsePackManifest(text: string): PackManifest {
     plugins: raw.plugins.map((item, index) => parsePackPlugin(item, index)),
   }
   if (typeof raw.author === 'string' && raw.author) manifest.author = raw.author
+  if (raw.presets !== undefined) {
+    if (!Array.isArray(raw.presets)) throw new Error('整合包 presets 必须是数组。')
+    manifest.presets = raw.presets.map((item, index) => parsePackPreset(item, index))
+  }
   // skills 字段 v1 预留，这里忽略（未知字段一律忽略）。
   return manifest
 }
@@ -154,6 +192,7 @@ export function serializePackManifest(manifest: PackManifest): string {
     plugins: manifest.plugins,
   }
   if (manifest.author) output.author = manifest.author
+  if (manifest.presets !== undefined) output.presets = manifest.presets
   if (manifest.skills !== undefined) output.skills = manifest.skills
   return stringify(output, { lineWidth: 0 })
 }
@@ -186,12 +225,23 @@ function receiptToPluginEntry(receipt: PluginInstallReceipt): PackPluginEntry {
 }
 
 /** 从安装凭据生成 manifest：name=去 pack- 前缀的 packId，plugins 逐条由 receipt 填充。 */
-export function buildManifestFromReceipts(packId: string, receipts: PluginInstallReceipt[]): PackManifest {
+export function buildManifestFromReceipts(
+  packId: string,
+  receipts: PluginInstallReceipt[],
+  presetReceipts: PresetInstallReceipt[] = [],
+): PackManifest {
   const plugins = receipts.map(receiptToPluginEntry)
+  const presets = presetReceipts.map(receipt => ({
+    name: receipt.name,
+    repository: receipt.repository,
+    sourcePath: receipt.sourcePath,
+    revision: receipt.revision,
+  }))
   return {
     name: manifestNameFromPackId(packId),
-    description: `由 DSH Launcher 从已安装插件导出（${receipts.length} 个插件）。`,
+    description: `由 DSH Launcher 从已安装插件导出（${receipts.length} 个插件${presetReceipts.length > 0 ? `、${presetReceipts.length} 个预设` : ''}）。`,
     version: '1.0.0',
     plugins,
+    ...(presetReceipts.length > 0 ? { presets } : {}),
   }
 }

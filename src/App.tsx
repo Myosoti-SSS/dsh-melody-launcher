@@ -260,8 +260,12 @@ function LauncherShell() {
                   onExport={packId => void store.exportPack(packId)}
                   onRemove={packId => void store.removePack(packId)}
                   onAddPlugin={(packId, packageName) => void store.addPackPlugin(packId, packageName)}
+                  onAddPreset={(packId, presetName) => void store.addPackPreset(packId, presetName)}
                   onToggleItem={(packId, packageName, enabled) => void store.togglePackItem(packId, packageName, enabled)}
+                  onTogglePreset={(packId, presetName, enabled) => void store.togglePackPreset(packId, presetName, enabled)}
                   onRemoveItem={(packId, packageName) => void store.removePackItem(packId, packageName)}
+                  onRemovePreset={(packId, presetName) => void store.removePackPreset(packId, presetName)}
+                  installedPresets={store.installedPresets}
                 />
               )}
             </main>
@@ -325,10 +329,11 @@ function LauncherShell() {
       {createPackOpen && packInstall.phase === 'idle' && (
         <CreatePackDialog
           plugins={profile.plugins}
+          presets={store.installedPresets}
           onClose={() => setCreatePackOpen(false)}
           onConfirm={request => {
             setCreatePackOpen(false)
-            void packInstall.startCreate(request.name, request.description, request.packageNames)
+            void packInstall.startCreate(request.name, request.description, request.packageNames, request.presetNames)
           }}
         />
       )}

@@ -41,6 +41,7 @@ import { analyzeMetaRepository } from './meta-repo-catalog'
 import { analyzeRepository } from './plugin-catalog'
 import { prepareSubdirectoryPlugin, type PluginSourceProgress } from './plugin-source'
 import { readPluginReceipts, recordPluginInstall, removePluginReceipt } from './plugin-receipts'
+import { readPresetReceipts, recordPresetInstall } from './preset-receipts'
 import { readProfile } from './profile'
 import { withExecutableDirectoryOnPath } from './process'
 import { analyzeSkillRepository } from './skill-catalog'
@@ -110,6 +111,8 @@ export interface InstallerOptions {
   pluginSourceRoot: string
   /** 插件安装凭据文件的路径。 */
   pluginReceiptsPath: string
+  /** Agent 预设安装凭据文件的路径。 */
+  presetReceiptsPath: string
   /** Skill 仓库缓存根目录。 */
   skillSourceRoot: string
   emitOutput: (level: RuntimeOutput['level'], text: string) => void
@@ -774,6 +777,13 @@ export function createInstaller(options: InstallerOptions): Installer {
         const installedPreset = options.githubFetch
           ? await installPresetFromRepository(options.skillSourceRoot, settings.dshHome, request.repository, target, onProgress, options.githubFetch)
           : await installPresetFromRepository(options.skillSourceRoot, settings.dshHome, request.repository, target, onProgress)
+        await recordPresetInstall(options.presetReceiptsPath, {
+          name: target.name,
+          repository: request.repository,
+          sourcePath: request.sourcePath,
+          revision: request.revision,
+          installedAt: new Date().toISOString(),
+        })
         const installedPresets = await readLocalPresets(settings.dshHome)
         emit({ repository: request.repository, kind: 'preset', phase: 'complete', percent: 100, message: `${target.name} 已安装` })
         return { installedPreset, installedPresets }
@@ -793,7 +803,16 @@ export function createInstaller(options: InstallerOptions): Installer {
 
     async readInstalledPresets(): Promise<InstalledPreset[]> {
       const settings = await options.readSettings()
-      return readLocalPresets(settings.dshHome)
+      const [presets, receipts] = await Promise.all([
+        readLocalPresets(settings.dshHome),
+        readPresetReceipts(options.presetReceiptsPath),
+      ])
+      return presets.map(preset => {
+        const receipt = receipts.find(item => item.name === preset.name)
+        return receipt
+          ? { ...preset, repository: receipt.repository, sourcePath: receipt.sourcePath, revision: receipt.revision }
+          : preset
+      })
     },
 
     async togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]> {
