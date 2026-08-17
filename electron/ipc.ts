@@ -8,6 +8,7 @@ import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } f
 import { searchCatalogRepositories, type DiscoverySort } from './discovery'
 import { importCatalogFromUrl } from './github-import'
 import type { Installer } from './installer'
+import type { LauncherUpdater } from './launcher-update'
 import type { AiInstaller } from './ai-install'
 import { assertMeaningfulPackName } from './pack-manifest'
 import { MAX_RAW_ARCHIVE_BYTES } from './pack-scan'
@@ -34,6 +35,7 @@ export interface IpcDependencies {
   settings: SettingsStore
   runtime: RuntimeController
   installer: Installer
+  launcherUpdater: LauncherUpdater
   pluginTrial: PluginTrialManager
   aiInstaller: AiInstaller
   packManager: PackManager
@@ -43,12 +45,15 @@ export interface IpcDependencies {
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, runtime, installer, pluginTrial, aiInstaller, packManager, githubAuth } = deps
+  const { settings, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth } = deps
 
   ipcMain.handle(IPC.settingsGet, () => settings.read())
   ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => settings.save(next))
   ipcMain.handle(IPC.dshDetect, () => installer.detectDsh())
   ipcMain.handle(IPC.dshUpdateCheck, () => installer.checkDshUpdate())
+  ipcMain.handle(IPC.launcherUpdateCheck, () => launcherUpdater.check())
+  ipcMain.handle(IPC.launcherUpdateDownload, () => launcherUpdater.download())
+  ipcMain.handle(IPC.launcherUpdateApply, () => launcherUpdater.apply())
 
   ipcMain.handle(IPC.credentialStatus, async () => {
     const current = await settings.read()

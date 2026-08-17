@@ -144,6 +144,24 @@ export interface DshUpdateStatus {
   message: string
 }
 
+export interface LauncherUpdateStatus {
+  state: 'up-to-date' | 'update-available' | 'downloading' | 'downloaded' | 'applying' | 'error'
+  localVersion: string | null
+  remoteVersion: string | null
+  releaseUrl: string | null
+  assetName: string | null
+  assetSize: number | null
+  checkedAt: string | null
+  message: string
+}
+
+export interface LauncherUpdateProgress {
+  phase: 'downloading' | 'applying'
+  percent: number
+  downloadedBytes?: number
+  totalBytes?: number
+}
+
 export interface SkillInstallTarget {
   id: string
   name: string
@@ -461,6 +479,10 @@ export interface LauncherApi {
   saveSettings(settings: AppSettings): Promise<AppSettings>
   detectDshInstallation(): Promise<DshInstallationStatus>
   checkDshUpdate(): Promise<DshUpdateStatus>
+  checkLauncherUpdate(): Promise<LauncherUpdateStatus>
+  downloadLauncherUpdate(): Promise<LauncherUpdateStatus>
+  applyLauncherUpdate(): Promise<void>
+  onLauncherUpdateProgress(listener: (progress: LauncherUpdateProgress) => void): () => void
   getDeepSeekCredentialStatus(): Promise<CredentialStatus>
   setDeepSeekApiKey(apiKey: string): Promise<CredentialStatus>
   clearDeepSeekApiKey(): Promise<CredentialStatus>

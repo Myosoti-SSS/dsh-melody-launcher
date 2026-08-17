@@ -1,5 +1,5 @@
 import { ArrowLeft, ChevronRight, CircleStop, Download, GitFork, KeyRound, Layers3, LoaderCircle, Play, Settings, X } from 'lucide-react'
-import type { CredentialStatus, GitHubAuthStatus, RuntimeState } from '../types'
+import type { CredentialStatus, GitHubAuthStatus, LauncherUpdateStatus, RuntimeState } from '../types'
 
 /** 管理界面顶栏：品牌、当前配置与运行状态、全局动作。 */
 
@@ -11,11 +11,13 @@ interface AppHeaderProps {
   profileName: string
   credentialStatus: CredentialStatus
   githubAuthStatus: GitHubAuthStatus
+  launcherUpdate: LauncherUpdateStatus | null
   onBack: () => void
   onCredential: () => void
   onGitHubAccount: () => void
   onSettings: () => void
   onToggleRuntime: () => void
+  onUpdate: () => void
   onClose: () => void
 }
 
@@ -27,11 +29,13 @@ export function AppHeader({
   profileName,
   credentialStatus,
   githubAuthStatus,
+  launcherUpdate,
   onBack,
   onCredential,
   onGitHubAccount,
   onSettings,
   onToggleRuntime,
+  onUpdate,
   onClose,
 }: AppHeaderProps) {
   return (
@@ -74,6 +78,19 @@ export function AppHeader({
           <span>DeepSeek Key</span>
           <span className="credential-state">{credentialStatus.configured ? '已配置' : '未配置'}</span>
         </button>
+        {launcherUpdate && (launcherUpdate.state === 'update-available' || launcherUpdate.state === 'downloading' || launcherUpdate.state === 'downloaded') && (
+          <button
+            className={`launcher-update-button ${launcherUpdate.state === 'downloaded' ? 'ready' : ''}`}
+            type="button"
+            title={`发现新版本 ${launcherUpdate.remoteVersion ?? ''}`}
+            onClick={onUpdate}
+          >
+            {launcherUpdate.state === 'downloading'
+              ? <LoaderCircle className="spin" size={17} />
+              : <Download size={17} />}
+            <span>{launcherUpdate.state === 'downloaded' ? '立即更新' : `更新 v${launcherUpdate.remoteVersion ?? ''}`}</span>
+          </button>
+        )}
         <button className="icon-button" type="button" title="启动器设置" aria-label="启动器设置" onClick={onSettings}>
           <Settings size={19} />
         </button>
