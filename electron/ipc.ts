@@ -1,5 +1,5 @@
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { stat, writeFile } from 'node:fs/promises'
+import { copyFile, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC, IPC_EVENTS } from '../src/constants'
 import type { ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, PresetInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
@@ -355,16 +355,23 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
 
   ipcMain.handle(IPC.packsExport, async (_event, packId: string) => {
     if (!isSafeProfileName(packId)) throw new Error('整合包标识无效。')
-    const { zip, fileName } = await packManager.exportPack(packId)
+    const { zipPath, fileName } = await packManager.exportPack(packId)
     const window = deps.getWindow()
-    if (!window) return null
-    const result = await dialog.showSaveDialog(window, {
-      defaultPath: fileName,
-      filters: [{ name: '整合包', extensions: ['zip'] }],
-    })
-    if (result.canceled || !result.filePath) return null
-    await writeFile(result.filePath, zip)
-    return result.filePath
+    if (!window) {
+      await rm(path.dirname(zipPath), { recursive: true, force: true }).catch(() => undefined)
+      return null
+    }
+    try {
+      const result = await dialog.showSaveDialog(window, {
+        defaultPath: fileName,
+        filters: [{ name: '整合包', extensions: ['zip'] }],
+      })
+      if (result.canceled || !result.filePath) return null
+      await copyFile(zipPath, result.filePath)
+      return result.filePath
+    } finally {
+      await rm(path.dirname(zipPath), { recursive: true, force: true }).catch(() => undefined)
+    }
   })
 
   ipcMain.handle(IPC.packsPickFile, async () => {

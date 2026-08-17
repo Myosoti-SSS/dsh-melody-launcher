@@ -68,7 +68,7 @@ The problems it removes:
 | Open a terminal, remember commands, watch output | One button to launch, live log panel |
 
 > [!NOTE]
-> **Modpack support is under active development.** A future release will let you save, import, and share a set of plugins plus configuration as a reusable bundle. Contributors welcome — QQ: **1250104511**
+> **Modpack support is now available.** You can save, import, and export a set of plugins plus configuration as a reusable bundle. Contributors welcome — QQ: **1250104511**
 
 ---
 
@@ -329,7 +329,7 @@ The `LauncherApi` interface in `src/types.ts` is the **single contract** between
 - [x] System DSH detection and first-time deployment flow
 - [x] Automatic portable runtime provisioning without system Node.js
 - [x] DSH start, stop, and log viewing
-- [ ] **Modpack creation and import** (in progress)
+- [x] **Modpack creation and import**
 - [ ] Modpack version management and sharing
 
 ---

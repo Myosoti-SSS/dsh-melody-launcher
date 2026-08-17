@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import AdmZip from 'adm-zip'
@@ -7,8 +7,10 @@ import {
   cleanPackNameHint,
   DEFAULT_RAW_SCAN_LIMITS,
   extractRawPluginBodies,
+  extractRawPluginBodiesFromPath,
   extractRawSkillSources,
   scanRawPackZip,
+  scanRawPackZipFromPath,
 } from '../electron/pack-scan'
 
 const temporaryRoots: string[] = []
@@ -380,5 +382,27 @@ describe('extractRawSkillSources', () => {
     const limits = { ...DEFAULT_RAW_SCAN_LIMITS, maxExtractedBytes: 80 }
     await extractRawPluginBodies(zip, scan.plugins, workDir, limits, budget)
     await expect(extractRawSkillSources(zip, scan.skills, workDir, limits, budget)).rejects.toThrow('解压体积')
+  })
+})
+
+describe('streaming raw path API', () => {
+  it('scanRawPackZipFromPath / extractRawPluginBodiesFromPath', async () => {
+    const root = await temporaryDirectory()
+    const zipPath = path.join(root, 'raw.zip')
+    await writeFile(zipPath, makeZip({
+      'plugin-alpha/package.json': packageJson('alpha'),
+      'plugin-beta/package.json': packageJson('beta'),
+      'skills/my-skill/SKILL.md': skillDoc('my-skill'),
+    }))
+
+    const scan = await scanRawPackZipFromPath(zipPath)
+    expect(scan.plugins.map(plugin => plugin.packageName)).toEqual(['alpha', 'beta'])
+    expect(scan.skills.map(skill => skill.name)).toEqual(['my-skill'])
+
+    const bodies = await extractRawPluginBodiesFromPath(zipPath, scan.plugins, path.join(root, 'bodies'))
+    expect(bodies.get('alpha')).toBe(path.join(root, 'bodies', 'alpha'))
+    expect(bodies.get('beta')).toBe(path.join(root, 'bodies', 'beta'))
+    expect(await readFile(path.join(root, 'bodies', 'alpha', 'package.json'), 'utf8')).toContain('"alpha"')
+    expect(await readFile(path.join(root, 'bodies', 'beta', 'package.json'), 'utf8')).toContain('"beta"')
   })
 })

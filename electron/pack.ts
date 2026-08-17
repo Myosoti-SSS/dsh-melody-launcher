@@ -25,9 +25,9 @@ import type {
   ProfileState,
 } from '../src/types'
 import { assertMeaningfulPackName, buildManifestFromReceipts, packProfileName } from './pack-manifest'
-import { extractPackBodies, findManifestInArchive, inspectPackZip } from './pack-zip'
-import { cleanPackNameHint, extractRawPluginBodies, extractRawSkillSources, scanRawPackZip, type ExtractByteBudget } from './pack-scan'
-import { buildPackExport } from './pack-export'
+import { extractPackBodiesFromPath, findManifestInArchiveFromPath, inspectPackZipFromPath } from './pack-zip'
+import { cleanPackNameHint, extractRawPluginBodiesFromPath, extractRawSkillSourcesFromPath, scanRawPackZipFromPath, type ExtractByteBudget } from './pack-scan'
+import { buildPackExportToFile } from './pack-export'
 import {
   readPackRegistry,
   removePackRecord,
@@ -82,7 +82,7 @@ export interface PackManager {
   createPack(request: PackCreateRequest): Promise<PackInstallResult>
   analyzeImport(filePath: string): Promise<PackAnalysis>
   importPack(filePath: string, items?: string[], options?: PackImportOptions): Promise<PackInstallResult>
-  exportPack(packId: string): Promise<{ zip: Uint8Array; fileName: string }>
+  exportPack(packId: string): Promise<{ zipPath: string; fileName: string }>
   activatePack(packId: string): Promise<AppSettings>
   deactivatePack(): Promise<AppSettings>
   removePack(packId: string): Promise<{ removed: number }>
@@ -275,10 +275,10 @@ export function createPackManager(options: PackManagerOptions): PackManager {
     },
 
     async analyzeImport(filePath) {
-      const buffer = await readFile(filePath)
-      if (!findManifestInArchive(buffer)) {
+      const manifestText = await findManifestInArchiveFromPath(filePath)
+      if (!manifestText) {
         // 非标准包：扫描包内的标准插件目录与技能，合成为我们格式的整合包。
-        const scan = scanRawPackZip(buffer)
+        const scan = await scanRawPackZipFromPath(filePath)
         const nameHint = cleanPackNameHint(path.basename(filePath)) ?? cleanPackNameHint(scan.topName ?? '') ?? ''
         const items: PackAnalysisItem[] = []
         for (const plugin of scan.plugins) {
@@ -299,7 +299,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           items,
         }
       }
-      const inspection = inspectPackZip(buffer)
+      const inspection = await inspectPackZipFromPath(filePath)
       const manifest = inspection.manifest
       const packId = packProfileName(manifest.name)
 
@@ -341,12 +341,13 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       profileWasNew = true
       let skillStaging: string | null = null
       try {
-        // readFile 放在 try 内：文件被并发删除/移动时（通过 IPC stat 门禁后）若读失败，
+        // 不再整体读入内存：先探测清单，再按分支用文件路径流式解析。
+        // 文件被并发删除/移动时（通过 IPC stat 门禁后）这里会抛错，
         // 也能走 catch → finally 复位 active，避免整合包子系统永久卡在「进行中」。
-        const buffer = await readFile(filePath)
-        if (!findManifestInArchive(buffer)) {
+        const manifestText = await findManifestInArchiveFromPath(filePath)
+        if (!manifestText) {
           // ---- raw 分支：扫描非标准包内的插件与技能，离线安装，注册为我们格式的整合包。----
-          const scan = scanRawPackZip(buffer)
+          const scan = await scanRawPackZipFromPath(filePath)
           if (scan.plugins.length === 0 && scan.skills.length === 0) {
             throw new Error('未在压缩包内发现可安装的插件或技能。')
           }
@@ -378,7 +379,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           if (wantedPlugins.length > 0) {
             const bodiesDir = packBodiesDir(dshHome, packId)
             await rm(bodiesDir, { recursive: true, force: true }).catch(() => undefined)
-            const bodies = await extractRawPluginBodies(buffer, wantedPlugins, bodiesDir, undefined, extractBudget)
+            const bodies = await extractRawPluginBodiesFromPath(filePath, wantedPlugins, bodiesDir, undefined, extractBudget)
             for (const plugin of wantedPlugins) {
               const bodyDir = bodies.get(plugin.packageName)
               if (!bodyDir) {
@@ -406,7 +407,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           // 技能解到 dshHome 内 staging（与 skills/ 同卷），逐项全局安装。
           if (wantedSkills.length > 0) {
             skillStaging = await mkdtemp(path.join(dshHome, '.pack-raw-staging-'))
-            const sources = await extractRawSkillSources(buffer, wantedSkills, skillStaging, undefined, extractBudget)
+            const sources = await extractRawSkillSourcesFromPath(filePath, wantedSkills, skillStaging, undefined, extractBudget)
             for (const skill of wantedSkills) {
               const sourceDir = sources.get(skill.name)
               if (!sourceDir) {
@@ -447,7 +448,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           return result
         }
 
-        const inspection = inspectPackZip(buffer)
+        const inspection = await inspectPackZipFromPath(filePath)
         const manifest = inspection.manifest
         const packId = packProfileName(manifest.name)
 
@@ -481,7 +482,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           const bodiesDir = packBodiesDir(dshHome, packId)
           await rm(bodiesDir, { recursive: true, force: true }).catch(() => undefined)
           const knownNames = new Set(manifest.plugins.map(entry => entry.packageName))
-          const bodies = await extractPackBodies(buffer, bodiesDir, undefined, knownNames)
+          const bodies = await extractPackBodiesFromPath(filePath, bodiesDir, undefined, knownNames)
           for (const packageName of wanted) {
             if (!isSafePackageName(packageName)) {
               installables.push({ packageName, install: async () => { throw new Error('插件名称非法。') } })
@@ -561,6 +562,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       const reason = guarded()
       if (reason) throw new Error(reason)
       active = true
+      let exportDir: string | null = null
       try {
         await findRecord(packId)
         const dshHome = await getDshHome()
@@ -570,11 +572,18 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         // 只收集 manifest 引用的插件本体：profile 里可能混入无来源记录的手动安装插件，不应进包。
         const packageNames = manifest.plugins.map(entry => entry.packageName)
         const packProfileDir = path.join(dshHome, 'profiles', packId)
-        const { zip, missing } = await buildPackExport(packProfileDir, manifest, packageNames)
+        const exportRoot = path.join(options.snapshotRoot, 'exports')
+        await mkdir(exportRoot, { recursive: true })
+        exportDir = await mkdtemp(path.join(exportRoot, 'pack-'))
+        const zipPath = path.join(exportDir, `${packId}.zip`)
+        const { missing } = await buildPackExportToFile(packProfileDir, manifest, packageNames, zipPath)
         if (missing.length > 0) {
           log('info', `导出整合包「${packId}」时 ${missing.length} 个插件本体缺失（${missing.join('、')}），将导出为仅清单。`)
         }
-        return { zip, fileName: `${packId}.zip` }
+        return { zipPath, fileName: `${packId}.zip` }
+      } catch (error) {
+        if (exportDir) await rm(exportDir, { recursive: true, force: true }).catch(() => undefined)
+        throw error
       } finally {
         active = false
       }
@@ -631,7 +640,6 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             await rm(path.join(skillRoot, '.disabled', skill.name), { recursive: true, force: true }).catch(() => undefined)
           }
         }
-        void record
         return { removed: profile.plugins.length }
       } finally {
         active = false

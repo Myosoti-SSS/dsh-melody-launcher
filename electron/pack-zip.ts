@@ -1,10 +1,18 @@
 // 整合包（Pack）压缩包的纯函数域：读取检查 / 解出插件本体 / 重新打包。
-// 不依赖 Electron，仅 adm-zip + node:fs。
+// 不依赖 Electron，仅 adm-zip + node:fs + yauzl/yazl。
+//
+// 大包路径：为避免把 1.3GB 整合包整体 readFile 进内存，这里同时提供
+// 基于 Buffer 的旧 API（测试/小包）和基于文件路径 + 流式读取的新 API。
 
-import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { createWriteStream, readFileSync, readdirSync, statSync } from 'node:fs'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import type { Readable } from 'node:stream'
 import AdmZip from 'adm-zip'
+import * as yauzl from 'yauzl'
+import * as yazl from 'yazl'
 import type { PackManifest } from '../src/types'
 import { isSafePackageName } from './profile'
 import { PACK_MANIFEST_FILENAME, parsePackManifest, serializePackManifest } from './pack-manifest'
@@ -28,6 +36,15 @@ export interface PackZipInspection {
 }
 
 const PLUGIN_BODIES_PREFIX = 'plugin-bodies/'
+
+/** 标准包清单读取上限（清单本身很小，给一个安全余量即可）。 */
+const MAX_MANIFEST_BYTES = 1 * 1024 * 1024
+
+/** 流式打开时的“宽松探测”限额：只防极端条目数/路径风险，体积限制交给后续严格检查。 */
+const LOOSE_PATH_LIMITS = {
+  maxArchiveBytes: Number.MAX_SAFE_INTEGER,
+  maxFiles: 1_000_000,
+}
 
 /**
  * zip 条目路径安全校验：归一化 + 拒绝 `..` / 绝对路径 / 反斜杠 / 空段。
@@ -61,7 +78,7 @@ interface OpenPackZip {
  * 检测整体套一层顶层目录：全部条目共享同一首段且它不是清单/plugin-bodies 时视为包裹层。
  * 仅统计非目录条目；返回包裹层首段，否则 null。
  */
-function computeStripRoot(entries: AdmZip.IZipEntry[]): string | null {
+function computeStripRoot(entries: ReadonlyArray<{ entryName: string; isDirectory: boolean }>): string | null {
   const firstSegments = new Set<string>()
   for (const entry of entries) {
     if (entry.isDirectory) continue
@@ -266,4 +283,334 @@ export function buildPackZip(manifest: PackManifest, bodyDirs: Map<string, strin
     }
   }
   return new Uint8Array(zip.toBuffer())
+}
+
+// ===========================================================================
+// 流式路径 API（大整合包）
+// ===========================================================================
+
+export interface ZipPathEntry {
+  readonly entryName: string
+  readonly isDirectory: boolean
+  readonly declaredSize: number
+  /** 仅供 pack-zip 内部实现使用的 yauzl 原始条目；外部不要直接依赖。 */
+  readonly raw: yauzl.Entry
+}
+
+export interface WriteEntryOptions {
+  /** 跨条目共享的实际解压字节预算（zip-bomb 防护）。 */
+  budget?: { extracted: number }
+  /** 单个条目解压字节上限。 */
+  maxEntryBytes?: number
+  /** 累计解压字节上限（配合 budget 使用）。 */
+  maxTotalBytes?: number
+}
+
+export interface OpenZipPath {
+  readonly entries: ZipPathEntry[]
+  readonly stripRoot: string | null
+  readEntryData(entry: ZipPathEntry, maxBytes?: number): Promise<Buffer>
+  writeEntryToFile(entry: ZipPathEntry, targetPath: string, options?: WriteEntryOptions): Promise<number>
+  close(): Promise<void>
+}
+
+export interface PackZipPathLimits {
+  maxArchiveBytes: number
+  maxFiles: number
+  maxUnpackedBytes?: number
+}
+
+function isDirectoryEntry(entry: yauzl.Entry): boolean {
+  if (entry.fileName.endsWith('/')) return true
+  // Unix：高 16 位是 mode，S_IFDIR = 0o040000。
+  const unixMode = (entry.externalFileAttributes >>> 16) & 0xffff
+  if ((unixMode & 0o170000) === 0o040000) return true
+  // DOS/Windows：目录属性 0x10 在低位。
+  if ((entry.externalFileAttributes & 0x10) !== 0) return true
+  return false
+}
+
+async function openYauzlZip(filePath: string): Promise<yauzl.ZipFile> {
+  return yauzl.openPromise(filePath, {
+    lazyEntries: true,
+    autoClose: false,
+    decodeStrings: true,
+  })
+}
+
+async function readYauzlEntries(zipfile: yauzl.ZipFile): Promise<yauzl.Entry[]> {
+  const entries: yauzl.Entry[] = []
+  for await (const entry of zipfile.eachEntry()) {
+    entries.push(entry)
+  }
+  return entries
+}
+
+function toZipPathEntry(entry: yauzl.Entry): ZipPathEntry {
+  return {
+    entryName: entry.fileName,
+    isDirectory: isDirectoryEntry(entry),
+    declaredSize: entry.uncompressedSize,
+    raw: entry,
+  }
+}
+
+async function readStream(stream: Readable, maxBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let total = 0
+    let settled = false
+
+    const fail = (error: Error): void => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+
+    stream.on('data', (chunk: Buffer) => {
+      if (settled) return
+      total += chunk.length
+      if (total > maxBytes) {
+        fail(new Error('条目解压体积超过安全限制。'))
+        stream.destroy()
+        return
+      }
+      chunks.push(Buffer.from(chunk))
+    })
+    stream.on('end', () => {
+      if (settled) return
+      settled = true
+      resolve(Buffer.concat(chunks))
+    })
+    stream.on('error', fail)
+  })
+}
+
+async function writeStreamToFile(stream: Readable, targetPath: string, options?: WriteEntryOptions): Promise<number> {
+  await mkdir(path.dirname(targetPath), { recursive: true })
+  const output = createWriteStream(targetPath)
+  let written = 0
+  const counter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      written += chunk.length
+      if (options?.maxEntryBytes !== undefined && written > options.maxEntryBytes) {
+        callback(new Error('单个文件解压体积超过安全限制。'))
+        return
+      }
+      if (options?.budget) {
+        options.budget.extracted += chunk.length
+        if (options.maxTotalBytes !== undefined && options.budget.extracted > options.maxTotalBytes) {
+          callback(new Error('整合包解压体积超过安全限制。'))
+          return
+        }
+      }
+      callback(null, chunk)
+    },
+  })
+  await pipeline(stream, counter, output)
+  return written
+}
+
+function makePathHandle(zipfile: yauzl.ZipFile, entries: ZipPathEntry[], stripRoot: string | null): OpenZipPath {
+  return {
+    entries,
+    stripRoot,
+    async readEntryData(entry, maxBytes) {
+      const limit = maxBytes ?? Math.max(entry.declaredSize, 1)
+      const stream = await zipfile.openReadStreamPromise(entry.raw)
+      return readStream(stream, limit)
+    },
+    async writeEntryToFile(entry, targetPath, options) {
+      const stream = await zipfile.openReadStreamPromise(entry.raw)
+      return writeStreamToFile(stream, targetPath, options)
+    },
+    async close() {
+      zipfile.close()
+    },
+  }
+}
+
+export async function openZipPathFromFile(filePath: string, limits: PackZipPathLimits): Promise<OpenZipPath> {
+  const fileStats = await stat(filePath)
+  if (fileStats.size > limits.maxArchiveBytes) throw new Error('整合包压缩包过大。')
+  const zipfile = await openYauzlZip(filePath)
+  try {
+    const rawEntries = await readYauzlEntries(zipfile)
+    const entries = rawEntries.map(toZipPathEntry)
+    if (entries.length === 0) throw new Error('整合包压缩包为空。')
+    if (entries.length > limits.maxFiles) throw new Error('整合包文件数量超过安全限制。')
+
+    let unpackedBytes = 0
+    for (const entry of entries) {
+      if (entry.isDirectory) continue
+      if (!safeArchivePath(entry.entryName)) throw new Error('整合包包含不安全路径。')
+      unpackedBytes += entry.declaredSize || 0
+    }
+    if (limits.maxUnpackedBytes !== undefined && unpackedBytes > limits.maxUnpackedBytes) {
+      throw new Error('整合包解压体积超过安全限制。')
+    }
+
+    return makePathHandle(zipfile, entries, computeStripRoot(entries))
+  } catch (error) {
+    zipfile.close()
+    throw error
+  }
+}
+
+/** 以严格的标准整合包限额打开文件路径 zip。 */
+export function openStandardPackZipFromPath(
+  filePath: string,
+  limits: PackZipLimits = DEFAULT_PACK_ZIP_LIMITS,
+): Promise<OpenZipPath> {
+  return openZipPathFromFile(filePath, limits)
+}
+
+/** 以宽松探测限额打开文件路径 zip（用于先判断标准包还是 raw 包）。 */
+export function openLooseZipFromPath(filePath: string): Promise<OpenZipPath> {
+  return openZipPathFromFile(filePath, LOOSE_PATH_LIMITS)
+}
+
+/** 文件路径版 findManifestInArchive。 */
+export async function findManifestInArchiveFromPath(filePath: string): Promise<string | null> {
+  const handle = await openLooseZipFromPath(filePath)
+  try {
+    for (const entry of handle.entries) {
+      if (entry.isDirectory) continue
+      const safe = safeArchivePath(entry.entryName)
+      if (!safe) continue
+      const rel = relForEntry(safe, handle.stripRoot)
+      if (rel === PACK_MANIFEST_FILENAME) {
+        const data = await handle.readEntryData(entry, MAX_MANIFEST_BYTES)
+        return data.toString('utf8')
+      }
+    }
+    return null
+  } finally {
+    await handle.close()
+  }
+}
+
+/** 文件路径版 inspectPackZip。 */
+export async function inspectPackZipFromPath(
+  filePath: string,
+  limits: PackZipLimits = DEFAULT_PACK_ZIP_LIMITS,
+): Promise<PackZipInspection> {
+  const handle = await openStandardPackZipFromPath(filePath, limits)
+  try {
+    let manifestText: string | null = null
+    for (const entry of handle.entries) {
+      if (entry.isDirectory) continue
+      const safe = safeArchivePath(entry.entryName)
+      if (!safe) continue
+      const rel = relForEntry(safe, handle.stripRoot)
+      if (rel === PACK_MANIFEST_FILENAME) {
+        const data = await handle.readEntryData(entry, MAX_MANIFEST_BYTES)
+        manifestText = data.toString('utf8')
+        break
+      }
+    }
+    if (!manifestText) throw new Error(`压缩包内没有找到 ${PACK_MANIFEST_FILENAME}。`)
+    const manifest = parsePackManifest(manifestText)
+    const knownNames = new Set(manifest.plugins.map(plugin => plugin.packageName))
+
+    const bodyPackageNames = new Set<string>()
+    for (const entry of handle.entries) {
+      if (entry.isDirectory) continue
+      const safe = safeArchivePath(entry.entryName)
+      if (!safe) continue
+      const rel = relForEntry(safe, handle.stripRoot)
+      if (rel.startsWith(PLUGIN_BODIES_PREFIX)) {
+        const decoded = decodeBodyEntry(rel, knownNames)
+        if (decoded) bodyPackageNames.add(decoded.pkg)
+      }
+    }
+    return {
+      manifest,
+      hasBodies: bodyPackageNames.size > 0,
+      bodyPackageNames: [...bodyPackageNames],
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+/** 文件路径版 extractPackBodies。 */
+export async function extractPackBodiesFromPath(
+  filePath: string,
+  workDir: string,
+  limits: PackZipLimits = DEFAULT_PACK_ZIP_LIMITS,
+  knownNames?: ReadonlySet<string>,
+): Promise<Map<string, string>> {
+  const handle = await openStandardPackZipFromPath(filePath, limits)
+  try {
+    const resolvedWorkDir = path.resolve(workDir)
+    await mkdir(resolvedWorkDir, { recursive: true })
+    const result = new Map<string, string>()
+    const budget = { extracted: 0 }
+    for (const entry of handle.entries) {
+      if (entry.isDirectory) continue
+      const safe = safeArchivePath(entry.entryName)
+      if (!safe) throw new Error('整合包包含不安全路径。')
+      const rel = relForEntry(safe, handle.stripRoot)
+      if (!rel.startsWith(PLUGIN_BODIES_PREFIX)) continue
+      const decoded = decodeBodyEntry(rel, knownNames)
+      if (!decoded || !decoded.rel) continue
+      const packageDirectory = path.join(resolvedWorkDir, ...decoded.pkg.split('/'))
+      assertInside(resolvedWorkDir, packageDirectory)
+      const target = path.join(packageDirectory, ...decoded.rel.split('/'))
+      assertInside(resolvedWorkDir, target)
+      await handle.writeEntryToFile(entry, target, { budget, maxTotalBytes: limits.maxUnpackedBytes })
+      result.set(decoded.pkg, packageDirectory)
+    }
+    return result
+  } finally {
+    await handle.close()
+  }
+}
+
+/** 用 yazl 流式把整合包写入文件（大包导出不占内存）。 */
+export async function buildPackZipToFile(
+  manifest: PackManifest,
+  bodyDirs: Map<string, string>,
+  outputPath: string,
+): Promise<void> {
+  const zip = new yazl.ZipFile()
+  zip.addBuffer(Buffer.from(serializePackManifest(manifest), 'utf8'), PACK_MANIFEST_FILENAME)
+  for (const [packageName, directory] of bodyDirs) {
+    const base = `${PLUGIN_BODIES_PREFIX}${packageName}`
+    const stack: Array<{ dir: string; rel: string }> = [{ dir: directory, rel: '' }]
+    while (stack.length > 0) {
+      const current = stack.pop()!
+      let childNames: string[] = []
+      try {
+        childNames = readdirSync(current.dir)
+      } catch (error) {
+        throw new Error(`无法读取插件本体目录：${current.dir}。`)
+      }
+      for (const childName of childNames) {
+        const childPath = path.join(current.dir, childName)
+        let stats
+        try {
+          stats = statSync(childPath)
+        } catch (error) {
+          throw new Error(`无法读取插件本体文件：${childPath}。`)
+        }
+        const childRel = current.rel ? `${current.rel}/${childName}` : childName
+        if (stats.isDirectory()) {
+          stack.push({ dir: childPath, rel: childRel })
+        } else if (stats.isFile()) {
+          zip.addFile(childPath, `${base}/${childRel}`)
+        }
+      }
+    }
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const output = createWriteStream(outputPath)
+    output.on('error', reject)
+    output.on('close', resolve)
+    zip.outputStream.on('error', reject)
+    zip.outputStream.pipe(output)
+    zip.end()
+  })
 }

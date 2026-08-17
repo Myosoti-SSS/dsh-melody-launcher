@@ -4,7 +4,16 @@ import path from 'node:path'
 import AdmZip from 'adm-zip'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { PackManifest } from '../src/types'
-import { buildPackZip, extractPackBodies, findManifestInArchive, inspectPackZip } from '../electron/pack-zip'
+import {
+  buildPackZip,
+  buildPackZipToFile,
+  extractPackBodies,
+  extractPackBodiesFromPath,
+  findManifestInArchive,
+  findManifestInArchiveFromPath,
+  inspectPackZip,
+  inspectPackZipFromPath,
+} from '../electron/pack-zip'
 
 const temporaryRoots: string[] = []
 afterEach(async () => {
@@ -270,5 +279,53 @@ describe('buildPackZip', () => {
     expect(inspection.manifest).toEqual(manifest)
     expect(inspection.hasBodies).toBe(true)
     expect([...inspection.bodyPackageNames].sort()).toEqual(['@scope/beta', 'alpha'])
+  })
+})
+
+describe('streaming path API', () => {
+  it('findManifestInArchiveFromPath / inspectPackZipFromPath / extractPackBodiesFromPath', async () => {
+    const root = await temporaryDirectory()
+    const alphaDir = path.join(root, 'alpha')
+    await mkdir(alphaDir, { recursive: true })
+    await writeFile(path.join(alphaDir, 'package.json'), JSON.stringify({ name: 'alpha' }))
+
+    const manifest: PackManifest = {
+      name: 'PathPack',
+      description: 'path pack',
+      version: '1.0.0',
+      plugins: [{ packageName: 'alpha', source: 'npm' }],
+    }
+    const zipPath = path.join(root, 'pack.zip')
+    await writeFile(zipPath, Buffer.from(buildPackZip(manifest, new Map([['alpha', alphaDir]]))))
+
+    expect(await findManifestInArchiveFromPath(zipPath)).toContain('PathPack')
+    const inspection = await inspectPackZipFromPath(zipPath)
+    expect(inspection.manifest.name).toBe('PathPack')
+    expect(inspection.hasBodies).toBe(true)
+    expect(inspection.bodyPackageNames).toEqual(['alpha'])
+
+    const extracted = await extractPackBodiesFromPath(zipPath, path.join(root, 'out'))
+    expect(extracted.get('alpha')).toBe(path.join(root, 'out', 'alpha'))
+    expect(await readFile(path.join(root, 'out', 'alpha', 'package.json'), 'utf8')).toContain('"alpha"')
+  })
+
+  it('buildPackZipToFile writes a valid zip readable by inspectPackZip', async () => {
+    const root = await temporaryDirectory()
+    const alphaDir = path.join(root, 'alpha')
+    await mkdir(alphaDir, { recursive: true })
+    await writeFile(path.join(alphaDir, 'package.json'), JSON.stringify({ name: 'alpha' }))
+
+    const manifest: PackManifest = {
+      name: 'StreamExport',
+      description: 'stream export',
+      version: '1.0.0',
+      plugins: [{ packageName: 'alpha', source: 'npm' }],
+    }
+    const outputPath = path.join(root, 'export.zip')
+    await buildPackZipToFile(manifest, new Map([['alpha', alphaDir]]), outputPath)
+    const inspection = inspectPackZip(await readFile(outputPath))
+    expect(inspection.manifest.name).toBe('StreamExport')
+    expect(inspection.hasBodies).toBe(true)
+    expect(inspection.bodyPackageNames).toEqual(['alpha'])
   })
 })

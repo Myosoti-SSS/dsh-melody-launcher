@@ -798,7 +798,7 @@ describe('rollback', () => {
     // profile 目录与注册表记录都被清掉，等于撤销这次创建。
     await expect(readdir(profileDir)).rejects.toThrow()
     expect(await readPackRegistry(env.registryPath)).toEqual([])
-    expect(manager.hasSnapshot()).resolves.toBe(false)
+    await expect(manager.hasSnapshot()).resolves.toBe(false)
   })
 })
 
@@ -823,8 +823,8 @@ describe('exportPack', () => {
     await mkdir(alphaDir, { recursive: true })
     await writeFile(path.join(alphaDir, 'package.json'), JSON.stringify({ name: 'alpha', version: '1.0.0' }))
 
-    const { zip } = await manager.exportPack('pack-x')
-    const inspection = inspectPackZip(zip)
+    const { zipPath } = await manager.exportPack('pack-x')
+    const inspection = inspectPackZip(await readFile(zipPath))
     expect(inspection.manifest.plugins).toEqual([{ packageName: 'alpha', source: 'npm', version: '1.2.3' }])
     expect(inspection.bodyPackageNames).toEqual(['alpha'])
   })
@@ -837,8 +837,8 @@ describe('exportPack', () => {
     const { manager } = makeManager(env, stub, store)
     await upsertPackRecord(env.registryPath, recordFor('pack-empty'))
 
-    const { zip } = await manager.exportPack('pack-empty')
-    const inspection = inspectPackZip(zip)
+    const { zipPath } = await manager.exportPack('pack-empty')
+    const inspection = inspectPackZip(await readFile(zipPath))
     expect(inspection.hasBodies).toBe(false)
     expect(inspection.manifest.plugins).toEqual([])
   })

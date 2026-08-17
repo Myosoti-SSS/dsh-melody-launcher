@@ -1,5 +1,5 @@
 // 非标准整合包 zip 的扫描纯函数域：从没有 dsh-pack.yaml 的 zip 里识别标准插件目录与技能，
-// 并把选中的项解出到 workDir。不依赖 Electron，仅 adm-zip + node:fs。
+// 并把选中的项解出到 workDir。不依赖 Electron，仅 adm-zip + node:fs + yauzl。
 //
 // 判定依据（对齐既有语义）：
 //  - 插件 = 目录内含 package.json（排除含 node_modules 的整棵子树与常见干扰目录；
@@ -13,7 +13,13 @@ import AdmZip from 'adm-zip'
 import { isSafePackageName } from './profile'
 import { parseSkillDocument } from './skill-format'
 import { likelyFlatSkill } from './skill-catalog'
-import { assertInside, safeArchivePath } from './pack-zip'
+import {
+  assertInside,
+  openZipPathFromFile,
+  safeArchivePath,
+  type OpenZipPath,
+  type ZipPathEntry,
+} from './pack-zip'
 
 /** 宽松扫描限额：容纳真实整合包（1.2 GiB / 27.5 万条目）。 */
 export const MAX_RAW_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024 // 4 GiB
@@ -143,7 +149,10 @@ function isExcludedTree(dir: string, pruneRoots: ReadonlySet<string>): boolean {
  */
 export function scanRawPackZip(buffer: Uint8Array, limits: RawScanLimits = DEFAULT_RAW_SCAN_LIMITS): RawScanResult {
   const archive = openRawArchive(buffer, limits)
+  return scanRawArchive(archive, limits)
+}
 
+function scanRawArchive(archive: RawArchive, limits: RawScanLimits): RawScanResult {
   // 第一遍：计算「直接含 node_modules」的剪除根。
   // 注意：.git 不作为剪除信号——git 仓库 / submodule 是真实插件的主流分发形式
   // （真实包内 dsh-anchored-standard、dsh-routing-suite 均含 .git），整棵剪除会误杀；
@@ -358,4 +367,243 @@ export async function extractRawSkillSources(
     }
   }
   return result
+}
+
+// ===========================================================================
+// 流式路径 API（大整合包）
+// ===========================================================================
+
+export interface RawZipPath {
+  handle: OpenZipPath
+  byRel: Map<string, ZipPathEntry>
+  stripRoot: string | null
+}
+
+/** 打开 raw 整合包的文件路径版本（不整包读入内存）。 */
+export async function openRawZipFromPath(
+  filePath: string,
+  limits: RawScanLimits = DEFAULT_RAW_SCAN_LIMITS,
+): Promise<RawZipPath> {
+  const handle = await openZipPathFromFile(filePath, limits)
+  try {
+    const byRel = new Map<string, ZipPathEntry>()
+    for (const entry of handle.entries) {
+      if (entry.isDirectory) continue
+      const safe = safeArchivePath(entry.entryName)
+      if (!safe) continue
+      const rel = handle.stripRoot && safe.startsWith(`${handle.stripRoot}/`) ? safe.slice(handle.stripRoot.length + 1) : safe
+      if (rel && !byRel.has(rel)) byRel.set(rel, entry)
+    }
+    return { handle, byRel, stripRoot: handle.stripRoot }
+  } catch (error) {
+    await handle.close()
+    throw error
+  }
+}
+
+/** 文件路径版 scanRawPackZip。 */
+export async function scanRawPackZipFromPath(
+  filePath: string,
+  limits: RawScanLimits = DEFAULT_RAW_SCAN_LIMITS,
+): Promise<RawScanResult> {
+  const archive = await openRawZipFromPath(filePath, limits)
+  try {
+    return await scanRawArchivePath(archive, limits)
+  } finally {
+    await archive.handle.close()
+  }
+}
+
+async function scanRawArchivePath(archive: RawZipPath, limits: RawScanLimits): Promise<RawScanResult> {
+  const pruneRoots = new Set<string>()
+  for (const rel of archive.byRel.keys()) {
+    const segments = rel.split('/')
+    for (let i = 0; i + 1 < segments.length; i += 1) {
+      if (segments[i + 1] === 'node_modules') {
+        pruneRoots.add(segments.slice(0, i + 1).join('/'))
+      }
+    }
+  }
+
+  const plugins: RawScanPlugin[] = []
+  const pluginSeen = new Set<string>()
+  const skillSeen = new Map<string, RawScanSkill>()
+  const skipped: RawScanResult['skipped'] = []
+
+  for (const rel of archive.byRel.keys()) {
+    if (/^SKILL\.md$/i.test(rel) || /\/SKILL\.md$/i.test(rel)) {
+      const dir = rel.slice(0, rel.lastIndexOf('/'))
+      if (isExcludedTree(dir, pruneRoots)) continue
+      const entry = archive.byRel.get(rel)
+      if ((Number(entry?.declaredSize) || 0) > MAX_SKILL_DOCUMENT_BYTES) continue
+      let data: Buffer
+      try {
+        data = await archive.handle.readEntryData(entry!, MAX_SKILL_DOCUMENT_BYTES)
+      } catch {
+        continue
+      }
+      if (data.byteLength > MAX_SKILL_DOCUMENT_BYTES) continue
+      const parsed = parseSkillDocument(data.toString('utf8'))
+      if (!parsed) continue
+      upsertSkill(skillSeen, { kind: 'skill', name: parsed.name, format: 'bundle', entryPrefix: dir })
+      continue
+    }
+    if (likelyFlatSkill(rel)) {
+      if (isExcludedTree(rel, pruneRoots)) continue
+      const entry = archive.byRel.get(rel)
+      if ((Number(entry?.declaredSize) || 0) > MAX_SKILL_DOCUMENT_BYTES) continue
+      let data: Buffer
+      try {
+        data = await archive.handle.readEntryData(entry!, MAX_SKILL_DOCUMENT_BYTES)
+      } catch {
+        continue
+      }
+      if (data.byteLength > MAX_SKILL_DOCUMENT_BYTES) continue
+      const parsed = parseSkillDocument(data.toString('utf8'))
+      if (!parsed) continue
+      upsertSkill(skillSeen, { kind: 'skill', name: parsed.name, format: 'flat', entryPrefix: rel })
+    }
+  }
+
+  for (const rel of archive.byRel.keys()) {
+    const base = rel.split('/').pop() ?? ''
+    if (base !== 'package.json') continue
+    const dir = rel.slice(0, rel.length - 'package.json'.length).replace(/\/$/, '')
+    if (isExcludedTree(dir, pruneRoots)) continue
+    const entry = archive.byRel.get(rel)
+    if ((Number(entry?.declaredSize) || 0) > MAX_PACKAGE_JSON_BYTES) continue
+    let manifest: { name?: unknown; version?: unknown }
+    try {
+      const data = await archive.handle.readEntryData(entry!, MAX_PACKAGE_JSON_BYTES)
+      if (data.byteLength > MAX_PACKAGE_JSON_BYTES) {
+        skipped.push({ entryPrefix: dir || '.', reason: 'package.json 实际体积超限' })
+        continue
+      }
+      const raw = data.toString('utf8')
+      const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
+      manifest = JSON.parse(text) as { name?: unknown; version?: unknown }
+    } catch {
+      skipped.push({ entryPrefix: dir || '.', reason: 'package.json 无法解析' })
+      continue
+    }
+    let packageName = typeof manifest.name === 'string' && isSafePackageName(manifest.name) ? manifest.name : ''
+    if (!packageName) {
+      const baseDir = dir.split('/').pop() ?? ''
+      if (baseDir && isSafePackageName(baseDir)) packageName = baseDir
+    }
+    if (!packageName) {
+      skipped.push({ entryPrefix: dir || '.', reason: '包名缺失或非法' })
+      continue
+    }
+    if (packageName.startsWith('__') && packageName.endsWith('__')) {
+      skipped.push({ entryPrefix: dir || '.', reason: '模板包不可安装' })
+      continue
+    }
+    if (pluginSeen.has(packageName)) continue
+    pluginSeen.add(packageName)
+    const plugin: RawScanPlugin = { kind: 'plugin', packageName, entryPrefix: dir }
+    if (typeof manifest.version === 'string') plugin.version = manifest.version
+    plugins.push(plugin)
+  }
+
+  const rootPlugins = plugins.filter(plugin => plugin.entryPrefix === '')
+  if (rootPlugins.length > 0 && (plugins.length > rootPlugins.length || skillSeen.size > 0)) {
+    for (const plugin of rootPlugins) {
+      skipped.push({ entryPrefix: '.', reason: '根目录 package.json 会吞并同压缩包其它组件，不视为插件目录' })
+    }
+    plugins.splice(0, plugins.length, ...plugins.filter(plugin => plugin.entryPrefix !== ''))
+  }
+
+  const sortedPlugins = plugins.sort((a, b) => a.entryPrefix.localeCompare(b.entryPrefix))
+  const sortedSkills = [...skillSeen.values()].sort((a, b) => a.entryPrefix.localeCompare(b.entryPrefix))
+  return { kind: 'raw', topName: archive.stripRoot, plugins: sortedPlugins, skills: sortedSkills, skipped }
+}
+
+async function extractUnderPrefixPath(
+  archive: RawZipPath,
+  prefix: string,
+  destination: string,
+  limits: RawScanLimits,
+  budget: ExtractByteBudget,
+): Promise<number> {
+  const resolved = path.resolve(destination)
+  let extractedBytes = 0
+  for (const [rel, entry] of archive.byRel) {
+    const relPrefix = prefix ? `${prefix}/` : ''
+    if (!rel.startsWith(relPrefix)) continue
+    const childRel = rel.slice(relPrefix.length)
+    if (!childRel) continue
+    const target = path.join(resolved, ...childRel.split('/'))
+    assertInside(resolved, target)
+    const written = await archive.handle.writeEntryToFile(entry, target, {
+      budget,
+      maxTotalBytes: limits.maxExtractedBytes,
+    })
+    extractedBytes += written
+  }
+  return extractedBytes
+}
+
+/** 文件路径版 extractRawPluginBodies。 */
+export async function extractRawPluginBodiesFromPath(
+  filePath: string,
+  plugins: RawScanPlugin[],
+  workDir: string,
+  limits: RawScanLimits = DEFAULT_RAW_SCAN_LIMITS,
+  budget?: ExtractByteBudget,
+): Promise<Map<string, string>> {
+  const archive = await openRawZipFromPath(filePath, limits)
+  try {
+    const resolvedWorkDir = path.resolve(workDir)
+    await mkdir(resolvedWorkDir, { recursive: true })
+    const sharedBudget = budget ?? { extracted: 0 }
+    const result = new Map<string, string>()
+    for (const plugin of plugins) {
+      const packageDirectory = path.join(resolvedWorkDir, ...plugin.packageName.split('/'))
+      assertInside(resolvedWorkDir, packageDirectory)
+      await extractUnderPrefixPath(archive, plugin.entryPrefix, packageDirectory, limits, sharedBudget)
+      result.set(plugin.packageName, packageDirectory)
+    }
+    return result
+  } finally {
+    await archive.handle.close()
+  }
+}
+
+/** 文件路径版 extractRawSkillSources。 */
+export async function extractRawSkillSourcesFromPath(
+  filePath: string,
+  skills: RawScanSkill[],
+  workDir: string,
+  limits: RawScanLimits = DEFAULT_RAW_SCAN_LIMITS,
+  budget?: ExtractByteBudget,
+): Promise<Map<string, string>> {
+  const archive = await openRawZipFromPath(filePath, limits)
+  try {
+    const resolvedWorkDir = path.resolve(workDir)
+    await mkdir(resolvedWorkDir, { recursive: true })
+    const sharedBudget = budget ?? { extracted: 0 }
+    const result = new Map<string, string>()
+    for (const skill of skills) {
+      if (skill.format === 'flat') {
+        const target = path.join(resolvedWorkDir, `${skill.name}.md`)
+        assertInside(resolvedWorkDir, target)
+        const entry = archive.byRel.get(skill.entryPrefix)
+        if (!entry) throw new Error(`技能来源缺失：${skill.entryPrefix}`)
+        await archive.handle.writeEntryToFile(entry, target, {
+          budget: sharedBudget,
+          maxTotalBytes: limits.maxExtractedBytes,
+        })
+        result.set(skill.name, target)
+      } else {
+        const target = path.join(resolvedWorkDir, skill.name)
+        assertInside(resolvedWorkDir, target)
+        await extractUnderPrefixPath(archive, skill.entryPrefix, target, limits, sharedBudget)
+        result.set(skill.name, target)
+      }
+    }
+    return result
+  } finally {
+    await archive.handle.close()
+  }
 }
