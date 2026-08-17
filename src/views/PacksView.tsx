@@ -11,7 +11,7 @@ import {
 import { useMemo, useState } from 'react'
 import { PageHeading } from '../components/PageHeading'
 import { formatRelativeTime } from '../lib/format'
-import type { ManagedPlugin, PackStatus, ProfileState } from '../types'
+import type { InstalledPreset, ManagedPlugin, PackStatus, ProfileState } from '../types'
 
 /**
  * 整合包管理页：列表、启停、导出、删除，右侧 inline 详情面板管理包内插件。
@@ -32,8 +32,13 @@ export interface PacksViewProps {
   onExport: (packId: string) => void
   onRemove: (packId: string) => void
   onAddPlugin: (packId: string, packageName: string) => void
+  onAddPreset: (packId: string, presetName: string) => void
   onToggleItem: (packId: string, packageName: string, enabled: boolean) => void
+  onTogglePreset: (packId: string, presetName: string, enabled: boolean) => void
   onRemoveItem: (packId: string, packageName: string) => void
+  onRemovePreset: (packId: string, presetName: string) => void
+  /** 当前已安装且带来源记录的 Agent 预设，供添加到包内。 */
+  installedPresets: InstalledPreset[]
 }
 
 const SOURCE_LABEL: Record<PackStatus['source'], string> = {
@@ -61,8 +66,12 @@ export function PacksView({
   onExport,
   onRemove,
   onAddPlugin,
+  onAddPreset,
   onToggleItem,
+  onTogglePreset,
   onRemoveItem,
+  onRemovePreset,
+  installedPresets,
 }: PacksViewProps) {
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null)
   const [confirmingRemoval, setConfirmingRemoval] = useState<PackStatus | null>(null)
@@ -135,6 +144,12 @@ export function PacksView({
             onAddPlugins={packageNames => {
               for (const packageName of packageNames) onAddPlugin(selectedPack!.id, packageName)
             }}
+            installedPresets={installedPresets}
+            onAddPresets={presetNames => {
+              for (const presetName of presetNames) onAddPreset(selectedPack!.id, presetName)
+            }}
+            onTogglePreset={(presetName, enabled) => onTogglePreset(selectedPack!.id, presetName, enabled)}
+            onRemovePreset={presetName => onRemovePreset(selectedPack!.id, presetName)}
           />
         </div>
       )}
@@ -199,7 +214,7 @@ function PackRow({ pack, selected, busy, onSelect, onActivate, onDeactivate, onE
             {pack.enabled && <span className="pack-active-badge">使用中</span>}
           </div>
           <p>{pack.description || '（无描述）'}</p>
-          <small>v{pack.version} · {pack.plugins.length} 个插件 · 更新于 {formatRelativeTime(pack.updatedAt)}</small>
+          <small>v{pack.version} · {pack.plugins.length} 个插件{pack.presets?.length ? ` · ${pack.presets.length} 个预设` : ''} · 更新于 {formatRelativeTime(pack.updatedAt)}</small>
         </div>
       </div>
       <div className="pack-row-actions" onClick={event => event.stopPropagation()}>
@@ -226,21 +241,30 @@ function PackRow({ pack, selected, busy, onSelect, onActivate, onDeactivate, onE
   )
 }
 
-function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlugins }: {
+function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlugins, installedPresets, onAddPresets, onTogglePreset, onRemovePreset }: {
   pack: PackStatus | null
   profile: ProfileState
   busy: string | null
   onToggleItem: (packageName: string, enabled: boolean) => void
   onRemoveItem: (packageName: string) => void
   onAddPlugins: (packageNames: string[]) => void
+  installedPresets: InstalledPreset[]
+  onAddPresets: (presetNames: string[]) => void
+  onTogglePreset: (presetName: string, enabled: boolean) => void
+  onRemovePreset: (presetName: string) => void
 }) {
   const [addingOpen, setAddingOpen] = useState(false)
+  const [addingPresetsOpen, setAddingPresetsOpen] = useState(false)
 
   if (!pack) {
     return <aside className="pack-details empty">选择一个整合包查看详情</aside>
   }
 
   const candidates = profile.plugins.filter(plugin => !pack.plugins.some(item => item.packageName === plugin.packageName))
+  const presetCandidates = installedPresets.filter(preset =>
+    !pack.presets?.some(item => item.name === preset.name)
+    && Boolean(preset.repository && preset.sourcePath && preset.revision)
+  )
 
   return (
     <aside className="pack-details">
@@ -319,6 +343,56 @@ function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlu
         )}
       </div>
 
+      <div className="pack-details-plugins">
+        <div className="pack-details-plugins-head">
+          <span>包含预设（{pack.presets?.length ?? 0}）</span>
+          <button
+            type="button"
+            className="install-button"
+            disabled={busy !== null || presetCandidates.length === 0}
+            onClick={() => setAddingPresetsOpen(true)}
+            title={presetCandidates.length === 0 ? '没有可添加的预设（需先安装并留有来源记录）' : '从已安装预设中选择加入'}
+          >
+            <Plus size={14} />添加预设
+          </button>
+        </div>
+        {(pack.presets?.length ?? 0) === 0 ? (
+          <div className="pack-details-empty">整合包里还没有 Agent 预设。</div>
+        ) : (
+          <div className="pack-detail-items">
+            {pack.presets!.map(item => {
+              const toggling = busy === `pack-toggle-preset:${pack.id}:${item.name}`
+              const removing = busy === `pack-remove-preset:${pack.id}:${item.name}`
+              return (
+                <div className={`pack-detail-item ${item.enabled ? '' : 'disabled'}`} key={item.name}>
+                  <code>{item.name}</code>
+                  <label className="switch" title={item.enabled ? '停用该预设' : '启用该预设'}>
+                    <input
+                      type="checkbox"
+                      checked={item.enabled}
+                      disabled={busy !== null}
+                      onChange={event => onTogglePreset(item.name, event.target.checked)}
+                      aria-label={`${item.enabled ? '停用' : '启用'} 预设 ${item.name}`}
+                    />
+                    <span>{toggling && <LoaderCircle className="spin" size={11} />}</span>
+                  </label>
+                  <button
+                    type="button"
+                    className="pack-detail-remove"
+                    disabled={busy !== null}
+                    onClick={() => onRemovePreset(item.name)}
+                    title="从整合包移除预设"
+                    aria-label={`从整合包移除预设 ${item.name}`}
+                  >
+                    {removing ? <LoaderCircle className="spin" size={13} /> : <Trash2 size={13} />}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
       {addingOpen && (
         <AddPluginsDialog
           pack={pack}
@@ -328,6 +402,18 @@ function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlu
           onConfirm={packageNames => {
             onAddPlugins(packageNames)
             setAddingOpen(false)
+          }}
+        />
+      )}
+      {addingPresetsOpen && (
+        <AddPresetsDialog
+          pack={pack}
+          candidates={presetCandidates}
+          busy={busy !== null}
+          onCancel={() => setAddingPresetsOpen(false)}
+          onConfirm={presetNames => {
+            onAddPresets(presetNames)
+            setAddingPresetsOpen(false)
           }}
         />
       )}
@@ -375,6 +461,64 @@ function AddPluginsDialog({ pack, candidates, busy, onCancel, onConfirm }: {
                     <span className="pack-checklist-copy">
                       <strong>{plugin.displayName}</strong>
                       <small>{plugin.packageName}</small>
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          )}
+        </div>
+        <footer>
+          <button type="button" className="secondary-button" onClick={onCancel} disabled={busy}>取消</button>
+          <button type="button" className="primary-command" disabled={busy || selected.size === 0} onClick={() => onConfirm(Array.from(selected))}>
+            <Plus size={16} />添加 {selected.size > 0 ? `（${selected.size}）` : ''}
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function AddPresetsDialog({ pack, candidates, busy, onCancel, onConfirm }: {
+  pack: PackStatus
+  candidates: InstalledPreset[]
+  busy: boolean
+  onCancel: () => void
+  onConfirm: (presetNames: string[]) => void
+}) {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+
+  const toggle = (presetName: string) => {
+    setSelected(current => {
+      const next = new Set(current)
+      if (next.has(presetName)) next.delete(presetName)
+      else next.add(presetName)
+      return next
+    })
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target && !busy) onCancel() }}>
+      <section className="modal add-plugin-dialog" role="dialog" aria-modal="true" aria-labelledby="add-preset-title">
+        <header>
+          <div><Plus size={18} /><h2 id="add-preset-title">添加预设到「{pack.name}」</h2></div>
+          <button type="button" className="icon-button" onClick={onCancel} disabled={busy} aria-label="关闭"><X size={17} /></button>
+        </header>
+        <div className="modal-content">
+          <p className="add-plugin-summary">从当前环境已安装且有来源记录的 Agent 预设中勾选。</p>
+          {candidates.length === 0 ? (
+            <div className="pack-checklist-empty">当前没有可添加的 Agent 预设。</div>
+          ) : (
+            <div className="add-plugin-list">
+              {candidates.map(preset => {
+                const checked = selected.has(preset.name)
+                return (
+                  <label className={`pack-checklist-item ${checked ? 'checked' : ''}`} key={preset.name}>
+                    <input type="checkbox" checked={checked} onChange={() => toggle(preset.name)} aria-label={`${checked ? '取消' : '选择'} 预设 ${preset.name}`} />
+                    <span className="pack-item-glyph">{preset.name.slice(0, 2).toUpperCase()}</span>
+                    <span className="pack-checklist-copy">
+                      <strong>{preset.name}</strong>
+                      <small>{preset.repository ?? '本地预设'}</small>
                     </span>
                   </label>
                 )

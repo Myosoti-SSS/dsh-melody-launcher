@@ -109,6 +109,7 @@ function createTestInstaller() {
     }),
     pluginSourceRoot: path.join(temporaryDirectory, 'plugin-source'),
     pluginReceiptsPath: path.join(temporaryDirectory, 'receipts.json'),
+    presetReceiptsPath: path.join(temporaryDirectory, 'preset-receipts.json'),
     skillSourceRoot: path.join(temporaryDirectory, 'skill-source'),
     emitOutput: () => {},
     emitProgress: () => {},

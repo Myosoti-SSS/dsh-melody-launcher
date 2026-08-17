@@ -228,3 +228,40 @@ describe('buildManifestFromReceipts', () => {
     expect(manifest.plugins).toEqual([{ packageName: 'alpha', source: 'local', version: '1.0.0' }])
   })
 })
+
+describe('pack presets in manifest', () => {
+  it('parse/serialize presets', () => {
+    const yaml = `
+name: Preset Pack
+description: a pack with presets
+version: 1.0.0
+plugins:
+  - packageName: alpha
+presets:
+  - name: router-standard
+    repository: demo/preset-repo
+    sourcePath: preset/router-standard
+    revision: abc1234
+`
+    const manifest = parsePackManifest(yaml)
+    expect(manifest.presets).toEqual([
+      { name: 'router-standard', repository: 'demo/preset-repo', sourcePath: 'preset/router-standard', revision: 'abc1234' },
+    ])
+    const roundTrip = parsePackManifest(serializePackManifest(manifest))
+    expect(roundTrip.presets).toEqual(manifest.presets)
+  })
+
+  it('buildManifestFromReceipts includes preset receipts', () => {
+    const manifest = buildManifestFromReceipts('pack-x', [], [{
+      name: 'router-standard',
+      repository: 'demo/preset-repo',
+      sourcePath: 'preset/router-standard',
+      revision: 'abc1234',
+      installedAt: '2026-08-16T00:00:00.000Z',
+    }])
+    expect(manifest.presets).toEqual([
+      { name: 'router-standard', repository: 'demo/preset-repo', sourcePath: 'preset/router-standard', revision: 'abc1234' },
+    ])
+    expect(() => parsePackManifest(serializePackManifest(manifest))).not.toThrow()
+  })
+})

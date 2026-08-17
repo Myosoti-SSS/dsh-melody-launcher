@@ -518,6 +518,33 @@ export function useLauncherStore() {
     return next !== undefined
   }, [api, applyPackUpdate, run])
 
+  const addPackPreset = useCallback(async (packId: string, presetName: string): Promise<boolean> => {
+    const next = await run(`pack-add-preset:${packId}:${presetName}`, async () => {
+      const updated = await api.addPackPreset(packId, presetName)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: `${presetName} 已加入整合包。` })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
+  const togglePackPreset = useCallback(async (packId: string, presetName: string, enabled: boolean): Promise<boolean> => {
+    const next = await run(`pack-toggle-preset:${packId}:${presetName}`, async () => {
+      const updated = await api.togglePackPreset(packId, presetName, enabled)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: enabled ? '预设已启用。' : '预设已停用。' })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
+  const removePackPreset = useCallback(async (packId: string, presetName: string): Promise<boolean> => {
+    const next = await run(`pack-remove-preset:${packId}:${presetName}`, async () => {
+      const updated = await api.removePackPreset(packId, presetName)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: `${presetName} 已从整合包移除。` })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
   const togglePackItem = useCallback(async (packId: string, packageName: string, enabled: boolean): Promise<boolean> => {
     const next = await run(`pack-toggle:${packId}:${packageName}`, async () => {
       const updated = await api.togglePackItem(packId, packageName, enabled)
@@ -605,8 +632,11 @@ export function useLauncherStore() {
     removePack,
     exportPack,
     addPackPlugin,
+    addPackPreset,
     togglePackItem,
+    togglePackPreset,
     removePackItem,
+    removePackPreset,
   }
 }
 

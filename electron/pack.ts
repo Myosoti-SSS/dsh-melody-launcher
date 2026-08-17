@@ -11,17 +11,21 @@ import path from 'node:path'
 import { DEFAULT_PROFILE_NAME } from '../src/constants'
 import type {
   AppSettings,
+  InstalledPreset,
   PackAnalysis,
   PackAnalysisItem,
   PackCreateRequest,
   PackImportOptions,
   PackInstallResult,
   PackInstalledPlugin,
+  PackInstalledPreset,
   PackInstalledSkill,
   PackPluginEntry,
   PackProgressEvent,
   PackStatus,
   PluginInstallTarget,
+  PresetInstallRequest,
+  PresetInstallResult,
   ProfileState,
 } from '../src/types'
 import { assertMeaningfulPackName, buildManifestFromReceipts, packProfileName } from './pack-manifest'
@@ -42,6 +46,7 @@ import {
   type InstallableItem,
 } from './pack-orchestration'
 import { readPluginReceipts, type PluginInstallReceipt } from './plugin-receipts'
+import { readPresetReceipts, removePresetReceipt, type PresetInstallReceipt } from './preset-receipts'
 import { createProfileSnapshot, restoreProfileSnapshot, type ProfileSnapshot } from './ai-install'
 import { isSafePackageName, isSafeProfileName } from './profile'
 
@@ -53,6 +58,10 @@ export interface InstallInstaller {
   installPluginTarget(target: PackInstallTarget): Promise<unknown>
   /** raw 整合包导入的技能：从本地源目录/单文件全局安装到 dshHome/skills。 */
   installSkillLocal(dshHome: string, skill: { name: string; format: 'bundle' | 'flat'; sourceDir: string }): Promise<unknown>
+  /** 安装一个 Agent 预设（全局安装到 DSH 预设目录）。 */
+  installPreset(request: PresetInstallRequest): Promise<PresetInstallResult>
+  /** 启用或停用一个本地 Agent 预设。 */
+  togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]>
   remove(packageName: string, profileName?: string): Promise<unknown>
   readProfile(dshHome: string, profileName: string): Promise<ProfileState>
   togglePlugin(dshHome: string, profileName: string, packageName: string, enabled: boolean): Promise<ProfileState>
@@ -67,6 +76,8 @@ export interface PackManagerOptions {
   snapshotRoot: string
   /** 插件安装凭据文件路径。 */
   pluginReceiptsPath: string
+  /** Agent 预设安装凭据文件路径。 */
+  presetReceiptsPath: string
   installer: InstallInstaller
   emitOutput?: (level: 'info' | 'error' | 'success', text: string) => void
   emitEvent: (event: PackProgressEvent) => void
@@ -89,8 +100,11 @@ export interface PackManager {
   rollback(): Promise<{ restored: number; profileName: string }>
   hasSnapshot(): Promise<boolean>
   addPackPlugin(packId: string, packageName: string): Promise<PackStatus>
+  addPackPreset(packId: string, presetName: string): Promise<PackStatus>
   togglePackItem(packId: string, packageName: string, enabled: boolean): Promise<PackStatus>
+  togglePackPreset(packId: string, presetName: string, enabled: boolean): Promise<PackStatus>
   removePackItem(packId: string, packageName: string): Promise<PackStatus>
+  removePackPreset(packId: string, presetName: string): Promise<PackStatus>
 }
 
 function asErrorMessage(error: unknown): string {
@@ -218,6 +232,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         await options.installer.readProfile(dshHome, profileName)
 
         const receipts = await readPluginReceipts(options.pluginReceiptsPath)
+        const presetReceipts = await readPresetReceipts(options.presetReceiptsPath)
         const items: InstallableItem[] = []
         const skippedFailures: { packageName: string; reason: string }[] = []
         for (const packageName of request.packageNames) {
@@ -238,6 +253,23 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           items.push({ packageName, install: async () => { await options.installer.installPluginTarget(target) } })
         }
 
+        // 预设是全局资源，创建自建包时它们已经安装；这里只把有来源记录的可导出预设纳入包。
+        const installedPresets: string[] = []
+        const presetReceiptsForPack: PresetInstallReceipt[] = []
+        for (const presetName of request.presetNames ?? []) {
+          if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(presetName)) {
+            skippedFailures.push({ packageName: presetName, reason: '预设名称非法。' })
+            continue
+          }
+          const receipt = presetReceipts.find(item => item.name === presetName)
+          if (!receipt) {
+            skippedFailures.push({ packageName: presetName, reason: '预设无来源记录，无法加入整合包' })
+            continue
+          }
+          installedPresets.push(presetName)
+          presetReceiptsForPack.push(receipt)
+        }
+
         // 建 pack profile 目录，消除 DSH CLI 首次 add 的竞态。
         await mkdir(path.join(dshHome, 'profiles', packId), { recursive: true })
 
@@ -245,7 +277,8 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         snapshot = await createProfileSnapshot(dshHome, packId, options.snapshotRoot)
         options.emitEvent({ kind: 'snapshot' })
 
-        const { installed, failures } = await runSerialInstall(items, { emitEvent: options.emitEvent })
+        const { installed: installedPlugins, failures } = await runSerialInstall(items, { emitEvent: options.emitEvent })
+        const installed = [...installedPlugins, ...installedPresets]
         const allFailures = [...skippedFailures, ...failures]
         const result = buildInstallResult(packId, installed, allFailures)
 
@@ -258,11 +291,12 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           installedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           state: result.state,
-          plugins: toInstalledPlugins(installed),
+          plugins: toInstalledPlugins(installedPlugins),
+          ...(installedPresets.length > 0 ? { presets: installedPresets.map(name => ({ name, enabled: true })) } : {}),
           failures: result.failures.length > 0 ? result.failures : undefined,
         }
         await upsertPackRecord(options.registryPath, record)
-        log('success', `整合包「${request.name}」已创建：${installed.length} 个插件。`)
+        log('success', `整合包「${request.name}」已创建：${installedPlugins.length} 个插件${installedPresets.length > 0 ? `、${installedPresets.length} 个预设` : ''}。`)
         options.emitEvent({ kind: 'done', result })
         return result
       } catch (error) {
@@ -323,6 +357,16 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             ? { packageName: entry.packageName, available: true, offline: false }
             : { packageName: entry.packageName, available: false, offline: false, reason: '缺少来源仓库，无法联网安装' })
         }
+      }
+      for (const preset of manifest.presets ?? []) {
+        const available = Boolean(preset.repository && preset.sourcePath && preset.revision)
+        items.push({
+          packageName: preset.name,
+          available,
+          offline: false,
+          kind: 'preset',
+          reason: available ? undefined : '缺少仓库/来源路径/版本，无法联网安装',
+        })
       }
       return {
         id: packId,
@@ -459,17 +503,22 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         await mkdir(path.join(dshHome, 'profiles', packId), { recursive: true })
 
         // 决定要安装的包名集合：显式 items 优先，否则有 body 按 body，否则按 manifest。
+        // 预设是独立资源，与插件分开处理。
         const requested = items && items.length > 0 ? items : undefined
-        const bodyNames = new Set(inspection.bodyPackageNames)
         const manifestEntries = new Map(manifest.plugins.map(entry => [entry.packageName, entry]))
-        let wanted: string[]
-        if (requested) {
-          wanted = requested
-        } else if (inspection.hasBodies) {
-          wanted = inspection.bodyPackageNames
-        } else {
-          wanted = manifest.plugins.map(entry => entry.packageName)
-        }
+        const presetEntries = new Map((manifest.presets ?? []).map(entry => [entry.name, entry]))
+        const presetNames = new Set(presetEntries.keys())
+
+        const requestedItems = requested ?? []
+        const requestedSet = requested ? new Set(requestedItems) : null
+        const wantedPlugins = requestedSet
+          ? requestedItems.filter(name => !presetNames.has(name))
+          : inspection.hasBodies
+            ? inspection.bodyPackageNames
+            : manifest.plugins.map(entry => entry.packageName)
+        const wantedPresets = requestedSet
+          ? requestedItems.filter(name => presetNames.has(name))
+          : [...presetNames]
 
         const installables: InstallableItem[] = []
 
@@ -483,7 +532,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           await rm(bodiesDir, { recursive: true, force: true }).catch(() => undefined)
           const knownNames = new Set(manifest.plugins.map(entry => entry.packageName))
           const bodies = await extractPackBodiesFromPath(filePath, bodiesDir, undefined, knownNames)
-          for (const packageName of wanted) {
+          for (const packageName of wantedPlugins) {
             if (!isSafePackageName(packageName)) {
               installables.push({ packageName, install: async () => { throw new Error('插件名称非法。') } })
               continue
@@ -515,7 +564,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             }
           }
         } else {
-          for (const packageName of wanted) {
+          for (const packageName of wantedPlugins) {
             if (!isSafePackageName(packageName)) {
               installables.push({ packageName, install: async () => { throw new Error('插件名称非法。') } })
               continue
@@ -529,9 +578,33 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           }
         }
 
+        // Agent 预设：按清单里的 pin 信息全局安装。
+        for (const presetName of wantedPresets) {
+          const preset = presetEntries.get(presetName)!
+          if (!preset.repository || !preset.sourcePath || !preset.revision) {
+            installables.push({ packageName: presetName, install: async () => { throw new Error('清单中缺少该预设的来源信息') } })
+            continue
+          }
+          installables.push({
+            packageName: presetName,
+            offline: false,
+            install: async () => {
+              await options.installer.installPreset({
+                repository: preset.repository!,
+                targetId: presetName,
+                name: presetName,
+                sourcePath: preset.sourcePath!,
+                revision: preset.revision!,
+              })
+            },
+          })
+        }
+
         const { installed, failures } = await runSerialInstall(installables, { emitEvent: options.emitEvent })
         const result = buildInstallResult(packId, installed, failures)
 
+        const installedPluginNames = installed.filter(name => !presetNames.has(name))
+        const installedPresetNames = installed.filter(name => presetNames.has(name))
         const record: PackRecord = {
           id: packId,
           name: manifest.name,
@@ -541,11 +614,12 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           installedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           state: result.state,
-          plugins: toInstalledPlugins(installed),
+          plugins: toInstalledPlugins(installedPluginNames),
+          ...(installedPresetNames.length > 0 ? { presets: installedPresetNames.map(name => ({ name, enabled: true })) } : {}),
           failures: result.failures.length > 0 ? result.failures : undefined,
         }
         await upsertPackRecord(options.registryPath, record)
-        log('success', `整合包「${manifest.name}」已导入：${installed.length} 个插件。`)
+        log('success', `整合包「${manifest.name}」已导入：${installedPluginNames.length} 个插件${installedPresetNames.length > 0 ? `、${installedPresetNames.length} 个预设` : ''}。`)
         options.emitEvent({ kind: 'done', result })
         return result
       } catch (error) {
@@ -564,11 +638,14 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       active = true
       let exportDir: string | null = null
       try {
-        await findRecord(packId)
+        const record = await findRecord(packId)
         const dshHome = await getDshHome()
         const receipts = (await readPluginReceipts(options.pluginReceiptsPath))
           .filter(item => item.profileName === packId)
-        const manifest = buildManifestFromReceipts(packId, receipts)
+        const presetNames = new Set((record.presets ?? []).map(preset => preset.name))
+        const presetReceipts = (await readPresetReceipts(options.presetReceiptsPath))
+          .filter(item => presetNames.has(item.name))
+        const manifest = buildManifestFromReceipts(packId, receipts, presetReceipts)
         // 只收集 manifest 引用的插件本体：profile 里可能混入无来源记录的手动安装插件，不应进包。
         const packageNames = manifest.plugins.map(entry => entry.packageName)
         const packProfileDir = path.join(dshHome, 'profiles', packId)
@@ -640,7 +717,16 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             await rm(path.join(skillRoot, '.disabled', skill.name), { recursive: true, force: true }).catch(() => undefined)
           }
         }
-        return { removed: profile.plugins.length }
+        // Agent 预设同样全局安装：仅当没有其它包引用同名预设时才删除目录与 receipt。
+        const presetRoot = path.join(dshHome, '.agent-presets')
+        for (const preset of record.presets ?? []) {
+          const stillReferenced = remaining.some(other => (other.presets ?? []).some(item => item.name === preset.name))
+          if (stillReferenced) continue
+          await rm(path.join(presetRoot, preset.name), { recursive: true, force: true }).catch(() => undefined)
+          await rm(path.join(presetRoot, '.disabled', preset.name), { recursive: true, force: true }).catch(() => undefined)
+          await removePresetReceipt(options.presetReceiptsPath, preset.name).catch(() => undefined)
+        }
+        return { removed: profile.plugins.length + (record.presets?.length ?? 0) }
       } finally {
         active = false
       }
@@ -701,6 +787,77 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       } catch (error) {
         options.emitEvent({ kind: 'error', message: asErrorMessage(error) })
         throw error
+      } finally {
+        active = false
+      }
+    },
+
+    async addPackPreset(packId, presetName) {
+      const reason = guarded()
+      if (reason) throw new Error(reason)
+      beginTask()
+      try {
+        assertSafePackId(packId)
+        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(presetName)) throw new Error('预设名称无效。')
+        const settings = await options.readSettings()
+        const receipts = await readPresetReceipts(options.presetReceiptsPath)
+        const receipt = receipts.find(item => item.name === presetName)
+        if (!receipt) throw new Error('当前环境找不到该预设的来源记录。')
+        const record = await findRecord(packId)
+        if (record.presets?.some(item => item.name === presetName)) {
+          return toPackStatus(record, settings.profileName)
+        }
+        const presets = [...(record.presets ?? []), { name: presetName, enabled: true }]
+        const updated: PackRecord = { ...record, presets, updatedAt: new Date().toISOString() }
+        await upsertPackRecord(options.registryPath, updated)
+        return toPackStatus(updated, settings.profileName)
+      } finally {
+        active = false
+      }
+    },
+
+    async togglePackPreset(packId, presetName, enabled) {
+      const reason = guarded()
+      if (reason) throw new Error(reason)
+      beginTask()
+      try {
+        assertSafePackId(packId)
+        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(presetName)) throw new Error('预设名称无效。')
+        const settings = await options.readSettings()
+        await options.installer.togglePreset(presetName, Boolean(enabled))
+        const record = await findRecord(packId)
+        const presets = (record.presets ?? []).map(item => item.name === presetName ? { ...item, enabled: Boolean(enabled) } : item)
+        const updated: PackRecord = { ...record, presets, updatedAt: new Date().toISOString() }
+        await upsertPackRecord(options.registryPath, updated)
+        return toPackStatus(updated, settings.profileName)
+      } finally {
+        active = false
+      }
+    },
+
+    async removePackPreset(packId, presetName) {
+      const reason = guarded()
+      if (reason) throw new Error(reason)
+      beginTask()
+      try {
+        assertSafePackId(packId)
+        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(presetName)) throw new Error('预设名称无效。')
+        const settings = await options.readSettings()
+        const record = await findRecord(packId)
+        const presets = (record.presets ?? []).filter(item => item.name !== presetName)
+        const updated: PackRecord = { ...record, presets: presets.length > 0 ? presets : undefined, updatedAt: new Date().toISOString() }
+        await upsertPackRecord(options.registryPath, updated)
+        // 若没有其它包再引用该预设，则同步清理全局目录与 receipt（与 removePack 语义一致）。
+        const remaining = await readPackRegistry(options.registryPath)
+        const stillReferenced = remaining.some(other => (other.presets ?? []).some(item => item.name === presetName))
+        if (!stillReferenced) {
+          const dshHome = await getDshHome()
+          const presetRoot = path.join(dshHome, '.agent-presets')
+          await rm(path.join(presetRoot, presetName), { recursive: true, force: true }).catch(() => undefined)
+          await rm(path.join(presetRoot, '.disabled', presetName), { recursive: true, force: true }).catch(() => undefined)
+          await removePresetReceipt(options.presetReceiptsPath, presetName).catch(() => undefined)
+        }
+        return toPackStatus(updated, settings.profileName)
       } finally {
         active = false
       }

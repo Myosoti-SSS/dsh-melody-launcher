@@ -8,6 +8,7 @@ import { createPackManager, type PackInstallTarget } from '../electron/pack'
 import { buildPackZip, inspectPackZip } from '../electron/pack-zip'
 import { readPackRegistry, upsertPackRecord, type PackRecord } from '../electron/pack-registry'
 import { recordPluginInstall, type PluginInstallReceipt } from '../electron/plugin-receipts'
+import { recordPresetInstall } from '../electron/preset-receipts'
 import { defaultSettings } from '../electron/settings'
 
 // ---------------------------------------------------------------------------
@@ -31,6 +32,7 @@ async function makeEnv(): Promise<{
   registryPath: string
   snapshotRoot: string
   pluginReceiptsPath: string
+  presetReceiptsPath: string
 }> {
   const root = await temporaryDirectory()
   const dshHome = path.join(root, 'dsh-home')
@@ -41,6 +43,7 @@ async function makeEnv(): Promise<{
     registryPath: path.join(root, 'packs.json'),
     snapshotRoot: path.join(root, 'pack-snapshots'),
     pluginReceiptsPath: path.join(root, 'plugin-installs.json'),
+    presetReceiptsPath: path.join(root, 'preset-installs.json'),
   }
 }
 
@@ -57,10 +60,15 @@ const defaultProfile: ProfileState = {
 function makeInstallerStub() {
   const installPluginTarget = vi.fn(async (_target: PackInstallTarget): Promise<void> => {})
   const installSkillLocal = vi.fn(async (_dshHome: string, _skill: { name: string; format: 'bundle' | 'flat'; sourceDir: string }): Promise<void> => {})
+  const installPreset = vi.fn(async (request: { name: string }): Promise<{ installedPreset: { name: string; path: string; enabled: boolean }; installedPresets: never[] }> => ({
+    installedPreset: { name: request.name, path: path.join(process.cwd(), request.name), enabled: true },
+    installedPresets: [],
+  }))
+  const togglePreset = vi.fn(async (_name: string, _enabled: boolean): Promise<never[]> => [])
   const remove = vi.fn(async (_packageName: string, _profileName?: string): Promise<void> => {})
   const readProfile = vi.fn(async (): Promise<ProfileState> => defaultProfile)
   const togglePlugin = vi.fn(async (): Promise<ProfileState> => defaultProfile)
-  return { installPluginTarget, installSkillLocal, remove, readProfile, togglePlugin }
+  return { installPluginTarget, installSkillLocal, installPreset, togglePreset, remove, readProfile, togglePlugin }
 }
 
 type InstallerStub = ReturnType<typeof makeInstallerStub>
@@ -96,6 +104,7 @@ function makeManager(
     registryPath: env.registryPath,
     snapshotRoot: env.snapshotRoot,
     pluginReceiptsPath: env.pluginReceiptsPath,
+    presetReceiptsPath: env.presetReceiptsPath,
     installer,
     emitEvent,
     isRuntimeRunning: options.isRuntimeRunning ?? (() => false),
@@ -195,6 +204,28 @@ describe('createPack', () => {
     expect(records).toHaveLength(1)
     expect(records[0].id).toBe('pack-my-pack')
     expect(records[0].plugins).toEqual([{ packageName: 'alpha', enabled: true }])
+  })
+
+  it('把有来源记录的已安装 Agent 预设纳入自建包', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome, 'web')
+    const { manager } = makeManager(env, stub, store)
+    await recordPresetInstall(env.presetReceiptsPath, {
+      name: 'router-standard',
+      repository: 'demo/preset-repo',
+      sourcePath: 'preset/router-standard',
+      revision: 'abc1234',
+      installedAt: new Date().toISOString(),
+    })
+
+    const result = await manager.createPack({ name: 'Preset Pack', packageNames: [], presetNames: ['router-standard'] })
+    expect(result.installed).toEqual(['router-standard'])
+    expect(result.state).toBe('complete')
+
+    const records = await readPackRegistry(env.registryPath)
+    expect(records[0].presets).toEqual([{ name: 'router-standard', enabled: true }])
+    expect(stub.installPreset).not.toHaveBeenCalled()
   })
 
   it('github 源 receipt 重建为 github target，subdirectory 保留', async () => {
@@ -343,6 +374,41 @@ describe('importPack', () => {
     expect(target.source).toBe('github')
     expect(target.repository).toBe('demo/beta')
     expect(target.profileName).toBe('pack-online-pack')
+  })
+
+  it('manifest 中的 presets 会调用 installPreset 并记入注册表', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const manifest: PackManifest = {
+      name: 'Preset Import',
+      description: 'preset import',
+      version: '1.0.0',
+      plugins: [],
+      presets: [{
+        name: 'router-standard',
+        repository: 'demo/preset-repo',
+        sourcePath: 'preset/router-standard',
+        revision: 'abc1234',
+      }],
+    }
+    const zipPath = await writeZip(env, 'preset-import.zip', manifest, new Map())
+
+    const result = await manager.importPack(zipPath)
+    expect(result.installed).toEqual(['router-standard'])
+    expect(result.state).toBe('complete')
+    expect(stub.installPreset).toHaveBeenCalledTimes(1)
+    expect(stub.installPreset.mock.calls[0][0]).toMatchObject({
+      repository: 'demo/preset-repo',
+      name: 'router-standard',
+      sourcePath: 'preset/router-standard',
+      revision: 'abc1234',
+    })
+
+    const records = await readPackRegistry(env.registryPath)
+    expect(records[0].presets).toEqual([{ name: 'router-standard', enabled: true }])
   })
 
   it('指定 items 且缺 body 时回落到 manifest-only 来源', async () => {
@@ -827,6 +893,34 @@ describe('exportPack', () => {
     const inspection = inspectPackZip(await readFile(zipPath))
     expect(inspection.manifest.plugins).toEqual([{ packageName: 'alpha', source: 'npm', version: '1.2.3' }])
     expect(inspection.bodyPackageNames).toEqual(['alpha'])
+  })
+
+  it('导出包含 presets 清单', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    stub.readProfile.mockResolvedValue({ ...defaultProfile, plugins: [] })
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+    await upsertPackRecord(env.registryPath, {
+      ...recordFor('pack-x'),
+      presets: [{ name: 'router-standard', enabled: true }],
+    })
+    await recordPresetInstall(env.presetReceiptsPath, {
+      name: 'router-standard',
+      repository: 'demo/preset-repo',
+      sourcePath: 'preset/router-standard',
+      revision: 'abc1234',
+      installedAt: new Date().toISOString(),
+    })
+
+    const { zipPath } = await manager.exportPack('pack-x')
+    const inspection = inspectPackZip(await readFile(zipPath))
+    expect(inspection.manifest.presets).toEqual([{
+      name: 'router-standard',
+      repository: 'demo/preset-repo',
+      sourcePath: 'preset/router-standard',
+      revision: 'abc1234',
+    }])
   })
 
   it('profile 中无 source 时导出 manifest-only 包（不失败）', async () => {
