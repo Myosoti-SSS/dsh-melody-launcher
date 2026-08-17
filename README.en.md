@@ -78,6 +78,7 @@ The problems it removes:
 
 - **Zero-prerequisite first run** — when no local DSH is detected, the home button switches to "Install DSH" and handles first-time deployment
 - **Automatic Node.js provisioning** — works even without Node.js installed: downloads the official portable runtime, verifies it with SHA-256, and supports resuming interrupted downloads
+- **Automatic pnpm provisioning** — installs a launcher-managed pnpm on the first plugin operation, with no global command required, and shares it across regular installs, modpacks, and AI-assisted installation
 - **Multi-path DSH detection** — checks the launcher's runtime directory, the configured launch command, `PATH`, `%APPDATA%\npm`, and the system Node.js directory
 - **Process lifecycle management** — start, stop, and stream live logs (stdout/stderr, leveled); the DSH process is shut down cleanly when the launcher exits
 - **Auto-open the web UI** — detects the local service URL from the log stream and opens it in your browser (optional)
@@ -97,6 +98,7 @@ The problems it removes:
 ### Interface and Configuration
 
 - **Dual-size window** — frameless design that switches between launcher mode (900×560) and manager mode (1380×860)
+- **GitHub account login** — supports OAuth Device Flow and fine-grained tokens, encrypts credentials with Electron safe storage, and authenticates catalog, inspection, download, and update requests centrally
 - **API key management** — set or clear your DeepSeek API key inside the app
 - **Full runtime configuration** — `DSH_HOME`, profile name, working directory, launch executable and arguments are all editable in the UI
 - **Portable** — the launcher itself needs no installation; a single exe
@@ -222,6 +224,7 @@ The launcher **uses the official DSH profile structure directly**. It does not i
 | Launcher settings | `%APPDATA%\dsh-launcher\settings.json` |
 | Local DSH runtime | `%APPDATA%\dsh-launcher\dsh-runtime\` |
 | Portable Node.js runtime | `%APPDATA%\dsh-launcher\node-runtime\` |
+| GitHub session (encrypted) | `%APPDATA%\dsh-launcher\github-auth.bin` |
 | DSH credentials | `$DSH_HOME\.credentials.yaml` |
 | DSH profile manifest | `$DSH_HOME\profiles\<profile>\package.json` |
 
@@ -246,6 +249,7 @@ The launcher **uses the official DSH profile structure directly**. It does not i
 | **Renderer isolation** | `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` |
 | **Constrained IPC surface** | The renderer talks to the main process only through a fixed `contextBridge` interface; it has no direct Node API access |
 | **Credential file permissions** | `.credentials.yaml` is written with mode `0600` inside a `0700` directory, via a temp file plus atomic rename so the original is never corrupted |
+| **GitHub credential encryption** | GitHub tokens and OAuth sessions are encrypted through Electron `safeStorage`; the renderer never receives plaintext credentials |
 | **External-link allowlist** | `shell.openExternal` accepts only `http:` and `https:` |
 | **Input validation** | Package names, profile names, and GitHub repository names are validated before reaching main-process logic; directory arguments must be absolute paths |
 | **Download integrity** | The Node.js runtime is SHA-256 verified after download and discarded on mismatch |
@@ -253,6 +257,8 @@ The launcher **uses the official DSH profile structure directly**. It does not i
 ---
 
 ## Running from Source
+
+Browser-based OAuth login requires the public `DSH_LAUNCHER_GITHUB_CLIENT_ID` build variable. The matching GitHub OAuth App or GitHub App must have Device Flow enabled. When it is absent, fine-grained token login remains available. Release builds read this value from the repository variable with the same name.
 
 ### Requirements
 

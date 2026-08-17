@@ -1,5 +1,5 @@
-import { ArrowLeft, ChevronRight, CircleStop, Download, KeyRound, Layers3, LoaderCircle, Play, Settings, X } from 'lucide-react'
-import type { CredentialStatus, RuntimeState } from '../types'
+import { ArrowLeft, ChevronRight, CircleStop, Download, GitFork, KeyRound, Layers3, LoaderCircle, Play, Settings, X } from 'lucide-react'
+import type { CredentialStatus, GitHubAuthStatus, RuntimeState } from '../types'
 
 /** 管理界面顶栏：品牌、当前配置与运行状态、全局动作。 */
 
@@ -10,8 +10,10 @@ interface AppHeaderProps {
   installingDsh: boolean
   profileName: string
   credentialStatus: CredentialStatus
+  githubAuthStatus: GitHubAuthStatus
   onBack: () => void
   onCredential: () => void
+  onGitHubAccount: () => void
   onSettings: () => void
   onToggleRuntime: () => void
   onClose: () => void
@@ -24,8 +26,10 @@ export function AppHeader({
   installingDsh,
   profileName,
   credentialStatus,
+  githubAuthStatus,
   onBack,
   onCredential,
+  onGitHubAccount,
   onSettings,
   onToggleRuntime,
   onClose,
@@ -50,6 +54,16 @@ export function AppHeader({
         <span>{runtime.running ? `运行中 · PID ${runtime.pid}` : dshInstalled ? '尚未启动' : '尚未安装'}</span>
       </div>
       <div className="header-actions">
+        <button
+          className={`github-account-button ${githubAuthStatus.authenticated ? 'configured' : ''}`}
+          type="button"
+          title={githubAuthStatus.authenticated ? `GitHub：${githubAuthStatus.login}` : '登录 GitHub'}
+          onClick={onGitHubAccount}
+        >
+          <GitFork size={17} />
+          <span>{githubAuthStatus.authenticated ? githubAuthStatus.login : 'GitHub'}</span>
+          <span className="credential-state">{githubAuthStatus.authenticated ? '已登录' : '未登录'}</span>
+        </button>
         <button
           className={`credential-button ${credentialStatus.configured ? 'configured' : ''}`}
           type="button"

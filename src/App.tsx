@@ -8,6 +8,7 @@ import { Toast } from './components/Toast'
 import { AiInstallDialog } from './components/dialogs/AiInstallDialog'
 import { ConfirmDialog } from './components/dialogs/ConfirmDialog'
 import { CredentialDialog } from './components/dialogs/CredentialDialog'
+import { GitHubAccountDialog } from './components/dialogs/GitHubAccountDialog'
 import { CreatePackDialog } from './components/dialogs/CreatePackDialog'
 import { PackInstallDialog } from './components/dialogs/PackInstallDialog'
 import { SettingsDialog } from './components/dialogs/SettingsDialog'
@@ -53,6 +54,7 @@ function LauncherShell() {
   // 对话框开关是纯展示状态，不进 store。
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [credentialOpen, setCredentialOpen] = useState(false)
+  const [githubAccountOpen, setGitHubAccountOpen] = useState(false)
   const [createPackOpen, setCreatePackOpen] = useState(false)
   const [confirmingRemoval, setConfirmingRemoval] = useState<ManagedPlugin | null>(null)
   // 仓库结构检测结果由各视图发起，App 统一持有，避免切页后丢失。
@@ -105,6 +107,8 @@ function LauncherShell() {
           busy={runtimeBusy}
           installingDsh={installingDsh}
           onCredential={() => setCredentialOpen(true)}
+          githubAuthStatus={store.githubAuthStatus}
+          onGitHubAccount={() => setGitHubAccountOpen(true)}
           onManage={navigation.showManager}
           onToggleRuntime={toggleRuntime}
           onUpdateDsh={() => { void store.updateDsh() }}
@@ -120,8 +124,10 @@ function LauncherShell() {
             installingDsh={installingDsh}
             profileName={settings.profileName}
             credentialStatus={store.credentialStatus}
+            githubAuthStatus={store.githubAuthStatus}
             onBack={navigation.showLauncher}
             onCredential={() => setCredentialOpen(true)}
+            onGitHubAccount={() => setGitHubAccountOpen(true)}
             onSettings={() => setSettingsOpen(true)}
             onToggleRuntime={toggleRuntime}
             onClose={closeWindow}
@@ -138,7 +144,9 @@ function LauncherShell() {
               {navigation.view === 'plugins' && (
                 <PluginsView
                   profile={profile}
+                  profileName={settings.profileName}
                   installedSkills={store.installedSkills}
+                  pluginTrials={store.pluginTrials}
                   selected={store.selected}
                   busy={store.busy}
                   onSelect={plugin => store.selectPlugin(plugin.packageName)}
@@ -150,6 +158,10 @@ function LauncherShell() {
                   onOpenPath={path => void api.openPath(path)}
                   onOpenRepository={url => void api.openExternal(url)}
                   onUninstall={setConfirmingRemoval}
+                  onTrialPlugin={(packageName, profileName) => { void store.trialPlugin(packageName, profileName) }}
+                  onAdaptPlugin={(packageName, profileName) => { void ai.adaptPlugin(packageName, profileName) }}
+                  aiActive={ai.active}
+                  aiSubject={ai.status.subject}
                 />
               )}
               {navigation.view === 'discover' && (
@@ -159,6 +171,7 @@ function LauncherShell() {
                   installProgress={store.installProgress}
                   installedRepositories={store.installedRepositories}
                   installedSkills={store.installedSkills}
+                  pluginTrials={store.pluginTrials}
                   onAnalysis={(repository, analysis) => {
                     setRepositoryAnalyses(current => ({ ...current, [repository]: analysis }))
                   }}
@@ -181,7 +194,10 @@ function LauncherShell() {
                   onError={message => store.showToast({ kind: 'error', message })}
                   onOpenRepository={url => void api.openExternal(url)}
                   onAiInstall={repo => { void ai.start(repo.fullName, repo.defaultBranch) }}
+                  onTrialPlugin={(packageName, profileName) => { void store.trialPlugin(packageName, profileName) }}
+                  onAdaptPlugin={(packageName, profileName) => { void ai.adaptPlugin(packageName, profileName) }}
                   aiRepository={ai.active ? ai.status.repository : null}
+                  aiSubject={ai.active ? ai.status.subject : null}
                   aiActive={ai.active}
                 />
               )}
@@ -195,6 +211,8 @@ function LauncherShell() {
                   onOpenHarness={openHarness}
                   onClearLogs={store.clearLogs}
                   onOpenSettings={() => setSettingsOpen(true)}
+                  onRepairRuntime={() => { void ai.repairRuntime(settings.profileName) }}
+                  aiActive={ai.active}
                 />
               )}
               {navigation.view === 'packs' && (
@@ -234,6 +252,14 @@ function LauncherShell() {
           onClose={() => setCredentialOpen(false)}
           onSave={async apiKey => { if (await store.saveApiKey(apiKey)) setCredentialOpen(false) }}
           onClear={async () => { if (await store.clearApiKey()) setCredentialOpen(false) }}
+        />
+      )}
+      {githubAccountOpen && (
+        <GitHubAccountDialog
+          status={store.githubAuthStatus}
+          onStatus={store.setGitHubAuthStatus}
+          onClose={() => setGitHubAccountOpen(false)}
+          onMessage={(kind, message) => store.showToast({ kind, message })}
         />
       )}
       {confirmingRemoval && (

@@ -8,10 +8,12 @@ import type {
   CredentialStatus,
   DshInstallationStatus,
   DshUpdateStatus,
+  GitHubAuthStatus,
   InstallProgress,
   InstalledSkill,
   ManagedPlugin,
   PackStatus,
+  PluginTrialResult,
   ProfileState,
   RepositoryInstallResult,
   RuntimeOutput,
@@ -29,6 +31,10 @@ import { useToast } from './use-toast'
 /** toggleRuntime 的结果，调用方据此决定是否切换到日志视图。 */
 export type RuntimeToggleResult = 'installed' | 'started' | 'stopped' | 'failed'
 
+export function pluginTrialStateKey(profileName: string, packageName: string): string {
+  return `${profileName}:${packageName}`
+}
+
 export function useLauncherStore() {
   const api = useLauncherApi()
   const { toast, showToast, dismissToast } = useToast()
@@ -40,9 +46,20 @@ export function useLauncherStore() {
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
   const [dshUpdate, setDshUpdate] = useState<DshUpdateStatus | null>(null)
   const [installProgress, setInstallProgress] = useState<InstallProgress | null>(null)
+  const [pluginTrials, setPluginTrials] = useState<Record<string, PluginTrialResult>>({})
   const [installedRepositories, setInstalledRepositories] = useState<Set<string>>(new Set())
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([])
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>({ configured: false })
+  const [githubAuthStatus, setGitHubAuthStatus] = useState<GitHubAuthStatus>({
+    authenticated: false,
+    login: null,
+    name: null,
+    avatarUrl: null,
+    scopes: [],
+    method: null,
+    oauthAvailable: false,
+    rateLimit: null,
+  })
   const [logs, setLogs] = useState<RuntimeOutput[]>([])
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null)
   const [packs, setPacks] = useState<PackStatus[]>([])
@@ -64,21 +81,25 @@ export function useLauncherStore() {
       api.readProfile(),
       api.getRuntimeState(),
       api.getDeepSeekCredentialStatus(),
+      api.getGitHubAuthStatus(),
       api.detectDshInstallation(),
       api.readInstalledSkills(),
       api.listPacks(),
       api.packHasSnapshot(),
+      api.readPluginTrials(),
     ])
-      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextDshInstallation, nextInstalledSkills, nextPacks, nextPackSnapshot]) => {
+      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextGitHubAuthStatus, nextDshInstallation, nextInstalledSkills, nextPacks, nextPackSnapshot, nextPluginTrials]) => {
         setSettings(nextSettings)
         setProfile(nextProfile)
         setRuntime(nextRuntime)
         setCredentialStatus(nextCredentialStatus)
+        setGitHubAuthStatus(nextGitHubAuthStatus)
         setDshInstallation(nextDshInstallation)
         setInstalledSkills(nextInstalledSkills)
         setSelectedPlugin(nextProfile.plugins[0]?.packageName ?? null)
         setPacks(nextPacks)
         setPackSnapshotsAvailable(nextPackSnapshot)
+        setPluginTrials(Object.fromEntries(nextPluginTrials.map(result => [pluginTrialStateKey(result.profileName, result.packageName), result])))
       })
       .catch(error => showToast({ kind: 'error', message: errorText(error) }))
       .finally(() => setLoading(false))
@@ -92,6 +113,9 @@ export function useLauncherStore() {
       api.onRuntimeOutput(output => setLogs(current => [...current.slice(-(MAX_LOG_LINES - 1)), output])),
       api.onRuntimeState(setRuntime),
       api.onInstallProgress(setInstallProgress),
+      api.onPluginTrialEvent(result => {
+        setPluginTrials(current => ({ ...current, [pluginTrialStateKey(result.profileName, result.packageName)]: result }))
+      }),
     ]
     return () => {
       disposed = true
@@ -122,6 +146,14 @@ export function useLauncherStore() {
   const applyCatalogPluginInstall = useCallback((repository: string, result: RepositoryInstallResult) => {
     applyInstallResult(result)
     setInstalledRepositories(current => new Set(current).add(repository.toLowerCase()))
+    if (result.packageName && result.installedProfileName) {
+      const key = pluginTrialStateKey(result.installedProfileName, result.packageName)
+      setPluginTrials(current => {
+        const next = { ...current }
+        delete next[key]
+        return next
+      })
+    }
   }, [applyInstallResult])
 
   const applyCatalogSkillInstall = useCallback((result: SkillInstallResult) => {
@@ -241,7 +273,26 @@ export function useLauncherStore() {
     if (!next) return
     setProfile(next)
     setSelectedPlugin(next.plugins[0]?.packageName ?? null)
-  }, [api, run])
+    if (settings) {
+      const key = pluginTrialStateKey(settings.profileName, plugin.packageName)
+      setPluginTrials(current => {
+        const updated = { ...current }
+        delete updated[key]
+        return updated
+      })
+    }
+  }, [api, run, settings])
+
+  const trialPlugin = useCallback(async (packageName: string, profileName?: string): Promise<PluginTrialResult | undefined> => {
+    const result = await run(`plugin-trial:${packageName}`, () => api.trialPlugin(packageName, profileName))
+    if (result) {
+      showToast({
+        kind: result.phase === 'passed' ? 'success' : 'error',
+        message: result.message,
+      })
+    }
+    return result
+  }, [api, run, showToast])
 
   // ===================== 整合包（Pack）管理 =====================
 
@@ -338,9 +389,11 @@ export function useLauncherStore() {
     dshInstallation,
     dshUpdate,
     installProgress,
+    pluginTrials,
     installedRepositories,
     installedSkills,
     credentialStatus,
+    githubAuthStatus,
     logs,
     selectedPlugin,
     selected: profile?.plugins.find(plugin => plugin.packageName === selectedPlugin) ?? null,
@@ -366,10 +419,12 @@ export function useLauncherStore() {
     saveSettings,
     saveApiKey,
     clearApiKey,
+    setGitHubAuthStatus,
     togglePlugin,
     toggleSkill,
     reorderPlugins,
     uninstallPlugin,
+    trialPlugin,
     refreshPacks,
     refreshPackSnapshots,
     activatePack,

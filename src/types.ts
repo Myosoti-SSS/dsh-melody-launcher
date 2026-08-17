@@ -8,11 +8,36 @@ export interface AppSettings {
   workspace: string
   launchExecutable: string
   launchArgs: string[]
+  webPort: number
   openAfterLaunch: boolean
 }
 
 export interface CredentialStatus {
   configured: boolean
+}
+
+export interface GitHubRateLimit {
+  limit: number
+  remaining: number
+  resetAt: string | null
+}
+
+export interface GitHubAuthStatus {
+  authenticated: boolean
+  login: string | null
+  name: string | null
+  avatarUrl: string | null
+  scopes: string[]
+  method: 'oauth' | 'token' | null
+  oauthAvailable: boolean
+  rateLimit: GitHubRateLimit | null
+}
+
+export interface GitHubDeviceAuthorization {
+  userCode: string
+  verificationUri: string
+  expiresAt: string
+  intervalSeconds: number
 }
 
 export interface ManagedPlugin {
@@ -204,6 +229,15 @@ export interface RuntimeState {
   pid: number | null
   startedAt: string | null
   url: string | null
+  port: number | null
+  /** 最近一次非正常退出，供界面显示 AI 修复入口。新一轮启动时清空。 */
+  lastFailure?: RuntimeFailure | null
+}
+
+export interface RuntimeFailure {
+  profileName: string
+  diagnostics: string
+  failedAt: string
 }
 
 export interface RuntimeOutput {
@@ -218,9 +252,26 @@ export type AiInstallPhase = 'idle' | 'preparing' | 'running' | 'done' | 'cancel
 export interface AiInstallStatus {
   phase: AiInstallPhase
   repository: string | null
+  taskKind: 'repository-install' | 'plugin-adaptation' | 'runtime-repair'
+  subject: string | null
   startedAt: string | null
   sessionId: string | null
   message: string
+}
+
+export type PluginTrialPhase = 'running' | 'passed' | 'failed'
+
+/** 插件隔离试运行的实时状态与最近结果。 */
+export interface PluginTrialResult {
+  packageName: string
+  profileName: string
+  phase: PluginTrialPhase
+  message: string
+  diagnostics: string
+  startedAt: string
+  testedAt: string | null
+  durationMs: number | null
+  url: string | null
 }
 
 /** 渲染层看到的待审批请求（args 已脱敏截断）。 */
@@ -352,6 +403,12 @@ export interface LauncherApi {
   getDeepSeekCredentialStatus(): Promise<CredentialStatus>
   setDeepSeekApiKey(apiKey: string): Promise<CredentialStatus>
   clearDeepSeekApiKey(): Promise<CredentialStatus>
+  getGitHubAuthStatus(): Promise<GitHubAuthStatus>
+  loginGitHubWithToken(token: string): Promise<GitHubAuthStatus>
+  beginGitHubDeviceLogin(): Promise<GitHubDeviceAuthorization>
+  completeGitHubDeviceLogin(): Promise<GitHubAuthStatus>
+  cancelGitHubDeviceLogin(): Promise<void>
+  logoutGitHub(): Promise<GitHubAuthStatus>
   chooseDirectory(kind: 'dshInstallPath' | 'dshHome' | 'workspace'): Promise<string | null>
   readProfile(): Promise<ProfileState>
   togglePlugin(packageName: string, enabled: boolean, profileName?: string): Promise<ProfileState>
@@ -361,6 +418,8 @@ export interface LauncherApi {
   importCatalogUrl(url: string): Promise<CatalogImportResult>
   installPlugin(request: string | PluginInstallRequest): Promise<RepositoryInstallResult>
   uninstallPlugin(packageName: string): Promise<ProfileState>
+  trialPlugin(packageName: string, profileName?: string): Promise<PluginTrialResult>
+  readPluginTrials(): Promise<PluginTrialResult[]>
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
   readInstalledSkills(): Promise<InstalledSkill[]>
   toggleSkill(name: string, enabled: boolean): Promise<InstalledSkill[]>
@@ -372,6 +431,8 @@ export interface LauncherApi {
   setWindowMode(mode: WindowMode): Promise<void>
   closeWindow(): Promise<void>
   aiInstall(input: { repository: string; defaultBranch: string }): Promise<AiInstallResult>
+  aiAdaptPlugin(input: { packageName: string; profileName?: string }): Promise<AiInstallResult>
+  aiRepairRuntime(): Promise<AiInstallResult>
   aiApprove(requestId: string, allow: boolean): Promise<boolean>
   aiCancel(): Promise<void>
   aiRollback(): Promise<{ restored: number; profileName: string }>
@@ -395,6 +456,7 @@ export interface LauncherApi {
   onRuntimeOutput(listener: (output: RuntimeOutput) => void): () => void
   onRuntimeState(listener: (state: RuntimeState) => void): () => void
   onInstallProgress(listener: (progress: InstallProgress) => void): () => void
+  onPluginTrialEvent(listener: (result: PluginTrialResult) => void): () => void
   onAiInstallEvent(listener: (event: AiInstallEvent) => void): () => void
 }
 

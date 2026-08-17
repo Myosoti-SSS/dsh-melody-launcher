@@ -68,6 +68,8 @@ jobs:
         run: npm test
 
       - name: 打包便携版
+        env:
+          DSH_LAUNCHER_GITHUB_CLIENT_ID: ${{ vars.DSH_LAUNCHER_GITHUB_CLIENT_ID }}
         run: npm run package:win
 
       - name: 确认产物存在

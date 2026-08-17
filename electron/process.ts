@@ -19,7 +19,7 @@ export function withExecutableDirectoryOnPath(
   executable: string,
   environment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
-  if (process.platform !== 'win32' || !path.isAbsolute(executable)) return environment
+  if (!path.isAbsolute(executable)) return environment
   const executableDirectory = path.dirname(executable)
   const pathKey = Object.keys(environment).find(key => key.toLowerCase() === 'path') ?? 'PATH'
   const currentPath = environment[pathKey] ?? ''

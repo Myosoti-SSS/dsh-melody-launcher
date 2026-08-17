@@ -16,6 +16,8 @@ export interface AiInstallLogEntry {
 const IDLE_STATUS: AiInstallStatus = {
   phase: 'idle',
   repository: null,
+  taskKind: 'repository-install',
+  subject: null,
   startedAt: null,
   sessionId: null,
   message: '',
@@ -105,21 +107,60 @@ export function useAiInstall(onSettled: () => void, showToast: (toast: ToastStat
     return unsubscribe
   }, [api, appendLog])
 
-  const start = useCallback(async (repository: string, defaultBranch: string): Promise<boolean> => {
+  const invokeTask = useCallback(async (
+    optimistic: AiInstallStatus,
+    invoke: () => Promise<{ ok: boolean; message: string }>,
+  ): Promise<boolean> => {
     setLogs([])
     setPendingApproval(null)
     setSnapshotId(null)
     setHasSnapshot(false)
     // 乐观打开对话框；真正的阶段变化由事件驱动。
-    setStatus({ phase: 'preparing', repository, startedAt: new Date().toISOString(), sessionId: null, message: '准备中…' })
-    const result = await api.aiInstall({ repository, defaultBranch })
-    if (!result.ok && statusRef.current.phase === 'preparing') {
-      // 前置失败（互斥 / 缺 Key / 未安装 DSH 等）：主进程只返回结果不推事件，这里补上展示。
-      setStatus(current => ({ ...current, phase: 'error', message: result.message }))
-      appendLog('error', result.message)
+    setStatus(optimistic)
+    try {
+      const result = await invoke()
+      if (!result.ok && statusRef.current.phase === 'preparing') {
+        setStatus(current => ({ ...current, phase: 'error', message: result.message }))
+        appendLog('error', result.message)
+      }
+      return result.ok
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setStatus(current => ({ ...current, phase: 'error', message }))
+      appendLog('error', message)
+      return false
     }
-    return result.ok
   }, [api, appendLog])
+
+  const start = useCallback((repository: string, defaultBranch: string): Promise<boolean> => invokeTask({
+    phase: 'preparing',
+    repository,
+    taskKind: 'repository-install',
+    subject: repository,
+    startedAt: new Date().toISOString(),
+    sessionId: null,
+    message: '准备中…',
+  }, () => api.aiInstall({ repository, defaultBranch })), [api, invokeTask])
+
+  const adaptPlugin = useCallback((packageName: string, profileName?: string): Promise<boolean> => invokeTask({
+    phase: 'preparing',
+    repository: null,
+    taskKind: 'plugin-adaptation',
+    subject: packageName,
+    startedAt: new Date().toISOString(),
+    sessionId: null,
+    message: '正在准备插件适配环境…',
+  }, () => api.aiAdaptPlugin({ packageName, profileName })), [api, invokeTask])
+
+  const repairRuntime = useCallback((profileName: string): Promise<boolean> => invokeTask({
+    phase: 'preparing',
+    repository: null,
+    taskKind: 'runtime-repair',
+    subject: profileName,
+    startedAt: new Date().toISOString(),
+    sessionId: null,
+    message: '正在准备启动修复环境…',
+  }, () => api.aiRepairRuntime()), [api, invokeTask])
 
   const approve = useCallback((requestId: string, allow: boolean) => {
     setPendingApproval(null)
@@ -157,6 +198,8 @@ export function useAiInstall(onSettled: () => void, showToast: (toast: ToastStat
     active,
     settled,
     start,
+    adaptPlugin,
+    repairRuntime,
     approve,
     cancel,
     rollback,

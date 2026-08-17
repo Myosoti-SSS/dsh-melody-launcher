@@ -1,5 +1,6 @@
+import { createServer } from 'node:net'
 import { describe, expect, it } from 'vitest'
-import { extractLocalUrl, runtimeEnvironment } from '../electron/runtime'
+import { extractLocalUrl, findAvailableWebPort, isDshWebLaunch, runtimeEnvironment, withDshWebPort } from '../electron/runtime'
 import type { AppSettings } from '../src/types'
 
 describe('extractLocalUrl', () => {
@@ -32,6 +33,7 @@ describe('runtimeEnvironment', () => {
     workspace: '/home/tester/Documents',
     launchExecutable: 'npx',
     launchArgs: ['web'],
+    webPort: 3080,
     openAfterLaunch: true,
   } satisfies AppSettings
 
@@ -44,5 +46,53 @@ describe('runtimeEnvironment', () => {
 
   it('overrides an inherited DSH_HOME', () => {
     expect(runtimeEnvironment(settings, { DSH_HOME: '/stale' }).DSH_HOME).toBe('/home/tester/.dsh')
+  })
+})
+
+describe('DSH Web 端口', () => {
+  it('识别直接调用和 npx 调用的 DSH Web 命令', () => {
+    expect(isDshWebLaunch('/opt/dsh/dsh', ['web'])).toBe(true)
+    expect(isDshWebLaunch('npx', ['--yes', '@deepseek-ai/dsh', 'web'])).toBe(true)
+    expect(isDshWebLaunch('node', ['./server.js'])).toBe(false)
+  })
+
+  it('替换旧端口参数并保留其他参数', () => {
+    expect(withDshWebPort('dsh.cmd', ['web', '--port', '4000', '--host', '127.0.0.1'], 3082)).toEqual([
+      'web', '--host', '127.0.0.1', '--port', '3082',
+    ])
+    expect(withDshWebPort('npx', ['--yes', '@deepseek-ai/dsh', 'web', '--port=4000'], 3083)).toEqual([
+      '--yes', '@deepseek-ai/dsh', 'web', '--port', '3083',
+    ])
+  })
+
+  it('首选端口占用时选择后续端口', async () => {
+    const checked: number[] = []
+    const selected = await findAvailableWebPort(3080, 10, async port => {
+      checked.push(port)
+      return port === 3082
+    })
+    expect(selected).toBe(3082)
+    expect(checked).toEqual([3080, 3081, 3082])
+  })
+
+  it('候选端口全部占用时返回 null', async () => {
+    await expect(findAvailableWebPort(3080, 3, async () => false)).resolves.toBeNull()
+  })
+
+  it('在本机真实端口被监听时跳过该端口', async () => {
+    const server = createServer()
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen({ host: '127.0.0.1', port: 0 }, () => resolve())
+    })
+    try {
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('未能取得测试端口。')
+      const selected = await findAvailableWebPort(address.port, 10)
+      expect(selected).not.toBeNull()
+      expect(selected).not.toBe(address.port)
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
   })
 })

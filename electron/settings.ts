@@ -36,8 +36,30 @@ export function defaultSettings(input: DefaultSettingsInput): AppSettings {
     workspace: input.documentsDirectory,
     launchExecutable: input.systemNpx ?? (platform === 'win32' ? 'npx.cmd' : 'npx'),
     launchArgs: ['--yes', DSH_PACKAGE_NAME, 'web'],
+    webPort: 3080,
     openAfterLaunch: true,
   }
+}
+
+function validWebPort(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 65535
+}
+
+/** 兼容曾经直接写在启动参数里的 --port。 */
+export function webPortFromLaunchArgs(args: unknown): number | null {
+  if (!Array.isArray(args)) return null
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index]
+    if (value === '--port') {
+      const parsed = Number(args[index + 1])
+      return validWebPort(parsed) ? parsed : null
+    }
+    if (typeof value === 'string' && value.startsWith('--port=')) {
+      const parsed = Number(value.slice('--port='.length))
+      return validWebPort(parsed) ? parsed : null
+    }
+  }
+  return null
 }
 
 /** 忽略平台差异的路径比较：Windows 下不区分大小写。 */
@@ -61,6 +83,7 @@ export function validateSettings(input: AppSettings): AppSettings {
   if (samePath(input.dshInstallPath, input.dshHome)) throw new Error('DSH 本体安装目录不能与 DSH_HOME 相同。')
   if (!input.launchExecutable.trim()) throw new Error('启动命令不能为空。')
   if (!Array.isArray(input.launchArgs) || input.launchArgs.some(value => typeof value !== 'string')) throw new Error('启动参数格式无效。')
+  if (!validWebPort(input.webPort)) throw new Error('Web 端口必须是 1 到 65535 之间的整数。')
   return {
     dshInstallPath: input.dshInstallPath,
     dshHome: input.dshHome,
@@ -68,6 +91,7 @@ export function validateSettings(input: AppSettings): AppSettings {
     workspace: input.workspace,
     launchExecutable: input.launchExecutable.trim(),
     launchArgs: input.launchArgs,
+    webPort: input.webPort,
     openAfterLaunch: Boolean(input.openAfterLaunch),
   }
 }
@@ -75,6 +99,9 @@ export function validateSettings(input: AppSettings): AppSettings {
 /** 把磁盘上的设置合并到默认值上，丢弃结构不对的字段。 */
 export function mergeStoredSettings(defaults: AppSettings, stored: Partial<AppSettings> | null): AppSettings {
   if (!stored || typeof stored !== 'object') return defaults
+  const storedPort = validWebPort(stored.webPort)
+    ? stored.webPort
+    : webPortFromLaunchArgs(stored.launchArgs) ?? defaults.webPort
   return {
     ...defaults,
     ...stored,
@@ -84,6 +111,7 @@ export function mergeStoredSettings(defaults: AppSettings, stored: Partial<AppSe
     launchArgs: Array.isArray(stored.launchArgs)
       ? stored.launchArgs.filter(value => typeof value === 'string')
       : defaults.launchArgs,
+    webPort: storedPort,
   }
 }
 

@@ -3,6 +3,7 @@ import {
   ArrowUp,
   BookOpenCheck,
   CircleAlert,
+  CircleCheck,
   Download,
   ExternalLink,
   Folder,
@@ -10,24 +11,28 @@ import {
   GripVertical,
   LoaderCircle,
   PackageCheck,
+  Play,
   RefreshCw,
   Search,
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  Wrench,
   X,
 } from 'lucide-react'
 import { useState } from 'react'
 import { PageHeading } from '../components/PageHeading'
 import { pluginInitial } from '../lib/format'
 import { movePackage, movePackageTo } from '../lib/profile-order'
-import type { InstalledSkill, ManagedPlugin, ProfileState } from '../types'
+import type { InstalledSkill, ManagedPlugin, PluginTrialResult, ProfileState } from '../types'
 
 /** 插件加载顺序页：列表、排序、启停与详情。 */
 
 interface PluginsViewProps {
   profile: ProfileState
+  profileName: string
   installedSkills: InstalledSkill[]
+  pluginTrials: Record<string, PluginTrialResult>
   selected: ManagedPlugin | null
   busy: string | null
   onSelect: (plugin: ManagedPlugin) => void
@@ -39,11 +44,17 @@ interface PluginsViewProps {
   onOpenPath: (path: string) => void
   onOpenRepository: (url: string) => void
   onUninstall: (plugin: ManagedPlugin) => void
+  onTrialPlugin: (packageName: string, profileName: string) => void
+  onAdaptPlugin: (packageName: string, profileName: string) => void
+  aiActive: boolean
+  aiSubject: string | null
 }
 
 export function PluginsView({
   profile,
+  profileName,
   installedSkills,
+  pluginTrials,
   selected,
   busy,
   onSelect,
@@ -55,6 +66,10 @@ export function PluginsView({
   onOpenPath,
   onOpenRepository,
   onUninstall,
+  onTrialPlugin,
+  onAdaptPlugin,
+  aiActive,
+  aiSubject,
 }: PluginsViewProps) {
   const [filter, setFilter] = useState('')
   const [dragged, setDragged] = useState<string | null>(null)
@@ -158,8 +173,15 @@ export function PluginsView({
           </section>
           <PluginDetails
             plugin={selected}
+            profileName={profileName}
+            trial={selected ? pluginTrials[`${profileName}:${selected.packageName}`] : undefined}
+            busy={Boolean(selected && busy === `plugin-trial:${selected.packageName}`)}
+            aiActive={aiActive}
+            adapting={Boolean(selected && aiActive && aiSubject === selected.packageName)}
             onOpenRepository={onOpenRepository}
             onUninstall={onUninstall}
+            onTrialPlugin={onTrialPlugin}
+            onAdaptPlugin={onAdaptPlugin}
           />
         </div>
       )}
@@ -261,10 +283,17 @@ function PluginRow({ plugin, selected, busy, dragging, canMoveUp, canMoveDown, o
   )
 }
 
-function PluginDetails({ plugin, onOpenRepository, onUninstall }: {
+function PluginDetails({ plugin, profileName, trial, busy, aiActive, adapting, onOpenRepository, onUninstall, onTrialPlugin, onAdaptPlugin }: {
   plugin: ManagedPlugin | null
+  profileName: string
+  trial?: PluginTrialResult
+  busy: boolean
+  aiActive: boolean
+  adapting: boolean
   onOpenRepository: (url: string) => void
   onUninstall: (plugin: ManagedPlugin) => void
+  onTrialPlugin: (packageName: string, profileName: string) => void
+  onAdaptPlugin: (packageName: string, profileName: string) => void
 }) {
   if (!plugin) return <aside className="plugin-details empty">选择一个插件查看详情</aside>
   return (
@@ -287,6 +316,37 @@ function PluginDetails({ plugin, onOpenRepository, onUninstall }: {
         <p>{plugin.enabled ? '本层会按当前优先级参与下一次 DSH 启动。' : '插件文件仍保留在本机，可随时重新启用。'}</p>
       </div>
       <div className="detail-actions">
+        {!plugin.builtin && (
+          <div className="detail-trial-actions">
+            <button
+              type="button"
+              className={`secondary-button full trial-button ${trial?.phase ?? ''}`}
+              disabled={busy || aiActive || trial?.phase === 'running'}
+              onClick={() => onTrialPlugin(plugin.packageName, profileName)}
+              title={trial?.message ?? '只加载 DSH Web 核心与当前插件进行隔离试运行'}
+            >
+              {busy || trial?.phase === 'running'
+                ? <LoaderCircle className="spin" size={16} />
+                : trial?.phase === 'passed'
+                  ? <CircleCheck size={16} />
+                  : trial?.phase === 'failed'
+                    ? <CircleAlert size={16} />
+                    : <Play size={16} />}
+              {trial?.phase === 'passed' ? '再次试运行' : trial?.phase === 'failed' ? '重新试运行' : trial?.phase === 'running' ? '试运行中' : '试运行'}
+            </button>
+            {trial?.phase === 'failed' && (
+              <button
+                type="button"
+                className="secondary-button accent full"
+                disabled={aiActive}
+                onClick={() => onAdaptPlugin(plugin.packageName, profileName)}
+              >
+                {adapting ? <LoaderCircle className="spin" size={16} /> : <Wrench size={16} />}
+                DSH 安装适配
+              </button>
+            )}
+          </div>
+        )}
         {plugin.repository && <button type="button" className="secondary-button full" onClick={() => onOpenRepository(plugin.repository!)}><FolderGit2 size={16} />查看仓库<ExternalLink size={14} /></button>}
         {!plugin.builtin && <button type="button" className="danger-button full" onClick={() => onUninstall(plugin)}><Trash2 size={16} />从此配置卸载</button>}
       </div>

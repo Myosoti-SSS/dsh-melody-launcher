@@ -45,6 +45,16 @@ export function AiInstallDialog({ status, logs, pendingApproval, hasSnapshot, bu
   const active = status.phase === 'preparing' || status.phase === 'running'
   const settled = status.phase === 'done' || status.phase === 'cancelled' || status.phase === 'error'
   const logEndRef = useRef<HTMLDivElement>(null)
+  const title = status.taskKind === 'plugin-adaptation'
+    ? 'DSH 安装适配'
+    : status.taskKind === 'runtime-repair'
+      ? 'DSH 启动修复'
+      : 'AI 尝试安装'
+  const activeDescription = status.taskKind === 'plugin-adaptation'
+    ? 'Flash 模型会分析隔离试运行日志并尝试做最小适配；只读操作自动放行，有副作用的动作会请求你批准。'
+    : status.taskKind === 'runtime-repair'
+      ? 'Flash 模型会分析最近一次启动日志并尝试修复当前 Profile；只读操作自动放行，有副作用的动作会请求你批准。'
+      : '让 DSH 的 AI 研究仓库并尝试安装：只读操作自动放行，有副作用的动作会请求你批准。'
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: 'end' })
@@ -58,7 +68,7 @@ export function AiInstallDialog({ status, logs, pendingApproval, hasSnapshot, bu
     <div className="modal-backdrop" role="presentation" onMouseDown={closeOnBackdrop}>
       <section className="modal ai-install-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-install-title">
         <header>
-          <div><Bot size={19} /><h2 id="ai-install-title">AI 尝试安装</h2></div>
+          <div><Bot size={19} /><h2 id="ai-install-title">{title}</h2></div>
           <div className="ai-header-actions">
             <span className={`ai-phase-badge ${status.phase}`}>{PHASE_LABEL[status.phase]}</span>
             <button type="button" className="icon-button" onClick={onClose} disabled={active || busy} aria-label="关闭 AI 安装">
@@ -68,8 +78,8 @@ export function AiInstallDialog({ status, logs, pendingApproval, hasSnapshot, bu
         </header>
         <div className="modal-content ai-install-content">
           <p className="ai-install-subject">
-            {status.repository ?? '—'}
-            {active && <small>让 DSH 的 AI 研究仓库并尝试安装：只读操作自动放行，有副作用的动作会请求你批准。</small>}
+            {status.subject ?? status.repository ?? '—'}
+            {active && <small>{activeDescription}</small>}
           </p>
           <div className="ai-install-logs" role="log" aria-live="polite">
             {logs.length === 0 ? (

@@ -12,6 +12,7 @@ import type { AiInstaller } from './ai-install'
 import { assertMeaningfulPackName } from './pack-manifest'
 import { MAX_RAW_ARCHIVE_BYTES } from './pack-scan'
 import type { PackManager } from './pack'
+import type { PluginTrialManager } from './plugin-trial'
 import {
   isSafePackageName,
   isSafeProfileName,
@@ -22,6 +23,7 @@ import {
 } from './profile'
 import type { RuntimeController } from './runtime'
 import type { SettingsStore } from './settings'
+import type { GitHubAuthService } from './github-auth'
 
 /**
  * 渲染层能触达主进程的全部入口。
@@ -32,14 +34,16 @@ export interface IpcDependencies {
   settings: SettingsStore
   runtime: RuntimeController
   installer: Installer
+  pluginTrial: PluginTrialManager
   aiInstaller: AiInstaller
   packManager: PackManager
+  githubAuth: GitHubAuthService
   getWindow: () => BrowserWindow | null
   setWindowMode: (mode: WindowMode) => void
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, runtime, installer, aiInstaller, packManager } = deps
+  const { settings, runtime, installer, pluginTrial, aiInstaller, packManager, githubAuth } = deps
 
   ipcMain.handle(IPC.settingsGet, () => settings.read())
   ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => settings.save(next))
@@ -59,6 +63,20 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     const current = await settings.read()
     return clearDeepSeekApiKey(current.dshHome)
   })
+
+  ipcMain.handle(IPC.githubAuthStatus, () => githubAuth.getStatus())
+  ipcMain.handle(IPC.githubAuthTokenLogin, (_event, token: string) => {
+    if (typeof token !== 'string') throw new Error('GitHub 访问令牌格式无效。')
+    return githubAuth.loginWithToken(token)
+  })
+  ipcMain.handle(IPC.githubAuthDeviceBegin, async () => {
+    const authorization = await githubAuth.beginDeviceLogin()
+    await shell.openExternal(authorization.verificationUri)
+    return authorization
+  })
+  ipcMain.handle(IPC.githubAuthDeviceComplete, () => githubAuth.completeDeviceLogin())
+  ipcMain.handle(IPC.githubAuthDeviceCancel, () => githubAuth.cancelDeviceLogin())
+  ipcMain.handle(IPC.githubAuthLogout, () => githubAuth.logout())
 
   ipcMain.handle(IPC.chooseDirectory, async (_event, kind: 'dshInstallPath' | 'dshHome' | 'workspace') => {
     const window = deps.getWindow()
@@ -94,7 +112,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     const sort: DiscoverySort = payload.sort === 'updated' ? 'updated' : 'stars'
     const page = Math.max(1, Math.floor(Number(payload.page) || 1))
     const [found, dshInstallation, installedRepositories, installedSkills] = await Promise.all([
-      searchCatalogRepositories(payload.query ?? '', sort, page),
+      searchCatalogRepositories(payload.query ?? '', sort, page, githubAuth.fetch),
       installer.detectDsh(),
       installer.listInstalledRepositories(),
       installer.readInstalledSkills(),
@@ -116,12 +134,15 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       throw new Error('请输入 GitHub 仓库链接。')
     }
     if (payload.url.length > 1000) throw new Error('GitHub 仓库链接过长。')
-    return importCatalogFromUrl(payload.url, (fullName, branch) =>
-      installer.analyzeCatalogRepository(fullName, branch),
+    return importCatalogFromUrl(
+      payload.url,
+      (fullName, branch) => installer.analyzeCatalogRepository(fullName, branch),
+      githubAuth.fetch,
     )
   })
   ipcMain.handle(IPC.pluginsInstall, async (_event, request: string | PluginInstallRequest) => {
     if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
     const fullName = typeof request === 'string' ? request : request.repository
     if (!isSafeRepositoryName(fullName)) throw new Error('GitHub 仓库名称无效。')
     if (typeof request === 'string') return installer.install(fullName)
@@ -133,11 +154,20 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
   ipcMain.handle(IPC.pluginsUninstall, async (_event, payload: string | { packageName: string; profileName?: string }) => {
     if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
     const packageName = typeof payload === 'string' ? payload : payload?.packageName
     if (!isSafePackageName(packageName)) throw new Error('插件名称无效。')
     const profileName = typeof payload === 'object' ? payload.profileName : undefined
     if (profileName !== undefined && !isSafeProfileName(profileName)) throw new Error('Profile 名称无效。')
     return installer.remove(packageName, profileName)
+  })
+  ipcMain.handle(IPC.pluginsTrialRead, () => pluginTrial.list())
+  ipcMain.handle(IPC.pluginsTrial, async (_event, payload: { packageName: string; profileName?: string }) => {
+    if (!payload || !isSafePackageName(payload.packageName)) throw new Error('插件名称无效。')
+    if (payload.profileName !== undefined && !isSafeProfileName(payload.profileName)) throw new Error('Profile 名称无效。')
+    if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    if (aiInstaller.isBusy()) throw new Error('AI 任务进行中')
+    return pluginTrial.trial(payload.packageName, payload.profileName)
   })
 
   ipcMain.handle(IPC.skillsInstall, async (_event, request: SkillInstallRequest) => {
@@ -157,12 +187,32 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.aiHasSnapshot, () => aiInstaller.hasSnapshot())
   ipcMain.handle(IPC.aiInstall, async (_event, input: { repository: string; defaultBranch: string }) => {
     if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
     if (!input || !isSafeRepositoryName(input.repository)) throw new Error('GitHub 仓库名称无效。')
     if (typeof input.defaultBranch !== 'string' || input.defaultBranch.length === 0 || input.defaultBranch.length > 200) {
       throw new Error('分支无效。')
     }
     // 主进程内 aiInstaller.start 会重算 analysis，不信任渲染层传入的分类。
     return aiInstaller.start({ repository: input.repository, defaultBranch: input.defaultBranch })
+  })
+  ipcMain.handle(IPC.aiAdaptPlugin, async (_event, input: { packageName: string; profileName?: string }) => {
+    if (!input || !isSafePackageName(input.packageName)) throw new Error('插件名称无效。')
+    if (input.profileName !== undefined && !isSafeProfileName(input.profileName)) throw new Error('Profile 名称无效。')
+    if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
+    const failure = await pluginTrial.latestFailure(input.packageName, input.profileName)
+    return aiInstaller.adaptPlugin({
+      packageName: failure.packageName,
+      profileName: failure.profileName,
+      diagnostics: failure.diagnostics,
+    })
+  })
+  ipcMain.handle(IPC.aiRepairRuntime, async () => {
+    if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
+    const failure = runtime.failure()
+    if (!failure) throw new Error('没有找到最近一次 DSH 启动失败诊断。')
+    return aiInstaller.repairRuntime(failure)
   })
   ipcMain.handle(IPC.aiApprove, async (_event, requestId: string, allow: boolean) => {
     if (typeof requestId !== 'string' || requestId.length === 0) throw new Error('审批请求无效。')
@@ -276,7 +326,11 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
 
   ipcMain.handle(IPC.runtimeState, () => runtime.state())
-  ipcMain.handle(IPC.runtimeStart, () => runtime.start())
+  ipcMain.handle(IPC.runtimeStart, () => {
+    if (pluginTrial.isBusy()) throw new Error('请先等待插件试运行结束。')
+    if (aiInstaller.isBusy()) throw new Error('请先等待 AI 任务结束。')
+    return runtime.start()
+  })
   ipcMain.handle(IPC.runtimeStop, () => runtime.stop())
 
   ipcMain.handle(IPC.windowSetMode, (_event, mode: WindowMode) => {

@@ -67,6 +67,7 @@ beforeEach(async () => {
     workspace: path.join(temporaryDirectory, 'workspace'),
     launchExecutable: 'npx',
     launchArgs: ['--yes', '@deepseek-ai/dsh', 'web'],
+    webPort: 3080,
     openAfterLaunch: true,
   }
   vi.resetAllMocks()
@@ -89,6 +90,10 @@ function createTestInstaller() {
     readSettings: async () => settings,
     saveSettings: async next => next,
     prepareNodeRuntime: async () => nodeRuntime,
+    preparePnpmRuntime: async () => ({
+      root: path.join(temporaryDirectory, 'pnpm-runtime'),
+      executable: path.join(temporaryDirectory, 'pnpm-runtime', 'node_modules', '.bin', process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'),
+    }),
     pluginSourceRoot: path.join(temporaryDirectory, 'plugin-source'),
     pluginReceiptsPath: path.join(temporaryDirectory, 'receipts.json'),
     skillSourceRoot: path.join(temporaryDirectory, 'skill-source'),

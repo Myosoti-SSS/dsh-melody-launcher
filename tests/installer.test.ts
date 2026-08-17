@@ -37,6 +37,7 @@ const onDemand: AppSettings = {
   workspace: '/home/tester/Documents',
   launchExecutable: 'npx',
   launchArgs: ['--yes', '@deepseek-ai/dsh', 'web'],
+  webPort: 3080,
   openAfterLaunch: true,
 }
 
@@ -111,6 +112,7 @@ beforeEach(async () => {
     workspace: path.join(temporaryDirectory, 'workspace'),
     launchExecutable: 'npx',
     launchArgs: ['--yes', '@deepseek-ai/dsh', 'web'],
+    webPort: 3080,
     openAfterLaunch: true,
   }
   vi.resetAllMocks()
@@ -129,10 +131,18 @@ function createTestInstaller() {
     npx: path.join(temporaryDirectory, 'node', process.platform === 'win32' ? 'npx.cmd' : 'npx'),
     managed: true,
   }
+  const pnpmExecutable = path.join(
+    temporaryDirectory,
+    'pnpm-runtime',
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
+  )
   const installer = createInstaller({
     readSettings: async () => settings,
     saveSettings: async next => next,
     prepareNodeRuntime: async () => nodeRuntime,
+    preparePnpmRuntime: async () => ({ root: path.join(temporaryDirectory, 'pnpm-runtime'), executable: pnpmExecutable }),
     pluginSourceRoot: path.join(temporaryDirectory, 'plugin-source'),
     pluginReceiptsPath: path.join(temporaryDirectory, 'receipts.json'),
     skillSourceRoot: path.join(temporaryDirectory, 'skill-source'),
@@ -144,7 +154,7 @@ function createTestInstaller() {
       return { exitCode: 0, output: '' }
     },
   })
-  return { installer, calls, settings }
+  return { installer, calls, settings, pnpmExecutable }
 }
 
 function profileState(profileName: string, packageName: string): ProfileState {
@@ -230,7 +240,7 @@ describe('installPluginTarget with local-directory source', () => {
     })
     vi.mocked(readProfile).mockResolvedValue(profileState('tui', 'demo-plugin'))
 
-    const { installer, calls } = createTestInstaller()
+    const { installer, calls, pnpmExecutable } = createTestInstaller()
     const result = await installer.installPluginTarget(
       { repository: 'demo/plugin', defaultBranch: 'main', targetId: 'demo-plugin:.' },
       'tui',
@@ -245,6 +255,8 @@ describe('installPluginTarget with local-directory source', () => {
     ])
     // 平台感知：Windows 上 node 运行时会落到 npx.cmd，POSIX 上为 npx。
     expect(path.basename(addCall!.executable).toLowerCase()).toBe(process.platform === 'win32' ? 'npx.cmd' : 'npx')
+    const pathKey = Object.keys(addCall!.options.env).find(key => key.toLowerCase() === 'path') ?? 'PATH'
+    expect(addCall!.options.env[pathKey]?.split(path.delimiter)).toContain(path.dirname(pnpmExecutable))
     expect(recordPluginInstall).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ packageName: 'demo-plugin', profileName: 'tui', source: 'local-directory' }),

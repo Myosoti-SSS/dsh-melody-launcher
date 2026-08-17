@@ -78,6 +78,7 @@
 
 - **零依赖首次部署** —— 未检测到本地 DSH 时，首页主按钮自动切换为「下载安装 DSH」，一键完成部署
 - **自动准备 Node.js** —— 系统没有 Node.js 也能用：自动从 Node.js 官网下载便携运行时，SHA-256 校验，支持断点续传
+- **自动准备 pnpm** —— 首次管理插件时安装启动器专用的 pnpm，不依赖系统全局命令，并统一提供给普通安装、整合包与 AI 尝试模式
 - **多路径 DSH 检测** —— 依次检查启动器运行目录、当前启动配置、`PATH`、`%APPDATA%\npm` 和系统 Node.js 目录
 - **进程生命周期管理** —— 启动、停止、实时日志（stdout/stderr 分级），退出启动器时自动收尾 DSH 进程
 - **自动打开网页** —— 从日志中识别本地服务地址并自动在浏览器打开（可关闭）
@@ -97,6 +98,7 @@
 ### 界面与配置
 
 - **双尺寸窗口** —— 无边框设计，启动模式（900×560）与管理模式（1380×860）自由切换
+- **GitHub 账号登录** —— 支持 OAuth Device Flow 与 Fine-grained Token，凭据使用 Electron 安全存储加密；市场搜索、仓库检测、下载与更新检查统一携带认证
 - **API Key 管理** —— 在软件内配置或清除 DeepSeek API Key
 - **完整运行配置** —— `DSH_HOME`、Profile 名称、工作目录、启动命令与参数，均可在界面调整
 - **便携版** —— 启动器自身无需安装，单文件 exe
@@ -224,6 +226,7 @@ deepseek-ai/deepseek-harness
 | 启动器设置 | `%APPDATA%\dsh-launcher\settings.json` |
 | 本地 DSH 运行目录 | `%APPDATA%\dsh-launcher\dsh-runtime\` |
 | Node.js 便携运行时 | `%APPDATA%\dsh-launcher\node-runtime\` |
+| GitHub 登录会话（加密） | `%APPDATA%\dsh-launcher\github-auth.bin` |
 | DSH 凭据 | `$DSH_HOME\.credentials.yaml` |
 | DSH Profile 清单 | `$DSH_HOME\profiles\<profile>\package.json` |
 
@@ -248,6 +251,7 @@ deepseek-ai/deepseek-harness
 | **渲染进程隔离** | `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true` |
 | **受控 IPC 面** | 渲染层只能通过 `contextBridge` 暴露的固定接口与主进程通信，无法直接访问 Node API |
 | **凭据文件权限** | `.credentials.yaml` 以 `0600` 写入，目录 `0700`；先写临时文件再原子重命名，避免写坏原文件 |
+| **GitHub 凭据加密** | GitHub Token / OAuth 会话通过 Electron `safeStorage` 调用系统凭据保护能力加密，渲染层无法读取明文 |
 | **外链白名单** | `shell.openExternal` 只允许 `http:` / `https:` 协议 |
 | **输入校验** | 包名、Profile 名、GitHub 仓库名在进入主进程逻辑前统一校验；目录参数必须是绝对路径 |
 | **下载完整性** | Node.js 运行时下载后强制 SHA-256 校验，不匹配即丢弃 |
@@ -257,6 +261,8 @@ deepseek-ai/deepseek-harness
 ## 从源码运行
 
 ### 环境要求
+
+浏览器 OAuth 登录需要给构建过程设置公开的 `DSH_LAUNCHER_GITHUB_CLIENT_ID`。对应 GitHub OAuth App / GitHub App 必须启用 Device Flow；未配置时仍可在界面使用 Fine-grained Token 登录。Client ID 不是密钥，Release 工作流从同名 GitHub Actions Repository Variable 注入。
 
 - **Node.js ≥ 20**
 - Windows（打包便携版需要；开发调试可跨平台，但 Node 便携运行时相关功能仅 Windows 生效）

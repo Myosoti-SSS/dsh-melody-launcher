@@ -16,6 +16,7 @@ const baseSettings: AppSettings = {
   workspace: '/home/tester/Documents',
   launchExecutable: 'npx',
   launchArgs: ['--yes', '@deepseek-ai/dsh', 'web'],
+  webPort: 3080,
   openAfterLaunch: true,
 }
 
@@ -38,6 +39,7 @@ describe('defaultSettings', () => {
     })
     expect(settings.dshHome).toBe('/home/tester/.dsh')
     expect(settings.launchExecutable).toBe('npx')
+    expect(settings.webPort).toBe(3080)
   })
 
   it('uses the detected system npx when available', () => {
@@ -93,6 +95,12 @@ describe('validateSettings', () => {
     expect(() => validateSettings({ ...baseSettings, launchArgs: ['web', 42 as unknown as string] })).toThrow(/启动参数/)
   })
 
+  it('rejects an invalid Web port', () => {
+    expect(() => validateSettings({ ...baseSettings, webPort: 0 })).toThrow(/Web 端口/)
+    expect(() => validateSettings({ ...baseSettings, webPort: 65536 })).toThrow(/Web 端口/)
+    expect(() => validateSettings({ ...baseSettings, webPort: 3080.5 })).toThrow(/Web 端口/)
+  })
+
   it('coerces openAfterLaunch to a boolean', () => {
     expect(validateSettings({ ...baseSettings, openAfterLaunch: 1 as unknown as boolean }).openAfterLaunch).toBe(true)
   })
@@ -119,6 +127,13 @@ describe('mergeStoredSettings', () => {
   it('falls back to the default arguments when the stored value is not an array', () => {
     const merged = mergeStoredSettings(baseSettings, { launchArgs: 'web' as unknown as string[] })
     expect(merged.launchArgs).toEqual(baseSettings.launchArgs)
+  })
+
+  it('migrates a legacy --port launch argument into the Web port setting', () => {
+    const merged = mergeStoredSettings(baseSettings, {
+      launchArgs: ['--yes', '@deepseek-ai/dsh', 'web', '--port', '4090'],
+    })
+    expect(merged.webPort).toBe(4090)
   })
 })
 

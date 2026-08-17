@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
-import { ensureNodeRuntime, NODE_RUNTIME_VERSION } from '../electron/node-runtime'
+import { ensureNodeRuntime, ensurePnpmRuntime, NODE_RUNTIME_VERSION, PNPM_VERSION } from '../electron/node-runtime'
 import { spawnCommand } from '../electron/process'
 
 const execFileAsync = promisify(execFile)
@@ -35,13 +35,16 @@ integrationTest('downloads and runs the official portable Node.js runtime withou
     process.env.ProgramFiles = path.join(temporaryDirectory, 'missing-program-files')
     const runtime = await ensureNodeRuntime(temporaryDirectory, update => progress.push(update.percent))
     const result = await execFileAsync(runtime.node, ['--version'], { windowsHide: true })
-    const runtimeEnvironment = { ...process.env, PATH: `${runtime.root}${path.delimiter}${process.env.PATH}` }
+    const runtimeEnvironment = { ...process.env, PATH: `${path.dirname(runtime.node)}${path.delimiter}${process.env.PATH}` }
     const npmVersion = await runBatch(runtime.npm, ['--version'], temporaryDirectory, runtimeEnvironment)
     const npxVersion = await runBatch(runtime.npx, ['--version'], temporaryDirectory, runtimeEnvironment)
+    const pnpmRuntime = await ensurePnpmRuntime(path.join(temporaryDirectory, 'pnpm-runtime'), runtime)
+    const pnpmVersion = await runBatch(pnpmRuntime.executable, ['--version'], temporaryDirectory, runtimeEnvironment)
     expect(runtime.managed).toBe(true)
     expect(result.stdout.trim()).toBe(NODE_RUNTIME_VERSION)
     expect(npmVersion).toMatch(/^\d+\.\d+\.\d+$/)
     expect(npxVersion).toBe(npmVersion)
+    expect(pnpmVersion).toBe(PNPM_VERSION)
     expect(progress.at(-1)).toBe(100)
   } finally {
     process.env.PATH = originalPath

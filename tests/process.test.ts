@@ -21,13 +21,15 @@ describe('Windows batch command launching', () => {
       .toBe('""C:\\Program Files\\nodejs\\npx.cmd" "hello world" "a&b""')
   })
 
-  it.skipIf(process.platform !== 'win32')('adds the executable directory to PATH once', () => {
-    const executable = 'C:\\Program Files\\nodejs\\npx.cmd'
-    const first = withExecutableDirectoryOnPath(executable, { Path: 'C:\\Windows\\System32' })
+  it('adds an absolute executable directory to PATH once', () => {
+    const executableDirectory = path.resolve(temporaryDirectory || os.tmpdir(), 'runtime with spaces')
+    const executable = path.join(executableDirectory, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')
+    const systemDirectory = path.resolve(temporaryDirectory || os.tmpdir(), 'system-bin')
+    const first = withExecutableDirectoryOnPath(executable, { PATH: systemDirectory })
     const second = withExecutableDirectoryOnPath(executable, first)
 
-    expect(first.Path).toBe('C:\\Program Files\\nodejs;C:\\Windows\\System32')
-    expect(second.Path).toBe(first.Path)
+    expect(first.PATH).toBe(`${executableDirectory}${path.delimiter}${systemDirectory}`)
+    expect(second.PATH).toBe(first.PATH)
   })
 
   it.skipIf(process.platform !== 'win32')('runs a batch file from a spaced path without losing arguments', async () => {
