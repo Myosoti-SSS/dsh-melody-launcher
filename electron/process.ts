@@ -1,5 +1,20 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import path from 'node:path'
+
+export interface SpawnedProcessTracker {
+  track(child: ChildProcess): void
+}
+
+let processTracker: SpawnedProcessTracker | null = null
+
+export function configureProcessTracker(tracker: SpawnedProcessTracker | null): void {
+  processTracker = tracker
+}
+
+export function trackSpawnedProcess<T extends ChildProcess>(child: T): T {
+  processTracker?.track(child)
+  return child
+}
 
 interface SpawnCommandOptions {
   cwd: string
@@ -42,7 +57,7 @@ export function spawnCommand(
   const isWindowsBatch = process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(executable)
   if (isWindowsBatch) {
     const commandInterpreter = environment.ComSpec || process.env.ComSpec || 'cmd.exe'
-    return spawn(commandInterpreter, [
+    return trackSpawnedProcess(spawn(commandInterpreter, [
       '/d',
       '/s',
       '/v:off',
@@ -54,13 +69,14 @@ export function spawnCommand(
       windowsHide: true,
       windowsVerbatimArguments: true,
       stdio: ['pipe', 'pipe', 'pipe'],
-    })
+    }))
   }
 
-  return spawn(executable, args, {
+  return trackSpawnedProcess(spawn(executable, args, {
     ...options,
     env: environment,
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
-  })
+    detached: process.platform !== 'win32',
+  }))
 }

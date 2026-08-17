@@ -2,9 +2,9 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createApplicationAddonManager } from '../electron/application-addons'
-import { APPLICATION_MANIFEST_PATH, DSH_DESKTOP_REPOSITORY } from '../electron/application-catalog'
+import { APPLICATION_MANIFEST_PATH } from '../electron/application-catalog'
 import type { CommandOptions } from '../electron/command'
 import type { NodeRuntime, PnpmRuntime } from '../electron/node-runtime'
 import type { AppSettings, InstalledApplicationAddon } from '../src/types'
@@ -15,6 +15,7 @@ let installRoot = ''
 let settings: AppSettings
 let nodeRuntime: NodeRuntime
 let pnpmRuntime: PnpmRuntime
+const applicationRepository = 'demo/desktop-host'
 
 beforeEach(async () => {
   temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'dsh-application-addons-'))
@@ -71,9 +72,37 @@ async function writePackageAt(packageRoot: string, packageName: string, bin: str
   await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
     name: packageName,
     version: '2.0.0',
-    bin: { [packageName]: bin, 'dsh-plugin-desktop': bin, 'demo-host': bin },
+    bin: { [packageName]: bin },
   }), 'utf8')
   await writeFile(path.join(packageRoot, bin), 'console.log("started")\n', 'utf8')
+}
+
+function applicationFetch(): typeof fetch {
+  const commit = 'c'.repeat(40)
+  return (async (input: string | URL | Request) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+    if (url.includes('/commits/')) return new Response(JSON.stringify({ sha: commit }), { status: 200 })
+    if (url.includes(`/${commit}/${APPLICATION_MANIFEST_PATH}`)) {
+      return new Response(JSON.stringify({
+        schemaVersion: 1,
+        id: 'demo-host',
+        name: 'Demo Host',
+        type: 'application',
+        launchMode: 'runtime-replacement',
+        install: { provider: 'npm', package: 'demo-host' },
+        launch: { bin: 'demo-host' },
+      }), { status: 200 })
+    }
+    if (url === 'https://registry.npmjs.org/demo-host/latest') {
+      return new Response(JSON.stringify({
+        name: 'demo-host',
+        version: '2.0.0',
+        repository: `https://github.com/${applicationRepository}`,
+        bin: { 'demo-host': 'dist/main.js' },
+      }), { status: 200 })
+    }
+    return new Response('{}', { status: 404 })
+  }) as typeof fetch
 }
 
 function installedAddon(id: string, launchMode: InstalledApplicationAddon['launchMode'], enabled: boolean): InstalledApplicationAddon {
@@ -100,9 +129,10 @@ function installedAddon(id: string, launchMode: InstalledApplicationAddon['launc
 }
 
 describe('application addon manager', () => {
-  it('installs DSH Desktop in isolation and returns a replacement launch plan', async () => {
+  it('installs a generic application addon in isolation and returns a replacement launch plan', async () => {
     const calls: Array<{ executable: string; args: string[] }> = []
     const addons = manager({
+      githubFetch: applicationFetch(),
       runCommand: async (executable, args) => {
         calls.push({ executable, args })
         const runtimePath = args[1]
@@ -110,26 +140,27 @@ describe('application addon manager', () => {
           runtimePath,
           'node_modules',
           '.pnpm',
-          'dsh-plugin-desktop@2.0.0',
+          'demo-host@2.0.0',
           'node_modules',
-          'dsh-plugin-desktop',
+          'demo-host',
         )
-        await writePackageAt(packageRoot, 'dsh-plugin-desktop', 'dist/main.js')
-        const linkedPackage = path.join(runtimePath, 'node_modules', 'dsh-plugin-desktop')
+        await writePackageAt(packageRoot, 'demo-host', 'dist/main.js')
+        const linkedPackage = path.join(runtimePath, 'node_modules', 'demo-host')
         await symlink(packageRoot, linkedPackage, process.platform === 'win32' ? 'junction' : 'dir')
         return { exitCode: 0, output: '' }
       },
     })
 
     const result = await addons.install({
-      repository: DSH_DESKTOP_REPOSITORY,
+      repository: applicationRepository,
       defaultBranch: 'main',
-      targetId: 'dsh-desktop:.',
+      targetId: 'demo-host:.',
     })
 
     expect(calls[0].args).toContain('--ignore-scripts')
+    expect(calls[0].args).toContain('demo-host@2.0.0')
     expect(result.installedAddon).toMatchObject({
-      id: 'dsh-desktop',
+      id: 'demo-host',
       launchMode: 'runtime-replacement',
       enabled: true,
       version: '2.0.0',
@@ -140,7 +171,7 @@ describe('application addon manager', () => {
     expect((await addons.list())).toHaveLength(1)
     await expect(addons.launchPlan()).resolves.toMatchObject({
       replacement: {
-        id: 'dsh-desktop',
+        id: 'demo-host',
         executable: nodeRuntime.node,
         args: [result.installedAddon.entryPath],
       },
@@ -171,7 +202,7 @@ describe('application addon manager', () => {
           name: 'Demo Host',
           type: 'application',
           launchMode: 'standalone',
-          install: { provider: 'npm', package: 'demo-host' },
+          install: { provider: 'npm', package: 'demo-host', version: '1.0.0' },
           launch: { bin: 'demo-host' },
         }), { status: 200 })
       }
@@ -215,9 +246,9 @@ describe('application addon manager', () => {
 
   it('blocks state changes while the DSH runtime is active', async () => {
     await expect(manager({ running: true }).install({
-      repository: DSH_DESKTOP_REPOSITORY,
+      repository: applicationRepository,
       defaultBranch: 'main',
-      targetId: 'dsh-desktop:.',
+      targetId: 'demo-host:.',
     })).rejects.toThrow(/请先停止 DSH/)
   })
 })

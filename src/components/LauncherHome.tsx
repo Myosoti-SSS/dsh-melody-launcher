@@ -92,7 +92,7 @@ export function LauncherHome({
             </button>
             <button type="button" className="launcher-utility-button" onClick={onManage} disabled={busy}><Settings size={17} /><span>管理</span></button>
             <div className="launcher-utility-pair">
-              <button type="button" className="launcher-utility-button" onClick={onCredential} disabled={busy} title="配置 DeepSeek API Key"><KeyRound size={17} /><span>API Key</span></button>
+              <button type="button" className="launcher-utility-button" onClick={onCredential} disabled={busy} title="配置 DeepSeek 与自定义模型 API"><KeyRound size={17} /><span>API 配置</span></button>
               <button type="button" className={`launcher-utility-button ${githubAuthStatus.authenticated ? 'configured' : ''}`} onClick={onGitHubAccount} disabled={busy} title={githubAuthStatus.authenticated ? `GitHub：${githubAuthStatus.login}` : '登录 GitHub'}><GitFork size={17} /><span>{githubAuthStatus.authenticated ? githubAuthStatus.login : 'GitHub'}</span></button>
             </div>
           </div>

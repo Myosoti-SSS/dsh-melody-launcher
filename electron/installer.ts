@@ -5,6 +5,7 @@ import { DEFAULT_PROFILE_NAME, DSH_PACKAGE_NAME } from '../src/constants'
 import type {
   ApplicationRepositoryAnalysis,
   AppSettings,
+  CatalogAnalysisProgress,
   CatalogRepositoryAnalysis,
   DshInstallationStatus,
   DshUpdateStatus,
@@ -21,7 +22,7 @@ import type {
 } from '../src/types'
 import { analyzeApplicationRepository } from './application-catalog'
 import { runCommand, type CommandOptions, type CommandResult, type OutputLevel } from './command'
-import { classifyCatalogRepository } from './catalog-analysis'
+import { analyzeCatalogWithProgress } from './catalog-analysis'
 import {
   findInstalledDsh,
   getManagedDshStatus,
@@ -136,7 +137,11 @@ export interface Installer {
   /** 检测一个独立应用仓库，返回可安装应用加载项。 */
   analyzeApplication(fullName: string, defaultBranch: string): Promise<ApplicationRepositoryAnalysis>
   /** 同时检测 Plugin、Skill 与应用加载项，返回统一资源市场分类。 */
-  analyzeCatalogRepository(fullName: string, defaultBranch: string): Promise<CatalogRepositoryAnalysis>
+  analyzeCatalogRepository(
+    fullName: string,
+    defaultBranch: string,
+    onProgress?: (progress: CatalogAnalysisProgress) => void,
+  ): Promise<CatalogRepositoryAnalysis>
   /** 安装一个 Skill。 */
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
   /** 读取已安装的 Skill 列表。 */
@@ -228,21 +233,18 @@ export function createInstaller(options: InstallerOptions): Installer {
   const analyzeCatalogRepository = async (
     fullName: string,
     defaultBranch: string,
+    onProgress?: (progress: CatalogAnalysisProgress) => void,
   ): Promise<CatalogRepositoryAnalysis> => {
-    if (isDshRepository(fullName)) return classifyCatalogRepository(
+    return analyzeCatalogWithProgress(
       fullName,
       defaultBranch,
-      { status: 'rejected', reason: new Error('skipped') },
-      { status: 'rejected', reason: new Error('skipped') },
-      { status: 'rejected', reason: new Error('skipped') },
+      {
+        plugin: () => analyzePlugin(fullName, defaultBranch),
+        skill: () => analyzeSkill(fullName, defaultBranch),
+        application: () => analyzeApplication(fullName, defaultBranch),
+      },
+      onProgress,
     )
-
-    const [pluginResult, skillResult, applicationResult] = await Promise.allSettled([
-      analyzePlugin(fullName, defaultBranch),
-      analyzeSkill(fullName, defaultBranch),
-      analyzeApplication(fullName, defaultBranch),
-    ])
-    return classifyCatalogRepository(fullName, defaultBranch, pluginResult, skillResult, applicationResult)
   }
 
   /** 准备 Node.js，同时把下载进度折算进当前安装任务的进度条。 */

@@ -1,12 +1,12 @@
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { IPC } from '../src/constants'
-import type { ApplicationInstallRequest, AppSettings, PackCreateRequest, PluginInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
-import { DSH_DESKTOP_PACKAGE } from './application-catalog'
+import { IPC, IPC_EVENTS } from '../src/constants'
+import type { ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
 import type { ApplicationAddonManager } from './application-addons'
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
+import { listCustomApiProviders, removeCustomApiProvider, saveCustomApiProvider } from './custom-api'
 import { searchCatalogRepositories, type DiscoverySort } from './discovery'
 import { importCatalogFromUrl } from './github-import'
 import type { Installer } from './installer'
@@ -26,6 +26,7 @@ import {
 import type { RuntimeController } from './runtime'
 import type { SettingsStore } from './settings'
 import type { GitHubAuthService } from './github-auth'
+import { createLinkedComponentController } from './linked-components'
 
 /**
  * 渲染层能触达主进程的全部入口。
@@ -47,6 +48,13 @@ export interface IpcDependencies {
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
   const { settings, runtime, installer, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons } = deps
+  const linkedComponents = createLinkedComponentController({
+    readSettings: () => settings.read(),
+    readProfile,
+    togglePlugin,
+    applications: applicationAddons,
+    isRuntimeRunning: () => runtime.isRunning(),
+  })
 
   ipcMain.handle(IPC.settingsGet, () => settings.read())
   ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => settings.save(next))
@@ -65,6 +73,19 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.credentialClear, async () => {
     const current = await settings.read()
     return clearDeepSeekApiKey(current.dshHome)
+  })
+  ipcMain.handle(IPC.customApiList, async () => {
+    const current = await settings.read()
+    return listCustomApiProviders(current.dshHome)
+  })
+  ipcMain.handle(IPC.customApiSave, async (_event, input: CustomApiProviderInput) => {
+    const current = await settings.read()
+    return saveCustomApiProvider(current.dshHome, input)
+  })
+  ipcMain.handle(IPC.customApiRemove, async (_event, route: string) => {
+    if (typeof route !== 'string') throw new Error('自定义 API 路由格式无效。')
+    const current = await settings.read()
+    return removeCustomApiProvider(current.dshHome, route)
   })
 
   ipcMain.handle(IPC.githubAuthStatus, () => githubAuth.getStatus())
@@ -100,8 +121,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.profileToggle, async (_event, payload: { packageName: string; enabled: boolean; profileName?: string }) => {
     if (!isSafePackageName(payload.packageName)) throw new Error('插件名称无效。')
     if (payload.profileName !== undefined && !isSafeProfileName(payload.profileName)) throw new Error('Profile 名称无效。')
-    const current = await settings.read()
-    return togglePlugin(current.dshHome, payload.profileName ?? current.profileName, payload.packageName, Boolean(payload.enabled))
+    return linkedComponents.togglePlugin(payload.packageName, Boolean(payload.enabled), payload.profileName)
   })
   ipcMain.handle(IPC.profileReorder, async (_event, packageNames: string[]) => {
     if (!Array.isArray(packageNames) || packageNames.some(name => !isSafePackageName(name))) {
@@ -129,19 +149,23 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       installedApplications,
     }
   })
-  ipcMain.handle(IPC.catalogAnalyze, async (_event, payload: { fullName: string; defaultBranch: string }) => {
+  ipcMain.handle(IPC.catalogAnalyze, async (event, payload: { fullName: string; defaultBranch: string }) => {
     if (!isSafeRepositoryName(payload.fullName)) throw new Error('GitHub 仓库名称无效。')
-    return installer.analyzeCatalogRepository(payload.fullName, payload.defaultBranch)
+    return installer.analyzeCatalogRepository(payload.fullName, payload.defaultBranch, progress => {
+      if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, progress)
+    })
   })
   // 从 GitHub 链接导入：解析 → 取元数据 → 复用现有分析（只读，无需整合包互斥）。
-  ipcMain.handle(IPC.catalogImportUrl, async (_event, payload: { url: string }) => {
+  ipcMain.handle(IPC.catalogImportUrl, async (event, payload: { url: string }) => {
     if (!payload || typeof payload.url !== 'string' || payload.url.trim().length === 0) {
       throw new Error('请输入 GitHub 仓库链接。')
     }
     if (payload.url.length > 1000) throw new Error('GitHub 仓库链接过长。')
     return importCatalogFromUrl(
       payload.url,
-      (fullName, branch) => installer.analyzeCatalogRepository(fullName, branch),
+      (fullName, branch) => installer.analyzeCatalogRepository(fullName, branch, progress => {
+        if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, progress)
+      }),
       githubAuth.fetch,
     )
   })
@@ -203,21 +227,12 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
 
     const installed = await applicationAddons.install(request)
     const current = await settings.read()
-    let profile = await readProfile(current.dshHome, current.profileName)
-    let migrationWarning: string | undefined
-    if (installed.installedAddon.packageName === DSH_DESKTOP_PACKAGE
-      && profile.plugins.some(plugin => plugin.packageName === DSH_DESKTOP_PACKAGE)) {
-      try {
-        profile = await installer.remove(DSH_DESKTOP_PACKAGE, current.profileName)
-      } catch (error) {
-        migrationWarning = `DSH Desktop 已作为应用加载项安装，但旧 Web Profile 组件移除失败：${error instanceof Error ? error.message : String(error)}`
-      }
-    }
-    return { ...installed, profile, migrationWarning }
+    const profile = await readProfile(current.dshHome, current.profileName)
+    return { ...installed, profile }
   })
   ipcMain.handle(IPC.applicationsToggle, async (_event, payload: { id: string; enabled: boolean }) => {
     if (!payload || typeof payload.id !== 'string') throw new Error('应用加载项标识无效。')
-    return applicationAddons.toggle(payload.id, Boolean(payload.enabled))
+    return linkedComponents.toggleApplication(payload.id, Boolean(payload.enabled))
   })
   ipcMain.handle(IPC.applicationsUninstall, async (_event, id: string) => {
     if (typeof id !== 'string') throw new Error('应用加载项标识无效。')

@@ -6,6 +6,10 @@ import type { CredentialStatus } from '../src/types'
 const DEEPSEEK_CREDENTIAL = 'DEEPSEEK_API_KEY'
 const CREDENTIAL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+function assertCredentialName(name: string): void {
+  if (!CREDENTIAL_NAME.test(name)) throw new Error('凭据名称格式无效。')
+}
+
 function credentialsPath(dshHome: string): string {
   return path.join(dshHome, '.credentials.yaml')
 }
@@ -55,10 +59,40 @@ async function writeCredentialDocument(dshHome: string, content: string): Promis
 }
 
 export async function getDeepSeekCredentialStatus(dshHome: string): Promise<CredentialStatus> {
+  return { configured: await hasCredential(dshHome, DEEPSEEK_CREDENTIAL) }
+}
+
+export async function readCredential(dshHome: string, name: string): Promise<string | null> {
+  assertCredentialName(name)
   const source = await readCredentialSource(dshHome)
-  if (source === null) return { configured: false }
+  if (source === null) return null
   const { values } = parseCredentials(source)
-  return { configured: Boolean(values[DEEPSEEK_CREDENTIAL]) }
+  return values[name] ?? null
+}
+
+export async function hasCredential(dshHome: string, name: string): Promise<boolean> {
+  return Boolean(await readCredential(dshHome, name))
+}
+
+export async function setCredential(dshHome: string, name: string, secret: string): Promise<void> {
+  assertCredentialName(name)
+  const normalized = secret.trim()
+  if (!normalized) throw new Error('API Key 不能为空。')
+  const source = await readCredentialSource(dshHome)
+  const { document } = parseCredentials(source ?? '{}\n')
+  document.set(name, normalized)
+  await writeCredentialDocument(dshHome, document.toString({ lineWidth: 0 }))
+}
+
+export async function removeCredential(dshHome: string, name: string): Promise<boolean> {
+  assertCredentialName(name)
+  const source = await readCredentialSource(dshHome)
+  if (source === null) return false
+  const { document, values } = parseCredentials(source)
+  if (!values[name]) return false
+  document.delete(name)
+  await writeCredentialDocument(dshHome, document.toString({ lineWidth: 0 }))
+  return true
 }
 
 /**
@@ -66,27 +100,15 @@ export async function getDeepSeekCredentialStatus(dshHome: string): Promise<Cred
  * 文件缺失返回 null。返回值绝不打日志。
  */
 export async function readDeepSeekApiKey(dshHome: string): Promise<string | null> {
-  const source = await readCredentialSource(dshHome)
-  if (source === null) return null
-  const { values } = parseCredentials(source)
-  return values[DEEPSEEK_CREDENTIAL] ?? null
+  return readCredential(dshHome, DEEPSEEK_CREDENTIAL)
 }
 
 export async function setDeepSeekApiKey(dshHome: string, apiKey: string): Promise<CredentialStatus> {
-  const normalized = apiKey.trim()
-  if (!normalized) throw new Error('API Key 不能为空。')
-  const source = await readCredentialSource(dshHome)
-  const { document } = parseCredentials(source ?? '{}\n')
-  document.set(DEEPSEEK_CREDENTIAL, normalized)
-  await writeCredentialDocument(dshHome, document.toString({ lineWidth: 0 }))
+  await setCredential(dshHome, DEEPSEEK_CREDENTIAL, apiKey)
   return { configured: true }
 }
 
 export async function clearDeepSeekApiKey(dshHome: string): Promise<CredentialStatus> {
-  const source = await readCredentialSource(dshHome)
-  if (source === null) return { configured: false }
-  const { document } = parseCredentials(source)
-  document.delete(DEEPSEEK_CREDENTIAL)
-  await writeCredentialDocument(dshHome, document.toString({ lineWidth: 0 }))
+  await removeCredential(dshHome, DEEPSEEK_CREDENTIAL)
   return { configured: false }
 }

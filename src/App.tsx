@@ -76,6 +76,11 @@ function LauncherShell() {
 
   const closeWindow = () => void api.closeWindow()
 
+  const openApiConfig = () => {
+    setCredentialOpen(true)
+    void store.refreshCustomApiProviders()
+  }
+
   /** 「导入整合包」：选文件 → analyze 拿预览 → PackInstallDialog 展示 preview 态。 */
   const handlePackImport = async () => {
     const path = await api.pickPackFile()
@@ -107,7 +112,7 @@ function LauncherShell() {
           installProgress={store.installProgress?.repository === DSH_REPOSITORY ? store.installProgress : null}
           busy={runtimeBusy}
           installingDsh={installingDsh}
-          onCredential={() => setCredentialOpen(true)}
+          onCredential={openApiConfig}
           githubAuthStatus={store.githubAuthStatus}
           activeRuntimeReplacement={store.activeRuntimeReplacement}
           onGitHubAccount={() => setGitHubAccountOpen(true)}
@@ -126,10 +131,11 @@ function LauncherShell() {
             installingDsh={installingDsh}
             profileName={settings.profileName}
             credentialStatus={store.credentialStatus}
+            customApiCount={store.customApiProviders.length}
             githubAuthStatus={store.githubAuthStatus}
             activeRuntimeReplacement={store.activeRuntimeReplacement}
             onBack={navigation.showLauncher}
-            onCredential={() => setCredentialOpen(true)}
+            onCredential={openApiConfig}
             onGitHubAccount={() => setGitHubAccountOpen(true)}
             onSettings={() => setSettingsOpen(true)}
             onToggleRuntime={toggleRuntime}
@@ -263,10 +269,14 @@ function LauncherShell() {
       {credentialOpen && (
         <CredentialDialog
           status={store.credentialStatus}
+          providers={store.customApiProviders}
+          loading={store.customApiLoading}
           busy={store.busy === BUSY.credential}
           onClose={() => setCredentialOpen(false)}
-          onSave={async apiKey => { if (await store.saveApiKey(apiKey)) setCredentialOpen(false) }}
-          onClear={async () => { if (await store.clearApiKey()) setCredentialOpen(false) }}
+          onSaveDeepSeek={store.saveApiKey}
+          onClearDeepSeek={store.clearApiKey}
+          onSaveCustom={store.saveCustomApi}
+          onRemoveCustom={store.removeCustomApi}
         />
       )}
       {githubAccountOpen && (

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { classifyCatalogRepository } from '../electron/catalog-analysis'
-import type { ApplicationRepositoryAnalysis, RepositoryAnalysis, SkillRepositoryAnalysis } from '../src/types'
+import { analyzeCatalogWithProgress, classifyCatalogRepository } from '../electron/catalog-analysis'
+import type { ApplicationRepositoryAnalysis, CatalogAnalysisProgress, RepositoryAnalysis, SkillRepositoryAnalysis } from '../src/types'
 
 function plugin(installability: RepositoryAnalysis['installability']): RepositoryAnalysis {
   return {
@@ -150,5 +150,82 @@ describe('catalog repository classification', () => {
     const hybrid = classify('demo/app-plugin', fulfilled(plugin('ready')), fulfilled(skill('invalid')), fulfilled(application('ready')))
     expect(hybrid.kind).toBe('hybrid')
     expect(hybrid.componentKinds).toEqual(['plugin', 'application'])
+  })
+
+  it('lets a same-package replacement application own its bundled Plugin', () => {
+    const pluginAnalysis = plugin('ready')
+    pluginAnalysis.targets[0] = { ...pluginAnalysis.targets[0], packageName: 'demo-app' }
+    const applicationAnalysis = application('ready')
+    applicationAnalysis.targets[0] = { ...applicationAnalysis.targets[0], launchMode: 'runtime-replacement' }
+    const result = classify(
+      'demo/replacement',
+      fulfilled(pluginAnalysis),
+      fulfilled(skill('invalid')),
+      fulfilled(applicationAnalysis),
+    )
+
+    expect(result.kind).toBe('application')
+    expect(result.componentKinds).toEqual(['application'])
+    expect(result.pluginAnalysis?.installability).toBe('application')
+    expect(result.pluginAnalysis?.targets).toEqual([])
+  })
+
+  it('keeps a same-package companion application as a true hybrid', () => {
+    const pluginAnalysis = plugin('ready')
+    pluginAnalysis.targets[0] = { ...pluginAnalysis.targets[0], packageName: 'demo-app' }
+    const applicationAnalysis = application('ready')
+    applicationAnalysis.targets[0] = { ...applicationAnalysis.targets[0], launchMode: 'after-runtime' }
+    const result = classify(
+      'demo/companion',
+      fulfilled(pluginAnalysis),
+      fulfilled(skill('invalid')),
+      fulfilled(applicationAnalysis),
+    )
+
+    expect(result.kind).toBe('hybrid')
+    expect(result.componentKinds).toEqual(['plugin', 'application'])
+  })
+})
+
+describe('catalog analysis progress', () => {
+  it('reports the three parallel checks and the final classification step', async () => {
+    const events: CatalogAnalysisProgress[] = []
+    const result = await analyzeCatalogWithProgress('demo/progress', 'main', {
+      plugin: async () => plugin('ready'),
+      skill: async () => skill('invalid'),
+      application: async () => application('invalid'),
+    }, progress => events.push(progress))
+
+    expect(result.kind).toBe('plugin')
+    expect(events[0]).toMatchObject({
+      phase: 'preparing',
+      completed: 0,
+      checks: { plugin: 'pending', skill: 'pending', application: 'pending' },
+    })
+    expect(events[1]).toMatchObject({
+      phase: 'checking',
+      completed: 0,
+      checks: { plugin: 'running', skill: 'running', application: 'running' },
+    })
+    expect(events.some(event => event.phase === 'classifying' && event.completed === 3)).toBe(true)
+    expect(events.at(-1)).toMatchObject({
+      phase: 'complete',
+      completed: 3,
+      checks: { plugin: 'complete', skill: 'complete', application: 'complete' },
+    })
+  })
+
+  it('shows a failed detector while retaining a valid result from the others', async () => {
+    const events: CatalogAnalysisProgress[] = []
+    const result = await analyzeCatalogWithProgress('demo/partial-progress', 'main', {
+      plugin: async () => plugin('ready'),
+      skill: async () => { throw new Error('network unavailable') },
+      application: async () => application('invalid'),
+    }, progress => events.push(progress))
+
+    expect(result.kind).toBe('plugin')
+    expect(result.warnings).toHaveLength(1)
+    expect(events.some(event => event.checks.skill === 'failed' && event.completed > 0)).toBe(true)
+    expect(events.at(-1)?.phase).toBe('complete')
   })
 })

@@ -35,6 +35,9 @@ export const IPC = {
   credentialStatus: 'credentials:deepseek-status',
   credentialSet: 'credentials:deepseek-set',
   credentialClear: 'credentials:deepseek-clear',
+  customApiList: 'custom-api:list',
+  customApiSave: 'custom-api:save',
+  customApiRemove: 'custom-api:remove',
   githubAuthStatus: 'github-auth:status',
   githubAuthTokenLogin: 'github-auth:token-login',
   githubAuthDeviceBegin: 'github-auth:device-begin',
@@ -94,6 +97,7 @@ export const IPC = {
 export const IPC_EVENTS = {
   runtimeOutput: 'runtime:output',
   runtimeStateChanged: 'runtime:state-changed',
+  catalogAnalysisProgress: 'catalog:analysis-progress',
   installProgress: 'plugins:install-progress',
   pluginTrialEvent: 'plugins:trial-event',
   aiInstallEvent: 'ai:install-event',

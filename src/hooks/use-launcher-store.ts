@@ -7,6 +7,8 @@ import type {
   ApplicationInstallResult,
   AppSettings,
   CredentialStatus,
+  CustomApiProvider,
+  CustomApiProviderInput,
   DshInstallationStatus,
   DshUpdateStatus,
   GitHubAuthStatus,
@@ -53,6 +55,8 @@ export function useLauncherStore() {
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([])
   const [installedApplications, setInstalledApplications] = useState<InstalledApplicationAddon[]>([])
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>({ configured: false })
+  const [customApiProviders, setCustomApiProviders] = useState<CustomApiProvider[]>([])
+  const [customApiLoading, setCustomApiLoading] = useState(false)
   const [githubAuthStatus, setGitHubAuthStatus] = useState<GitHubAuthStatus>({
     authenticated: false,
     login: null,
@@ -94,8 +98,9 @@ export function useLauncherStore() {
       api.listPacks(),
       api.packHasSnapshot(),
       api.readPluginTrials(),
+      api.listCustomApiProviders().catch(() => [] as CustomApiProvider[]),
     ])
-      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextGitHubAuthStatus, nextDshInstallation, nextInstalledSkills, nextInstalledApplications, nextPacks, nextPackSnapshot, nextPluginTrials]) => {
+      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextGitHubAuthStatus, nextDshInstallation, nextInstalledSkills, nextInstalledApplications, nextPacks, nextPackSnapshot, nextPluginTrials, nextCustomApiProviders]) => {
         setSettings(nextSettings)
         setProfile(nextProfile)
         setRuntime(nextRuntime)
@@ -108,6 +113,7 @@ export function useLauncherStore() {
         setPacks(nextPacks)
         setPackSnapshotsAvailable(nextPackSnapshot)
         setPluginTrials(Object.fromEntries(nextPluginTrials.map(result => [pluginTrialStateKey(result.profileName, result.packageName), result])))
+        setCustomApiProviders(nextCustomApiProviders)
       })
       .catch(error => showToast({ kind: 'error', message: errorText(error) }))
       .finally(() => setLoading(false))
@@ -138,6 +144,19 @@ export function useLauncherStore() {
       showToast({ kind: 'error', message: errorText(error) })
     }
   }, [adoptProfile, api, showToast])
+
+  const refreshCustomApiProviders = useCallback(async (): Promise<boolean> => {
+    setCustomApiLoading(true)
+    try {
+      setCustomApiProviders(await api.listCustomApiProviders())
+      return true
+    } catch (error) {
+      showToast({ kind: 'error', message: errorText(error) })
+      return false
+    } finally {
+      setCustomApiLoading(false)
+    }
+  }, [api, showToast])
 
   /** 安装完成后一次性同步受影响的几处状态。 */
   const applyInstallResult = useCallback((result: RepositoryInstallResult) => {
@@ -176,8 +195,7 @@ export function useLauncherStore() {
   const applyCatalogApplicationInstall = useCallback((result: ApplicationInstallResult) => {
     setInstalledApplications(result.installedAddons)
     adoptProfile(result.profile)
-    if (result.migrationWarning) showToast({ kind: 'error', message: result.migrationWarning })
-  }, [adoptProfile, showToast])
+  }, [adoptProfile])
 
   const beginInstall = useCallback((progress: InstallProgress) => {
     setInstallProgress(progress)
@@ -233,6 +251,7 @@ export function useLauncherStore() {
       setSettings(stored)
       setDshInstallation(await api.detectDshInstallation())
       setCredentialStatus(await api.getDeepSeekCredentialStatus())
+      setCustomApiProviders(await api.listCustomApiProviders())
       await refreshProfile()
       return stored
     }, { success: '设置已保存。' })
@@ -258,11 +277,22 @@ export function useLauncherStore() {
   }, [api, run])
 
   const togglePlugin = useCallback(async (plugin: ManagedPlugin, enabled: boolean) => {
-    const next = await run(plugin.packageName, () => api.togglePlugin(plugin.packageName, enabled), {
-      success: enabled ? '插件将在下次启动时加载。' : '插件已停用，但仍保留在本机。',
+    const linked = installedApplications.some(application =>
+      application.repository.toLowerCase() === plugin.repositoryFullName?.toLowerCase(),
+    )
+    const actionKey = linked && plugin.repositoryFullName
+      ? `component:${plugin.repositoryFullName.toLowerCase()}`
+      : plugin.packageName
+    const next = await run(actionKey, () => api.togglePlugin(plugin.packageName, enabled), {
+      success: linked
+        ? enabled ? '协同 Plugin 与应用加载项已激活。' : '协同 Plugin 与应用加载项已停用。'
+        : enabled ? '插件将在下次启动时加载。' : '插件已停用，但仍保留在本机。',
     })
-    if (next) setProfile(next)
-  }, [api, run])
+    if (next) {
+      adoptProfile(next.profile)
+      setInstalledApplications(next.installedApplications)
+    }
+  }, [adoptProfile, api, installedApplications, run])
 
   const toggleSkill = useCallback(async (skill: InstalledSkill, enabled: boolean) => {
     const next = await run(`skill:${skill.name}`, () => api.toggleSkill(skill.name, enabled), {
@@ -271,14 +301,43 @@ export function useLauncherStore() {
     if (next) setInstalledSkills(next)
   }, [api, run])
 
-  const toggleApplication = useCallback(async (application: InstalledApplicationAddon, enabled: boolean) => {
-    const next = await run(`application:${application.id}`, () => api.toggleApplication(application.id, enabled), {
-      success: enabled
-        ? `${application.name} 已激活，将按“${application.launchMode}”模式参与下次启动。`
-        : `${application.name} 已停用。`,
+  const saveCustomApi = useCallback(async (input: CustomApiProviderInput): Promise<boolean> => {
+    const providers = await run(BUSY.credential, () => api.saveCustomApiProvider(input), {
+      success: `${input.displayName.trim() || input.route} 已保存。`,
     })
-    if (next) setInstalledApplications(next)
+    if (!providers) return false
+    setCustomApiProviders(providers)
+    return true
   }, [api, run])
+
+  const removeCustomApi = useCallback(async (route: string): Promise<boolean> => {
+    const providers = await run(BUSY.credential, () => api.removeCustomApiProvider(route), {
+      success: `自定义 API「${route}」已删除。`,
+    })
+    if (!providers) return false
+    setCustomApiProviders(providers)
+    return true
+  }, [api, run])
+
+  const toggleApplication = useCallback(async (application: InstalledApplicationAddon, enabled: boolean) => {
+    const linked = profile?.plugins.some(plugin =>
+      plugin.repositoryFullName?.toLowerCase() === application.repository.toLowerCase(),
+    ) ?? false
+    const actionKey = linked
+      ? `component:${application.repository.toLowerCase()}`
+      : `application:${application.id}`
+    const next = await run(actionKey, () => api.toggleApplication(application.id, enabled), {
+      success: linked
+        ? enabled ? '协同应用加载项与 Plugin 已激活。' : '协同应用加载项与 Plugin 已停用。'
+        : enabled
+          ? `${application.name} 已激活，将按“${application.launchMode}”模式参与下次启动。`
+          : `${application.name} 已停用。`,
+    })
+    if (next) {
+      adoptProfile(next.profile)
+      setInstalledApplications(next.installedApplications)
+    }
+  }, [adoptProfile, api, profile, run])
 
   const uninstallApplication = useCallback(async (application: InstalledApplicationAddon) => {
     const next = await run(`application-remove:${application.id}`, () => api.uninstallApplication(application.id), {
@@ -430,6 +489,8 @@ export function useLauncherStore() {
     installedApplications,
     activeRuntimeReplacement,
     credentialStatus,
+    customApiProviders,
+    customApiLoading,
     githubAuthStatus,
     logs,
     selectedPlugin,
@@ -445,6 +506,7 @@ export function useLauncherStore() {
     dismissToast,
     showToast,
     refreshProfile,
+    refreshCustomApiProviders,
     applyInstallResult,
     adoptCatalogInstallationState,
     applyCatalogPluginInstall,
@@ -457,6 +519,8 @@ export function useLauncherStore() {
     saveSettings,
     saveApiKey,
     clearApiKey,
+    saveCustomApi,
+    removeCustomApi,
     setGitHubAuthStatus,
     togglePlugin,
     toggleSkill,

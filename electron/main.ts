@@ -1,4 +1,4 @@
-import { app, BrowserWindow, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, net, safeStorage, shell } from 'electron'
 import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -22,10 +22,12 @@ import {
   type NodeRuntimeProgress,
   type PnpmRuntime,
 } from './node-runtime'
+import { createProxyAwareFetch } from './network'
 import { createPackManager, type InstallInstaller, type PackInstallTarget, type PackManager } from './pack'
 import { createPluginTrialManager, type PluginTrialManager } from './plugin-trial'
 import { recordPluginInstall } from './plugin-receipts'
-import { withExecutableDirectoryOnPath } from './process'
+import { configureProcessTracker, withExecutableDirectoryOnPath } from './process'
+import { createProcessSupervisor, type ProcessSupervisor } from './process-supervisor'
 import { readProfile, togglePlugin } from './profile'
 import { installSkillFromDirectory } from './skill-install'
 import { createRendererEvents } from './renderer-events'
@@ -40,7 +42,9 @@ import { createSettingsStore, defaultSettings, type SettingsStore } from './sett
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url))
 
 let mainWindow: BrowserWindow | null = null
-let quitAfterRuntimeStops = false
+let processSupervisor: ProcessSupervisor | null = null
+let quitCleanupStarted = false
+let allowFinalQuit = false
 
 const getWindow = (): BrowserWindow | null => mainWindow
 const events = createRendererEvents(createRendererChannel(getWindow))
@@ -68,9 +72,11 @@ function createServices(): Services {
   const pluginReceiptsPath = path.join(userData, 'plugin-installs.json')
   const skillSourceRoot = path.join(userData, 'skill-sources')
   const applicationRoot = path.join(userData, 'application-addons')
+  const proxyAwareFetch = createProxyAwareFetch((input, init) => net.fetch(input, init))
   const githubAuth = createGitHubAuthService({
     filePath: path.join(userData, 'github-auth.bin'),
     clientId: process.env.DSH_LAUNCHER_GITHUB_CLIENT_ID,
+    fetchImpl: proxyAwareFetch,
     cipher: {
       isAvailable: () => safeStorage.isEncryptionAvailable(),
       encrypt: value => safeStorage.encryptString(value),
@@ -296,7 +302,16 @@ function openMainWindow(): void {
   })
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  try {
+    processSupervisor = await createProcessSupervisor({
+      root: path.join(app.getPath('userData'), 'process-supervisor'),
+      onError: message => console.error(`[process-supervisor] ${message}`),
+    })
+    configureProcessTracker(processSupervisor)
+  } catch (error) {
+    console.error('[process-supervisor] 启动失败，退出时只能执行普通清理。', error)
+  }
   services = createServices()
   registerIpcHandlers({
     ...services,
@@ -313,31 +328,61 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// 退出前先结束 DSH 运行时与 AI 任务，否则子进程会留在后台。
+function waitForIdle(check: () => boolean): Promise<void> {
+  if (!check()) return Promise.resolve()
+  return new Promise(resolve => {
+    const timer = setInterval(() => {
+      if (!check()) {
+        clearInterval(timer)
+        resolve()
+      }
+    }, 100)
+  })
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
+}
+
+async function shutdownLauncherProcesses(): Promise<void> {
+  const current = services
+  const gracefulTasks: Promise<unknown>[] = []
+  if (current?.runtime.isRunning()) gracefulTasks.push(current.runtime.stop())
+  if (current?.pluginTrial.isBusy()) gracefulTasks.push(current.pluginTrial.cancel())
+  if (current?.aiInstaller.isBusy()) gracefulTasks.push(current.aiInstaller.cancel())
+  if (current?.packManager.isBusy()) gracefulTasks.push(waitForIdle(() => current.packManager.isBusy()))
+  if (current?.installer.isBusy()) gracefulTasks.push(waitForIdle(() => current.installer.isBusy()))
+  if (current?.applicationAddons.isBusy()) gracefulTasks.push(waitForIdle(() => current.applicationAddons.isBusy()))
+
+  const graceful = Promise.allSettled(gracefulTasks)
+  await Promise.race([graceful, delay(2_000)])
+  await processSupervisor?.shutdown().catch(error => {
+    console.error('[process-supervisor] 清理子进程失败。', error)
+  })
+  configureProcessTracker(null)
+  await Promise.race([graceful, delay(800)])
+
+  if (current) {
+    try {
+      const settings = await current.settings.read()
+      await healCredentialsLock(
+        settings.dshHome,
+        path.join(app.getPath('userData'), CREDENTIALS_LOCK_DIRNAME),
+      )
+    } catch (error) {
+      console.error('[shutdown] AI 凭据文件还原失败。', error)
+    }
+  }
+}
+
+// 无论是正常关闭还是安装过程中退出，所有由启动器登记的进程树都必须一起结束。
 app.on('before-quit', event => {
-  const runtime = services?.runtime
-  const aiInstaller = services?.aiInstaller
-  const pluginTrial = services?.pluginTrial
-  const packManager = services?.packManager
-  const hasWork = Boolean(runtime?.isRunning() || pluginTrial?.isBusy() || aiInstaller?.isBusy() || packManager?.isBusy())
-  if (quitAfterRuntimeStops || !hasWork) return
+  if (allowFinalQuit) return
   event.preventDefault()
-  const waitRuntime = runtime?.isRunning() ? runtime.stop() : Promise.resolve()
-  const waitAi = aiInstaller?.isBusy() ? aiInstaller.cancel() : Promise.resolve()
-  const waitTrial = pluginTrial?.isBusy() ? pluginTrial.cancel() : Promise.resolve()
-  // 整合包操作没有 cancel 接口，轮询等待其自然结束（每项 install 是有限长的 DSH 命令）。
-  const waitPack = packManager?.isBusy()
-    ? new Promise<void>(resolve => {
-      const timer = setInterval(() => {
-        if (!packManager!.isBusy()) {
-          clearInterval(timer)
-          resolve()
-        }
-      }, 150)
-    })
-    : Promise.resolve()
-  void Promise.allSettled([waitRuntime, waitTrial, waitAi, waitPack]).finally(() => {
-    quitAfterRuntimeStops = true
+  if (quitCleanupStarted) return
+  quitCleanupStarted = true
+  void shutdownLauncherProcesses().finally(() => {
+    allowFinalQuit = true
     app.quit()
   })
 })

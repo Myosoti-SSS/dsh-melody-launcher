@@ -10,6 +10,7 @@ interface AppHeaderProps {
   installingDsh: boolean
   profileName: string
   credentialStatus: CredentialStatus
+  customApiCount: number
   githubAuthStatus: GitHubAuthStatus
   activeRuntimeReplacement: InstalledApplicationAddon | null
   onBack: () => void
@@ -27,6 +28,7 @@ export function AppHeader({
   installingDsh,
   profileName,
   credentialStatus,
+  customApiCount,
   githubAuthStatus,
   activeRuntimeReplacement,
   onBack,
@@ -67,14 +69,14 @@ export function AppHeader({
           <span className="credential-state">{githubAuthStatus.authenticated ? '已登录' : '未登录'}</span>
         </button>
         <button
-          className={`credential-button ${credentialStatus.configured ? 'configured' : ''}`}
+          className={`credential-button ${credentialStatus.configured || customApiCount > 0 ? 'configured' : ''}`}
           type="button"
-          title="配置 DeepSeek API Key"
+          title="配置 DeepSeek 与自定义模型 API"
           onClick={onCredential}
         >
           <KeyRound size={17} />
-          <span>DeepSeek Key</span>
-          <span className="credential-state">{credentialStatus.configured ? '已配置' : '未配置'}</span>
+          <span>API 配置</span>
+          <span className="credential-state">{customApiCount > 0 ? `${customApiCount} 个自定义` : credentialStatus.configured ? '已配置' : '未配置'}</span>
         </button>
         <button className="icon-button" type="button" title="启动器设置" aria-label="启动器设置" onClick={onSettings}>
           <Settings size={19} />

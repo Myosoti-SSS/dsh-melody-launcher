@@ -3,8 +3,6 @@ import {
   APPLICATION_MANIFEST_PATH,
   analyzeApplicationRepository,
   applicationTargetFromManifest,
-  DSH_DESKTOP_PACKAGE,
-  DSH_DESKTOP_REPOSITORY,
 } from '../electron/application-catalog'
 
 const commit = 'a'.repeat(40)
@@ -16,12 +14,29 @@ function response(payload: unknown, status = 200): Response {
   })
 }
 
-function repositoryFetch(repository: string, manifest: unknown | null): typeof fetch {
-  return (async (input: string | URL | Request) => {
+function repositoryFetch(options: {
+  repository: string
+  addonManifest?: unknown | null
+  tree?: Array<{ path: string; type: 'blob' | 'tree' }>
+  packages?: Record<string, unknown>
+  published?: Record<string, unknown>
+}): typeof fetch {
+  return vi.fn(async (input: string | URL | Request) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
-    if (url.includes(`/repos/${repository}/commits/`)) return response({ sha: commit })
+    if (url.includes(`/repos/${options.repository}/commits/`)) return response({ sha: commit })
     if (url.includes(`/${commit}/${APPLICATION_MANIFEST_PATH}`)) {
-      return manifest == null ? response({ message: 'not found' }, 404) : response(manifest)
+      return options.addonManifest == null
+        ? response({ message: 'not found' }, 404)
+        : response(options.addonManifest)
+    }
+    if (url.includes(`/repos/${options.repository}/git/trees/${commit}`)) {
+      return response({ tree: options.tree ?? [] })
+    }
+    for (const [packagePath, manifest] of Object.entries(options.packages ?? {})) {
+      if (url.endsWith(`/${commit}/${packagePath}`)) return response(manifest)
+    }
+    for (const [packageName, manifest] of Object.entries(options.published ?? {})) {
+      if (url === `https://registry.npmjs.org/${encodeURIComponent(packageName)}/latest`) return response(manifest)
     }
     return response({ message: 'not found' }, 404)
   }) as typeof fetch
@@ -43,25 +58,31 @@ function manifest(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function inferredHostPackage(repository: string, overrides: Record<string, unknown> = {}) {
+  return {
+    name: 'demo-electron-host',
+    version: '2.4.1',
+    description: 'A generic DSH Electron host.',
+    repository: `https://github.com/${repository}.git`,
+    bin: { 'demo-electron-host': 'lib/bin.js' },
+    dsh: { bundle: { patch: './cordis.patch.yml' } },
+    peerDependencies: { electron: '^43.0.0' },
+    build: {
+      appId: 'dev.demo.dsh-host',
+      productName: 'Demo Desktop',
+      win: {},
+      linux: {},
+    },
+    ...overrides,
+  }
+}
+
 describe('application addon catalog', () => {
-  it('recognizes DSH Desktop as a replacement host without network access', async () => {
-    const fetchImpl = vi.fn<typeof fetch>()
-    const analysis = await analyzeApplicationRepository(DSH_DESKTOP_REPOSITORY, 'main', fetchImpl)
-
-    expect(fetchImpl).not.toHaveBeenCalled()
-    expect(analysis.installability).toBe('ready')
-    expect(analysis.targets[0]).toMatchObject({
-      packageName: DSH_DESKTOP_PACKAGE,
-      launchMode: 'runtime-replacement',
-      verified: true,
-    })
-  })
-
-  it('loads and validates the generic addon manifest', async () => {
+  it('loads and validates an explicit generic addon manifest', async () => {
     const analysis = await analyzeApplicationRepository(
       'demo/dsh-host',
       'main',
-      repositoryFetch('demo/dsh-host', manifest()),
+      repositoryFetch({ repository: 'demo/dsh-host', addonManifest: manifest() }),
       'win32',
     )
 
@@ -69,18 +90,93 @@ describe('application addon catalog', () => {
     expect(analysis.targets[0]).toMatchObject({
       addonId: 'demo-host',
       packageName: '@demo/dsh-host',
+      version: '1.2.3',
       launchMode: 'after-runtime',
       launchArgs: ['--quiet'],
       supported: true,
+      verified: true,
     })
   })
 
-  it('treats a missing manifest as a fully checked non-addon repository', async () => {
+  it('resolves a missing explicit version to the exact npm latest version', async () => {
+    const repository = 'demo/dsh-host'
     const analysis = await analyzeApplicationRepository(
-      'demo/plugin-only',
+      repository,
       'main',
-      repositoryFetch('demo/plugin-only', null),
+      repositoryFetch({
+        repository,
+        addonManifest: manifest({
+          install: { provider: 'npm', package: '@demo/dsh-host' },
+        }),
+        published: {
+          '@demo/dsh-host': {
+            name: '@demo/dsh-host',
+            version: '3.1.4',
+            repository: `https://github.com/${repository}`,
+            bin: { 'dsh-host': 'lib/bin.js' },
+          },
+        },
+      }),
     )
+
+    expect(analysis.targets[0].version).toBe('3.1.4')
+  })
+
+  it('infers a generic DSH Electron host and pins its published npm version', async () => {
+    const repository = 'demo/desktop-workspace'
+    const packagePath = 'packages/desktop/package.json'
+    const packageManifest = inferredHostPackage(repository, { version: '2.5.0-next' })
+    const analysis = await analyzeApplicationRepository(
+      repository,
+      'main',
+      repositoryFetch({
+        repository,
+        addonManifest: null,
+        tree: [
+          { path: packagePath, type: 'blob' },
+          { path: 'packages/desktop/cordis.patch.yml', type: 'blob' },
+          { path: 'packages/desktop/tests/fixtures/package.json', type: 'blob' },
+        ],
+        packages: { [packagePath]: packageManifest },
+        published: { 'demo-electron-host': inferredHostPackage(repository) },
+      }),
+      'win32',
+    )
+
+    expect(analysis.installability).toBe('ready')
+    expect(analysis.targets).toHaveLength(1)
+    expect(analysis.targets[0]).toMatchObject({
+      id: 'demo-electron-host:packages/desktop',
+      addonId: 'demo-electron-host',
+      name: 'Demo Desktop',
+      packageName: 'demo-electron-host',
+      version: '2.4.1',
+      binName: 'demo-electron-host',
+      launchMode: 'runtime-replacement',
+      supported: true,
+      verified: false,
+    })
+  })
+
+  it('does not infer a normal DSH Plugin or an unrelated npm package as an application', async () => {
+    const repository = 'demo/plugin-only'
+    const packagePath = 'package.json'
+    const source = inferredHostPackage(repository, { peerDependencies: {}, build: {} })
+    const analysis = await analyzeApplicationRepository(
+      repository,
+      'main',
+      repositoryFetch({
+        repository,
+        addonManifest: null,
+        tree: [
+          { path: packagePath, type: 'blob' },
+          { path: 'cordis.patch.yml', type: 'blob' },
+        ],
+        packages: { [packagePath]: source },
+        published: { 'demo-electron-host': inferredHostPackage('someone/else') },
+      }),
+    )
+
     expect(analysis.installability).toBe('invalid')
     expect(analysis.targets).toEqual([])
   })

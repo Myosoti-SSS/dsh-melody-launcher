@@ -16,6 +16,29 @@ export interface CredentialStatus {
   configured: boolean
 }
 
+export type CustomApiProtocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
+
+export interface CustomApiProvider {
+  route: string
+  displayName: string
+  baseUrl: string
+  protocol: CustomApiProtocol
+  modelIds: string[]
+  credentialName: string | null
+  hasApiKey: boolean
+}
+
+export interface CustomApiProviderInput {
+  originalRoute?: string
+  route: string
+  displayName: string
+  baseUrl: string
+  protocol: CustomApiProtocol
+  modelIds: string[]
+  /** 编辑时留空表示保留现有密钥；新建时留空表示该服务无需鉴权。 */
+  apiKey?: string
+}
+
 export interface GitHubRateLimit {
   limit: number
   remaining: number
@@ -235,7 +258,12 @@ export interface ApplicationInstallResult {
   installedAddon: InstalledApplicationAddon
   installedAddons: InstalledApplicationAddon[]
   profile: ProfileState
-  migrationWarning?: string
+}
+
+export interface LinkedComponentToggleResult {
+  profile: ProfileState
+  installedApplications: InstalledApplicationAddon[]
+  linked: boolean
 }
 
 export interface CatalogRepositoryAnalysis {
@@ -248,6 +276,19 @@ export interface CatalogRepositoryAnalysis {
   skillAnalysis: SkillRepositoryAnalysis | null
   applicationAnalysis: ApplicationRepositoryAnalysis | null
   warnings: string[]
+}
+
+export type CatalogAnalysisCheck = 'plugin' | 'skill' | 'application'
+export type CatalogAnalysisCheckState = 'pending' | 'running' | 'complete' | 'failed'
+
+/** 单个仓库的实时检测步骤。三个结构检测器并行执行，不表示虚拟下载百分比。 */
+export interface CatalogAnalysisProgress {
+  repository: string
+  phase: 'preparing' | 'checking' | 'classifying' | 'complete' | 'error'
+  message: string
+  completed: number
+  total: 3
+  checks: Record<CatalogAnalysisCheck, CatalogAnalysisCheckState>
 }
 
 export interface CatalogDiscoveryResult {
@@ -471,6 +512,9 @@ export interface LauncherApi {
   getDeepSeekCredentialStatus(): Promise<CredentialStatus>
   setDeepSeekApiKey(apiKey: string): Promise<CredentialStatus>
   clearDeepSeekApiKey(): Promise<CredentialStatus>
+  listCustomApiProviders(): Promise<CustomApiProvider[]>
+  saveCustomApiProvider(input: CustomApiProviderInput): Promise<CustomApiProvider[]>
+  removeCustomApiProvider(route: string): Promise<CustomApiProvider[]>
   getGitHubAuthStatus(): Promise<GitHubAuthStatus>
   loginGitHubWithToken(token: string): Promise<GitHubAuthStatus>
   beginGitHubDeviceLogin(): Promise<GitHubDeviceAuthorization>
@@ -479,7 +523,7 @@ export interface LauncherApi {
   logoutGitHub(): Promise<GitHubAuthStatus>
   chooseDirectory(kind: 'dshInstallPath' | 'dshHome' | 'workspace'): Promise<string | null>
   readProfile(): Promise<ProfileState>
-  togglePlugin(packageName: string, enabled: boolean, profileName?: string): Promise<ProfileState>
+  togglePlugin(packageName: string, enabled: boolean, profileName?: string): Promise<LinkedComponentToggleResult>
   reorderPlugins(packageNames: string[]): Promise<ProfileState>
   discoverCatalog(query: string, sort: 'stars' | 'updated', page: number): Promise<CatalogDiscoveryResult>
   analyzeCatalogRepository(fullName: string, defaultBranch: string): Promise<CatalogRepositoryAnalysis>
@@ -493,7 +537,7 @@ export interface LauncherApi {
   toggleSkill(name: string, enabled: boolean): Promise<InstalledSkill[]>
   installApplication(request: ApplicationInstallRequest): Promise<ApplicationInstallResult>
   readInstalledApplications(): Promise<InstalledApplicationAddon[]>
-  toggleApplication(id: string, enabled: boolean): Promise<InstalledApplicationAddon[]>
+  toggleApplication(id: string, enabled: boolean): Promise<LinkedComponentToggleResult>
   uninstallApplication(id: string): Promise<InstalledApplicationAddon[]>
   getRuntimeState(): Promise<RuntimeState>
   startRuntime(): Promise<RuntimeState>
@@ -524,6 +568,7 @@ export interface LauncherApi {
   addPackPlugin(packId: string, packageName: string): Promise<PackStatus>
   togglePackItem(packId: string, packageName: string, enabled: boolean): Promise<PackStatus>
   removePackItem(packId: string, packageName: string): Promise<PackStatus>
+  onCatalogAnalysisProgress(listener: (progress: CatalogAnalysisProgress) => void): () => void
   onPackProgress(listener: (event: PackProgressEvent) => void): () => void
   onRuntimeOutput(listener: (output: RuntimeOutput) => void): () => void
   onRuntimeState(listener: (state: RuntimeState) => void): () => void

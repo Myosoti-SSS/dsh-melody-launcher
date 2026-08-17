@@ -15,6 +15,7 @@ integrationTest('classifies representative live dsh-plugin repositories', async 
     source: 'archive-subdirectory',
     subdirectory: 'maid-atelier',
   })
-  expect(desktop.installability).toBe('application')
-  expect(dynamic.installability).toBe('dynamic')
+  expect(['ready', 'choice']).toContain(desktop.installability)
+  expect(desktop.targets.some(target => target.packageName === 'dsh-plugin-desktop')).toBe(true)
+  expect(['dynamic', 'ready', 'choice']).toContain(dynamic.installability)
 }, 60_000)

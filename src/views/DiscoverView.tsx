@@ -33,6 +33,8 @@ import { isInstallProgressActive } from '../lib/install-progress'
 import type {
   ApplicationInstallResult,
   ApplicationInstallTarget,
+  CatalogAnalysisCheck,
+  CatalogAnalysisProgress,
   CatalogRepositoryAnalysis,
   CatalogRepositoryResult,
   DshInstallationStatus,
@@ -122,6 +124,53 @@ function analysisBadge(analysis: CatalogRepositoryAnalysis): { className: string
   return { className: 'invalid', label: '无效' }
 }
 
+const ANALYSIS_CHECK_LABELS: Record<CatalogAnalysisCheck, string> = {
+  plugin: 'Plugin',
+  skill: 'Skill',
+  application: '应用加载项',
+}
+
+function CatalogAnalysisSteps({ progress }: { progress?: CatalogAnalysisProgress }) {
+  const current = progress ?? {
+    repository: '',
+    phase: 'preparing' as const,
+    message: '正在准备仓库结构检测',
+    completed: 0,
+    total: 3 as const,
+    checks: { plugin: 'pending' as const, skill: 'pending' as const, application: 'pending' as const },
+  }
+  const statusIcon = current.phase === 'complete'
+    ? <CircleCheck size={13} />
+    : current.phase === 'error'
+      ? <CircleAlert size={13} />
+      : <LoaderCircle className="spin" size={13} />
+
+  return (
+    <div className={`catalog-analysis-progress ${current.phase}`} role="status" aria-live="polite">
+      <div className="catalog-analysis-progress-head">
+        {statusIcon}
+        <span>{current.message}</span>
+        <strong>{current.completed}/{current.total}</strong>
+      </div>
+      <div className="catalog-analysis-checks">
+        {(Object.keys(current.checks) as CatalogAnalysisCheck[]).map(check => {
+          const state = current.checks[check]
+          return <span className={state} key={check}>
+            {state === 'running'
+              ? <LoaderCircle className="spin" size={11} />
+              : state === 'complete'
+                ? <CircleCheck size={11} />
+                : state === 'failed'
+                  ? <CircleAlert size={11} />
+                  : <Clock3 size={11} />}
+            {ANALYSIS_CHECK_LABELS[check]}
+          </span>
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function DiscoverView({
   profile,
   analyses,
@@ -157,6 +206,7 @@ export function DiscoverView({
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState<InstallingState | null>(null)
   const [checking, setChecking] = useState<string | null>(null)
+  const [analysisProgress, setAnalysisProgress] = useState<Record<string, CatalogAnalysisProgress>>({})
   const [batchScan, setBatchScan] = useState<BatchScanState | null>(null)
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
   const [targetDialog, setTargetDialog] = useState<{
@@ -171,6 +221,7 @@ export function DiscoverView({
     batchRunRef.current += 1
     setBatchScan(null)
     setTargetDialog(null)
+    setAnalysisProgress({})
     setLoading(true)
     try {
       const result = await api.discoverCatalog(searchQuery, searchSort, searchPage)
@@ -194,6 +245,9 @@ export function DiscoverView({
 
   useEffect(() => { void search('', 'stars', 1) }, [])
   useEffect(() => () => { batchRunRef.current += 1 }, [])
+  useEffect(() => api.onCatalogAnalysisProgress(progress => {
+    setAnalysisProgress(current => ({ ...current, [progress.repository]: progress }))
+  }), [api])
 
   const installedRepos = useMemo(() => {
     const result = new Set(installedRepositories)
@@ -215,9 +269,16 @@ export function DiscoverView({
     ? { repository: installProgress.repository, kind: installProgress.kind }
     : null
   const activeInstalling = installing ?? restoredInstalling
+  const currentAnalysisProgress = checking ? analysisProgress[checking] : undefined
+  const resetAnalysisProgress = (repository: string) => setAnalysisProgress(current => {
+    const next = { ...current }
+    delete next[repository]
+    return next
+  })
 
   const inspect = async (repo: CatalogRepositoryResult) => {
     if (repo.kind === 'dsh') return
+    resetAnalysisProgress(repo.fullName)
     setChecking(repo.fullName)
     try {
       const analysis = await api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch)
@@ -250,6 +311,7 @@ export function DiscoverView({
 
     for (const repo of candidates) {
       if (batchRunRef.current !== runId) return
+      resetAnalysisProgress(repo.fullName)
       setChecking(repo.fullName)
       try {
         const analysis = await api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch)
@@ -437,7 +499,7 @@ export function DiscoverView({
         <div className={`batch-scan-status ${batchScan.phase}`} role="status" aria-live="polite">
           {batchRunning ? <LoaderCircle className="spin" size={15} /> : batchScan.phase === 'complete' ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
           <span>{batchRunning
-            ? `正在识别当前页资源：${batchScan.completed}/${batchScan.total}`
+            ? `正在检测 ${checking ?? '当前仓库'}（${Math.min(batchScan.completed + 1, batchScan.total)}/${batchScan.total}）：${currentAnalysisProgress?.message ?? '正在准备仓库结构检测'}`
             : batchScan.phase === 'complete'
               ? `检测完成：${batchScan.total} 个候选中有 ${batchScan.available} 个 DSH 资源${batchScan.failed ? `，${batchScan.failed} 个检测失败` : ''}`
               : `检测已暂停：完成 ${batchScan.completed}/${batchScan.total}，发现 ${batchScan.available} 个资源，${batchScan.failed} 个请求失败`}</span>
@@ -554,6 +616,7 @@ export function DiscoverView({
                         : <span className="repository-analysis-badge pending">待检测</span>}
                   </div>
                   <p>{repo.description}</p>
+                  {isChecking && <CatalogAnalysisSteps progress={analysisProgress[repo.fullName]} />}
                   {analysis && <div className={`repository-analysis-note ${analysis.kind}`}>
                     {analysis.summary}
                     {analysis.warnings.map(warning => <span className="analysis-warning" key={warning}>{warning}</span>)}

@@ -10,6 +10,7 @@ import {
   Folder,
   FolderGit2,
   GripVertical,
+  Link2,
   LoaderCircle,
   PackageCheck,
   Play,
@@ -103,7 +104,7 @@ export function PluginsView({
       <PageHeading
         eyebrow="WEB PROFILE"
         title="插件加载顺序"
-        description="Plugin 按顺序加载；Skill 与应用加载项独立启停。应用宿主不会写入 Web Profile。"
+        description="Plugin 按顺序加载，Skill 独立启停；应用加载项在下方单独管理，不计入 Web Profile。"
         actions={(
           <>
             <button className="secondary-button" type="button" onClick={onRefresh}><RefreshCw size={17} />刷新</button>
@@ -145,7 +146,8 @@ export function PluginsView({
                   key={plugin.packageName}
                   plugin={plugin}
                   selected={selected?.packageName === plugin.packageName}
-                  busy={busy === plugin.packageName}
+                  busy={isComponentBusy(busy, plugin.repositoryFullName, plugin.packageName)}
+                  linked={installedApplications.some(application => sameRepository(application.repository, plugin.repositoryFullName))}
                   dragging={dragged === plugin.packageName}
                   canMoveUp={index > 0}
                   canMoveDown={index < active.length - 1}
@@ -162,7 +164,8 @@ export function PluginsView({
                   key={plugin.packageName}
                   plugin={plugin}
                   selected={selected?.packageName === plugin.packageName}
-                  busy={busy === plugin.packageName}
+                  busy={isComponentBusy(busy, plugin.repositoryFullName, plugin.packageName)}
+                  linked={installedApplications.some(application => sameRepository(application.repository, plugin.repositoryFullName))}
                   dragging={false}
                   canMoveUp={false}
                   canMoveDown={false}
@@ -177,12 +180,6 @@ export function PluginsView({
               </div>
               <div className="secondary-management-column">
                 <SkillList skills={installedSkills.filter(skill => visibleSkill(skill, filter))} busy={busy} onToggle={onToggleSkill} />
-                <ApplicationList
-                  applications={installedApplications.filter(application => visibleApplication(application, filter))}
-                  busy={busy}
-                  onToggle={onToggleApplication}
-                  onUninstall={onUninstallApplication}
-                />
               </div>
             </div>
           </section>
@@ -200,6 +197,23 @@ export function PluginsView({
           />
         </div>
       )}
+
+      <section className="application-addon-panel" aria-label="应用加载项">
+        <div className="application-addon-heading">
+          <div>
+            <span><AppWindow size={15} />应用加载项</span>
+            <p>独立应用宿主与伴随工具；不参与 Plugin 加载顺序。标记“协同”的项目会与同仓库 Plugin 同步启停。</p>
+          </div>
+          <small>{installedApplications.length} 个已安装</small>
+        </div>
+        <ApplicationList
+          applications={installedApplications.filter(application => visibleApplication(application, filter))}
+          plugins={profile.plugins}
+          busy={busy}
+          onToggle={onToggleApplication}
+          onUninstall={onUninstallApplication}
+        />
+      </section>
     </div>
   )
 }
@@ -212,56 +226,68 @@ function visibleApplication(application: InstalledApplicationAddon, filter: stri
   return !filter || `${application.name} ${application.packageName} ${application.description}`.toLowerCase().includes(filter.toLowerCase())
 }
 
-function ApplicationList({ applications, busy, onToggle, onUninstall }: {
+function ApplicationList({ applications, plugins, busy, onToggle, onUninstall }: {
   applications: InstalledApplicationAddon[]
+  plugins: ManagedPlugin[]
   busy: string | null
   onToggle: (application: InstalledApplicationAddon, enabled: boolean) => void
   onUninstall: (application: InstalledApplicationAddon) => void
 }) {
   return (
     <div className="application-management-column">
-      <div className="skill-column-heading"><span><AppWindow size={14} />应用加载项</span><small>{applications.length} 个已安装</small></div>
       {applications.length === 0 ? (
         <div className="skill-empty">尚未安装应用加载项</div>
       ) : (
         <div className="application-rows">
-          {applications.map(application => (
-            <div className={`application-row ${application.enabled ? '' : 'disabled'}`} key={application.id}>
-              <div className="skill-identity">
-                <div className="skill-glyph application-icon"><AppWindow size={15} /></div>
-                <div>
-                  <strong>{application.name}</strong>
-                  <span>{application.launchMode === 'runtime-replacement' ? '替代 Web 启动' : application.launchMode === 'after-runtime' ? '启动后伴随运行' : '独立应用'} · {application.version}</span>
+          {applications.map(application => {
+            const linked = plugins.some(plugin => sameRepository(plugin.repositoryFullName, application.repository))
+            const applicationBusy = isComponentBusy(busy, application.repository, `application:${application.id}`)
+            return (
+              <div className={`application-row ${application.enabled ? '' : 'disabled'}`} key={application.id}>
+                <div className="skill-identity">
+                  <div className="skill-glyph application-icon"><AppWindow size={15} /></div>
+                  <div>
+                    <strong>{application.name}{linked && <span className="linked-component-badge"><Link2 size={10} />协同</span>}</strong>
+                    <span>{application.launchMode === 'runtime-replacement' ? '替代 Web 启动' : application.launchMode === 'after-runtime' ? '启动后伴随运行' : '独立应用'} · {application.version}</span>
+                  </div>
+                </div>
+                <div className="application-row-actions">
+                  <label className="switch" title={application.enabled ? '停用应用加载项' : '启用应用加载项'}>
+                    <input
+                      type="checkbox"
+                      checked={application.enabled}
+                      disabled={applicationBusy}
+                      onChange={event => onToggle(application, event.target.checked)}
+                      aria-label={`${application.enabled ? '停用' : '启用'} ${application.name}`}
+                    />
+                    <span>{applicationBusy && <LoaderCircle className="spin" size={11} />}</span>
+                  </label>
+                  <button
+                    type="button"
+                    className="application-remove-button"
+                    disabled={busy === `application-remove:${application.id}`}
+                    onClick={() => onUninstall(application)}
+                    title={`卸载 ${application.name}`}
+                    aria-label={`卸载 ${application.name}`}
+                  >
+                    {busy === `application-remove:${application.id}` ? <LoaderCircle className="spin" size={13} /> : <Trash2 size={13} />}
+                  </button>
                 </div>
               </div>
-              <div className="application-row-actions">
-                <label className="switch" title={application.enabled ? '停用应用加载项' : '启用应用加载项'}>
-                  <input
-                    type="checkbox"
-                    checked={application.enabled}
-                    disabled={busy === `application:${application.id}`}
-                    onChange={event => onToggle(application, event.target.checked)}
-                    aria-label={`${application.enabled ? '停用' : '启用'} ${application.name}`}
-                  />
-                  <span>{busy === `application:${application.id}` && <LoaderCircle className="spin" size={11} />}</span>
-                </label>
-                <button
-                  type="button"
-                  className="application-remove-button"
-                  disabled={busy === `application-remove:${application.id}`}
-                  onClick={() => onUninstall(application)}
-                  title={`卸载 ${application.name}`}
-                  aria-label={`卸载 ${application.name}`}
-                >
-                  {busy === `application-remove:${application.id}` ? <LoaderCircle className="spin" size={13} /> : <Trash2 size={13} />}
-                </button>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
   )
+}
+
+function sameRepository(left?: string, right?: string): boolean {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase())
+}
+
+function isComponentBusy(busy: string | null, repository: string | undefined, fallback: string): boolean {
+  return busy === fallback || Boolean(repository && busy === `component:${repository.toLowerCase()}`)
 }
 
 function SkillList({ skills, busy, onToggle }: {
@@ -300,10 +326,11 @@ function SkillList({ skills, busy, onToggle }: {
   )
 }
 
-function PluginRow({ plugin, selected, busy, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop }: {
+function PluginRow({ plugin, selected, busy, linked, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop }: {
   plugin: ManagedPlugin
   selected: boolean
   busy: boolean
+  linked: boolean
   dragging: boolean
   canMoveUp: boolean
   canMoveDown: boolean
@@ -330,7 +357,7 @@ function PluginRow({ plugin, selected, busy, dragging, canMoveUp, canMoveDown, o
       </div>
       <div className="plugin-identity">
         <div className={`plugin-glyph glyph-${plugin.packageName.length % 4}`}>{pluginInitial(plugin)}</div>
-        <div><strong>{plugin.displayName}</strong><span>{plugin.packageName}</span></div>
+        <div><strong>{plugin.displayName}{linked && <span className="linked-component-badge"><Link2 size={10} />协同</span>}</strong><span>{plugin.packageName}</span></div>
       </div>
       <span className="plugin-version">{plugin.version}</span>
       <div className="state-cell">

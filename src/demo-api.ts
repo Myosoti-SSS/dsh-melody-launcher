@@ -3,11 +3,13 @@ import type {
   AiInstallEvent,
   AiInstallStatus,
   AppSettings,
+  CatalogAnalysisProgress,
   CatalogDiscoveryResult,
   CatalogImportResult,
   CatalogRepositoryAnalysis,
   CatalogRepositoryResult,
   CredentialStatus,
+  CustomApiProvider,
   DshInstallationStatus,
   DshUpdateStatus,
   GitHubAuthStatus,
@@ -117,10 +119,37 @@ const demoRepositories: CatalogRepositoryResult[] = [
 ]
 
 let demoInstalledSkills: InstalledSkill[] = []
-let demoInstalledApplications: InstalledApplicationAddon[] = []
+let demoInstalledApplications: InstalledApplicationAddon[] = [{
+  id: 'dsh-tui-host',
+  name: 'DSH TUI Host',
+  description: '与 DSH TUI Plugin 协同工作的终端应用宿主。',
+  repository: 'ccch1mneyyy/dsh-TUI',
+  provider: 'npm',
+  packageName: '@deepseek-harness-tui/dsh-tui-host',
+  version: '2.3.0',
+  binName: 'dsh-tui',
+  entryPath: 'C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\application-addons\\dsh-tui-host\\index.js',
+  installPath: 'C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\application-addons\\dsh-tui-host',
+  launchMode: 'after-runtime',
+  launchArgs: [],
+  enabled: false,
+  verified: true,
+  provides: ['terminal-host'],
+  installedAt: '2026-08-17T00:00:00.000Z',
+  updatedAt: '2026-08-17T00:00:00.000Z',
+}]
 
 let demoRuntime: RuntimeState = { running: false, pid: null, startedAt: null, url: null, port: null }
 let demoCredential: CredentialStatus = { configured: false }
+let demoCustomApiProviders: CustomApiProvider[] = [{
+  route: 'local-ollama',
+  displayName: 'Local Ollama',
+  baseUrl: 'http://127.0.0.1:11434/v1',
+  protocol: 'openai-completions',
+  modelIds: ['qwen3:8b'],
+  credentialName: null,
+  hasApiKey: false,
+}]
 let demoGitHubAuth: GitHubAuthStatus = {
   authenticated: false,
   login: null,
@@ -136,6 +165,7 @@ const demoRemoteDshVersion = '0.1.0-rc.7'
 const outputListeners = new Set<(output: RuntimeOutput) => void>()
 const stateListeners = new Set<(state: RuntimeState) => void>()
 const installProgressListeners = new Set<(progress: InstallProgress) => void>()
+const catalogAnalysisProgressListeners = new Set<(progress: CatalogAnalysisProgress) => void>()
 const pluginTrialListeners = new Set<(result: PluginTrialResult) => void>()
 const aiEventListeners = new Set<(event: AiInstallEvent) => void>()
 const packProgressListeners = new Set<(event: PackProgressEvent) => void>()
@@ -191,6 +221,50 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise(resolve => window.setTimeout(resolve, milliseconds))
 }
 
+async function demoAnalyzeCatalogRepository(
+  fullName: string,
+  defaultBranch: string,
+): Promise<CatalogRepositoryAnalysis> {
+  const checks: CatalogAnalysisProgress['checks'] = {
+    plugin: 'pending',
+    skill: 'pending',
+    application: 'pending',
+  }
+  const emit = (phase: CatalogAnalysisProgress['phase'], message: string) => {
+    catalogAnalysisProgressListeners.forEach(listener => listener({
+      repository: fullName,
+      phase,
+      message,
+      completed: Object.values(checks).filter(state => state === 'complete' || state === 'failed').length,
+      total: 3,
+      checks: { ...checks },
+    }))
+  }
+
+  emit('preparing', '正在准备仓库结构检测')
+  await wait(120)
+  checks.plugin = 'running'
+  checks.skill = 'running'
+  checks.application = 'running'
+  emit('checking', '正在检查 Plugin、Skill、应用加载项')
+
+  const completeCheck = async (delay: number, check: keyof typeof checks, message: string) => {
+    await wait(delay)
+    checks[check] = 'complete'
+    emit('checking', message)
+  }
+  await Promise.all([
+    completeCheck(320, 'plugin', 'Plugin 检查完成，正在等待 Skill、应用加载项'),
+    completeCheck(620, 'skill', 'Plugin、Skill 检查完成，正在等待应用加载项'),
+    completeCheck(900, 'application', '结构检查已完成'),
+  ])
+  emit('classifying', '正在汇总资源类型和安装入口')
+  await wait(180)
+  const result = demoCatalogAnalysis(fullName, defaultBranch)
+  emit('complete', '资源检测完成')
+  return result
+}
+
 function profile(): ProfileState {
   return {
     initialized: true,
@@ -210,9 +284,6 @@ function renumber(plugins: ManagedPlugin[]): ManagedPlugin[] {
 
 function demoAnalysis(fullName: string, defaultBranch: string): RepositoryAnalysis {
   const repo = demoRepositories.find(item => item.fullName === fullName)
-  if (fullName === 'anywhere-labs/deepseek-harness-desktop') {
-    return { repository: fullName, defaultBranch, installability: 'application', summary: '这是独立 DSH Desktop 宿主，不能加入 Web Profile。', targets: [] }
-  }
   if (fullName === 'nexu-io/open-design') {
     return { repository: fullName, defaultBranch, installability: 'application', summary: '这是独立应用，不是可加载的 DSH Plugin。', targets: [] }
   }
@@ -220,10 +291,12 @@ function demoAnalysis(fullName: string, defaultBranch: string): RepositoryAnalys
     return { repository: fullName, defaultBranch, installability: 'invalid', summary: '没有找到 Cordis Bundle 清单。', targets: [] }
   }
   const packageName = fullName === 'liustack/modlens'
-    ? '@liustack/modlens'
-    : fullName === 'ccch1mneyyy/dsh-TUI'
-      ? '@deepseek-harness-tui/dsh-tui'
-      : fullName === 'omdsh-dev/DSH-better-sidebar'
+      ? '@liustack/modlens'
+      : fullName === 'ccch1mneyyy/dsh-TUI'
+        ? '@deepseek-harness-tui/dsh-tui'
+        : fullName === 'anywhere-labs/deepseek-harness-desktop'
+          ? 'dsh-plugin-desktop'
+        : fullName === 'omdsh-dev/DSH-better-sidebar'
         ? 'dsh-better-sidebar'
         : `@${repo?.owner ?? 'demo'}/${(repo?.name ?? 'plugin').toLowerCase()}`
   return {
@@ -383,6 +456,28 @@ export const demoApi: LauncherApi = {
     demoCredential = { configured: false }
     return demoCredential
   },
+  listCustomApiProviders: async () => demoCustomApiProviders.map(provider => ({ ...provider, modelIds: [...provider.modelIds] })),
+  saveCustomApiProvider: async input => {
+    const route = input.route.trim()
+    if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(route)) throw new Error('路由格式无效。')
+    const previous = demoCustomApiProviders.find(item => item.route === input.originalRoute)
+    const provider: CustomApiProvider = {
+      route,
+      displayName: input.displayName.trim(),
+      baseUrl: input.baseUrl.trim(),
+      protocol: input.protocol,
+      modelIds: input.modelIds.map(id => id.trim()).filter(Boolean),
+      credentialName: input.apiKey?.trim() ? `${route.toUpperCase().replaceAll('-', '_')}_API_KEY` : previous?.credentialName ?? null,
+      hasApiKey: Boolean(input.apiKey?.trim()) || previous?.hasApiKey === true,
+    }
+    demoCustomApiProviders = demoCustomApiProviders.filter(item => item.route !== input.originalRoute && item.route !== route)
+    demoCustomApiProviders.push(provider)
+    return demoCustomApiProviders
+  },
+  removeCustomApiProvider: async route => {
+    demoCustomApiProviders = demoCustomApiProviders.filter(provider => provider.route !== route)
+    return demoCustomApiProviders
+  },
   getGitHubAuthStatus: async () => demoGitHubAuth,
   loginGitHubWithToken: async token => {
     if (token.trim().length < 20) throw new Error('GitHub 访问令牌格式无效。')
@@ -439,8 +534,19 @@ export const demoApi: LauncherApi = {
       : 'C:\\Users\\demo\\Projects',
   readProfile: async () => profile(),
   togglePlugin: async (packageName, enabled) => {
+    const selected = demoPlugins.find(plugin => plugin.packageName === packageName)
     demoPlugins = renumber(demoPlugins.map(plugin => plugin.packageName === packageName ? { ...plugin, enabled } : plugin))
-    return profile()
+    const linked = Boolean(selected?.repositoryFullName && demoInstalledApplications.some(application =>
+      application.repository.toLowerCase() === selected.repositoryFullName?.toLowerCase(),
+    ))
+    if (selected?.repositoryFullName) {
+      demoInstalledApplications = demoInstalledApplications.map(application =>
+        application.repository.toLowerCase() === selected.repositoryFullName?.toLowerCase()
+          ? { ...application, enabled }
+          : application,
+      )
+    }
+    return { profile: profile(), installedApplications: demoInstalledApplications, linked }
   },
   reorderPlugins: async packageNames => {
     const active = packageNames.map(name => demoPlugins.find(plugin => plugin.packageName === name)!).filter(Boolean)
@@ -468,7 +574,7 @@ export const demoApi: LauncherApi = {
       installedApplications: demoInstalledApplications,
     }
   },
-  analyzeCatalogRepository: async (fullName, defaultBranch) => demoCatalogAnalysis(fullName, defaultBranch),
+  analyzeCatalogRepository: demoAnalyzeCatalogRepository,
   importCatalogUrl: async (url): Promise<CatalogImportResult> => {
     const parsed = parseGitHubImportUrl(url)
     const branch = parsed.defaultBranch
@@ -616,7 +722,6 @@ export const demoApi: LauncherApi = {
       .filter(item => item.id !== installedAddon.id)
       .map(item => installedAddon.launchMode === 'runtime-replacement' && item.launchMode === 'runtime-replacement' ? { ...item, enabled: false } : item)
     demoInstalledApplications.push(installedAddon)
-    demoPlugins = renumber(demoPlugins.filter(plugin => plugin.packageName !== 'dsh-plugin-desktop'))
     installProgressListeners.forEach(listener => listener({ repository: request.repository, kind: 'application', phase: 'complete', percent: 100, message: `${target.name} 已作为应用加载项安装` }))
     return { installedAddon, installedAddons: demoInstalledApplications, profile: profile() }
   },
@@ -628,7 +733,17 @@ export const demoApi: LauncherApi = {
       if (enabled && selected?.launchMode === 'runtime-replacement' && application.launchMode === 'runtime-replacement') return { ...application, enabled: false }
       return application
     })
-    return demoInstalledApplications
+    const linked = Boolean(selected && demoPlugins.some(plugin =>
+      plugin.repositoryFullName?.toLowerCase() === selected.repository.toLowerCase(),
+    ))
+    if (selected) {
+      demoPlugins = renumber(demoPlugins.map(plugin =>
+        plugin.repositoryFullName?.toLowerCase() === selected.repository.toLowerCase()
+          ? { ...plugin, enabled }
+          : plugin,
+      ))
+    }
+    return { profile: profile(), installedApplications: demoInstalledApplications, linked }
   },
   uninstallApplication: async id => {
     demoInstalledApplications = demoInstalledApplications.filter(application => application.id !== id)
@@ -837,6 +952,10 @@ export const demoApi: LauncherApi = {
     }
     demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
     return updated
+  },
+  onCatalogAnalysisProgress: listener => {
+    catalogAnalysisProgressListeners.add(listener)
+    return () => catalogAnalysisProgressListeners.delete(listener)
   },
   onPackProgress: listener => {
     packProgressListeners.add(listener)

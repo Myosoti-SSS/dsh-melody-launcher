@@ -990,14 +990,57 @@ input:focus-visible {
 }
 
 .secondary-management-column,
-.skill-management-column,
-.application-management-column {
+.skill-management-column {
   min-width: 0;
   background: #fbfcfb;
 }
 
+.application-addon-panel {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.application-addon-heading {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 13px;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.application-addon-heading > div {
+  min-width: 0;
+}
+
+.application-addon-heading span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.application-addon-heading p,
+.application-addon-heading small {
+  margin: 3px 0 0;
+  color: var(--quiet);
+  font-size: 10px;
+}
+
+.application-addon-heading small {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
 .application-management-column {
-  border-top: 1px solid var(--line);
+  min-width: 0;
 }
 
 .skill-column-heading {
@@ -1067,6 +1110,17 @@ input:focus-visible {
   flex: 0 0 auto;
   align-items: center;
   gap: 6px;
+}
+
+.linked-component-badge {
+  display: inline-flex !important;
+  margin-left: 6px;
+  align-items: center;
+  gap: 2px !important;
+  color: #315f55 !important;
+  font-size: 9px !important;
+  font-weight: 600 !important;
+  vertical-align: 1px;
 }
 
 .application-remove-button {
@@ -1736,6 +1790,11 @@ input:focus-visible {
   color: var(--accent);
 }
 
+.batch-scan-status > span {
+  min-width: 0;
+  line-height: 16px;
+}
+
 .batch-scan-status.partial > svg {
   color: #a97016;
 }
@@ -2069,6 +2128,65 @@ input:focus-visible {
 .repository-analysis-note .analysis-warning {
   width: 100%;
   color: #8b5c15;
+}
+
+.catalog-analysis-progress {
+  max-width: 620px;
+  margin: 0 0 7px;
+  color: #526158;
+  font-size: 9px;
+}
+
+.catalog-analysis-progress-head {
+  display: grid;
+  min-height: 20px;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.catalog-analysis-progress-head > svg {
+  color: var(--accent);
+}
+
+.catalog-analysis-progress.error .catalog-analysis-progress-head > svg,
+.catalog-analysis-progress.error .catalog-analysis-progress-head {
+  color: var(--danger);
+}
+
+.catalog-analysis-progress-head strong {
+  color: var(--quiet);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.catalog-analysis-checks {
+  display: flex;
+  min-height: 19px;
+  align-items: center;
+  padding-left: 19px;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.catalog-analysis-checks span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--quiet);
+  white-space: nowrap;
+}
+
+.catalog-analysis-checks span.running {
+  color: var(--blue);
+}
+
+.catalog-analysis-checks span.complete {
+  color: var(--accent);
+}
+
+.catalog-analysis-checks span.failed {
+  color: var(--danger);
 }
 
 .topic-list span.candidate-topic {
@@ -2665,7 +2783,283 @@ input:focus-visible {
 }
 
 .credential-dialog {
-  width: min(520px, calc(100vw - 32px));
+  width: min(700px, calc(100vw - 32px));
+}
+
+.api-config-tabs {
+  display: flex;
+  min-height: 43px;
+  align-items: end;
+  padding: 0 16px;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.api-config-tabs button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  padding: 0 11px;
+  gap: 6px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.api-config-tabs button:hover,
+.api-config-tabs button.active {
+  color: var(--accent);
+}
+
+.api-config-tabs button.active {
+  border-bottom-color: var(--accent);
+}
+
+.api-config-tabs button span {
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 5px;
+  color: var(--muted);
+  background: #e5ebe7;
+  font-size: 9px;
+}
+
+.api-config-content {
+  min-height: 270px;
+  max-height: min(66vh, 610px);
+}
+
+.custom-api-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.custom-api-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.custom-api-heading > div,
+.custom-api-form-title {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.custom-api-heading strong,
+.custom-api-form-title strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.custom-api-heading span,
+.custom-api-form-title span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.custom-api-empty {
+  display: flex;
+  min-height: 130px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 20px;
+  gap: 6px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  color: var(--quiet);
+  background: var(--surface-soft);
+  text-align: center;
+}
+
+.custom-api-empty strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.custom-api-empty span {
+  max-width: 440px;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.custom-api-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.custom-api-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto 30px 30px;
+  min-height: 66px;
+  align-items: center;
+  padding: 8px 9px;
+  gap: 8px;
+  background: #fff;
+}
+
+.custom-api-item + .custom-api-item {
+  border-top: 1px solid var(--line);
+}
+
+.custom-api-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid #bfd8ca;
+  border-radius: 6px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.custom-api-copy,
+.custom-api-meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.custom-api-copy strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-api-copy span,
+.custom-api-copy small,
+.custom-api-meta span,
+.custom-api-meta small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-api-meta {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.custom-api-meta small.configured {
+  color: var(--accent);
+}
+
+.custom-api-remove {
+  color: var(--danger);
+}
+
+.custom-api-remove.confirming {
+  color: #fff;
+  background: var(--danger);
+}
+
+.custom-api-form {
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.custom-api-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 11px;
+  gap: 11px 12px;
+}
+
+.custom-api-form-grid label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.custom-api-form-grid label.wide {
+  grid-column: 1 / -1;
+}
+
+.custom-api-form-grid label > span {
+  color: #536058;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.custom-api-form-grid input,
+.custom-api-form-grid select,
+.custom-api-form-grid textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  outline: 0;
+  color: var(--ink);
+  background: #fff;
+  font-family: Consolas, "Segoe UI", sans-serif;
+  font-size: 11px;
+}
+
+.custom-api-form-grid input,
+.custom-api-form-grid select {
+  height: 36px;
+  padding: 0 9px;
+}
+
+.custom-api-form-grid textarea {
+  min-height: 70px;
+  padding: 8px 9px;
+  line-height: 17px;
+  resize: vertical;
+}
+
+.custom-api-form-grid input:focus,
+.custom-api-form-grid select:focus,
+.custom-api-form-grid textarea:focus {
+  border-color: #8eb8a3;
+  box-shadow: 0 0 0 2px rgba(25, 115, 79, 0.12);
+}
+
+.custom-api-form-grid .secret-input {
+  width: 100%;
+  height: 36px;
+}
+
+@media (max-width: 620px) {
+  .custom-api-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .custom-api-form-grid label.wide {
+    grid-column: auto;
+  }
+
+  .custom-api-item {
+    grid-template-columns: 34px minmax(0, 1fr) 30px 30px;
+  }
+
+  .custom-api-meta {
+    display: none;
+  }
 }
 
 .credential-summary {
