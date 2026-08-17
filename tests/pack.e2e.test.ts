@@ -460,7 +460,7 @@ describe('pack E2E · 中途失败回滚', () => {
     const packDir = profileDir(env, 'pack-partial-pack')
     expect(existsSync(packDir)).toBe(true)
     expect(await readPackRegistry(env.registryPath)).toHaveLength(1)
-    expect(manager.hasSnapshot()).resolves.toBe(true)
+    await expect(manager.hasSnapshot()).resolves.toBe(true)
 
     // 回滚：profile 目录、注册表记录、全局技能（快照前为空）全部还原。
     const rolledBack = await manager.rollback()
@@ -468,7 +468,7 @@ describe('pack E2E · 中途失败回滚', () => {
     expect(existsSync(packDir)).toBe(false)
     expect(await readPackRegistry(env.registryPath)).toEqual([])
     expect(existsSync(path.join(env.dshHome, 'skills'))).toBe(false)
-    expect(manager.hasSnapshot()).resolves.toBe(false)
+    await expect(manager.hasSnapshot()).resolves.toBe(false)
   })
 })
 

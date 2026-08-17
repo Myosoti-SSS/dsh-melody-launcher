@@ -798,7 +798,7 @@ describe('rollback', () => {
     // profile 目录与注册表记录都被清掉，等于撤销这次创建。
     await expect(readdir(profileDir)).rejects.toThrow()
     expect(await readPackRegistry(env.registryPath)).toEqual([])
-    expect(manager.hasSnapshot()).resolves.toBe(false)
+    await expect(manager.hasSnapshot()).resolves.toBe(false)
   })
 })
 
