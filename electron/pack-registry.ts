@@ -13,7 +13,7 @@
 
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { PackInstalledPlugin, PackInstalledSkill, PackSource, PackStatus } from '../src/types'
+import type { PackInstalledApplication, PackInstalledPlugin, PackInstalledPreset, PackInstalledSkill, PackSource, PackStatus } from '../src/types'
 
 /** 注册表里的一条整合包记录。id = pack-<safeName>，也是 DSH profile 名。 */
 export interface PackRecord {
@@ -28,6 +28,10 @@ export interface PackRecord {
   plugins: PackInstalledPlugin[]
   /** raw 导入的技能（全局安装，记入包以支持删包清理）。 */
   skills?: PackInstalledSkill[]
+  /** 包内包含的 Agent 预设（全局安装，记入包以支持导出与删包清理）。 */
+  presets?: PackInstalledPreset[]
+  /** 包内包含的 Application Addon（独立安装目录，记入包以支持导出与删包清理）。 */
+  applications?: PackInstalledApplication[]
   /** state 为 partial/failed 时的失败项（含原因），完整包缺省省略。 */
   failures?: { packageName: string; reason: string }[]
 }
@@ -112,6 +116,8 @@ export function toPackStatus(record: PackRecord, currentProfile: string): PackSt
     state: record.state,
     plugins: record.plugins,
     skills: record.skills,
+    presets: record.presets,
+    applications: record.applications,
     failures: record.failures,
     installedAt: record.installedAt,
     updatedAt: record.updatedAt,

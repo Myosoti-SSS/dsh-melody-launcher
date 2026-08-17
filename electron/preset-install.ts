@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs'
-import { access, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { access, cp, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import path from 'node:path'
 import AdmZip from 'adm-zip'
@@ -191,6 +191,39 @@ export async function installPresetFromRepository(
     return { name: target.name, path: destination, enabled: true }
   } finally {
     await rm(zipPath, { force: true }).catch(() => undefined)
+    await removeRecursive(stagingRoot).catch(() => undefined)
+  }
+}
+
+/**
+ * 从本地目录安装 Agent 预设（raw 整合包扫描导入用）。
+ * 目录必须包含 preset.yml；复制到 staging 后原子替换进 `.agent-presets/<name>`。
+ */
+export async function installPresetFromDirectory(
+  dshHome: string,
+  name: string,
+  sourceDir: string,
+): Promise<InstalledPreset> {
+  if (!isSkillName(name)) throw new Error('预设名称无效。')
+  if (!path.isAbsolute(sourceDir)) throw new Error('预设目录必须是绝对路径。')
+  if (!await exists(path.join(sourceDir, PRESET_MANIFEST))) throw new Error('预设目录缺少 preset.yml。')
+
+  const presetRoot = path.join(dshHome, '.agent-presets')
+  const stagingRoot = path.join(dshHome, '.preset-staging', `${process.pid}-${Date.now()}`)
+  assertInside(dshHome, stagingRoot)
+  const staged = path.join(stagingRoot, name)
+
+  try {
+    await mkdir(staged, { recursive: true })
+    await cp(sourceDir, staged, { recursive: true })
+    if (!await exists(path.join(staged, PRESET_MANIFEST))) throw new Error('预设内容缺少 preset.yml。')
+
+    await mkdir(presetRoot, { recursive: true })
+    const destination = path.join(presetRoot, name)
+    assertInside(presetRoot, destination)
+    await replacePath(staged, destination)
+    return { name, path: destination, enabled: true }
+  } finally {
     await removeRecursive(stagingRoot).catch(() => undefined)
   }
 }

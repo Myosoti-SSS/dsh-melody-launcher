@@ -1,6 +1,6 @@
 import { PackagePlus, X } from 'lucide-react'
 import { useState } from 'react'
-import type { ManagedPlugin } from '../../types'
+import type { InstalledApplicationAddon, InstalledPreset, InstalledSkill, ManagedPlugin } from '../../types'
 
 /**
  * 自建整合包表单：名称（实时派生包 id）/描述 + 从当前 Profile 已装插件勾选。
@@ -11,7 +11,13 @@ import type { ManagedPlugin } from '../../types'
 export interface CreatePackDialogProps {
   /** 当前 profile 已安装插件（含内置），用 packageName 作为选择键。 */
   plugins: ManagedPlugin[]
-  onConfirm: (request: { name: string; description: string; packageNames: string[] }) => void
+  /** 已安装的 Agent 预设；有 repository/sourcePath/revision 的才可加入可导出整合包。 */
+  presets: InstalledPreset[]
+  /** 已安装且带来源记录的 Skill。 */
+  skills: InstalledSkill[]
+  /** 已安装的 Application Addon。 */
+  applications: InstalledApplicationAddon[]
+  onConfirm: (request: { name: string; description: string; packageNames: string[]; presetNames: string[]; skillNames: string[]; applicationIds: string[] }) => void
   onClose: () => void
 }
 
@@ -24,12 +30,15 @@ export function packIdFromName(name: string): string {
   return `pack-${safe || 'untitled'}`
 }
 
-export function CreatePackDialog({ plugins, onConfirm, onClose }: CreatePackDialogProps) {
+export function CreatePackDialog({ plugins, presets, skills, applications, onConfirm, onClose }: CreatePackDialogProps) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(plugins.filter(plugin => plugin.enabled).map(plugin => plugin.packageName)),
   )
+  const [selectedPresets, setSelectedPresets] = useState<Set<string>>(() => new Set())
+  const [selectedSkills, setSelectedSkills] = useState<Set<string>>(() => new Set())
+  const [selectedApplications, setSelectedApplications] = useState<Set<string>>(() => new Set())
 
   const toggle = (packageName: string) => {
     setSelected(current => {
@@ -40,7 +49,36 @@ export function CreatePackDialog({ plugins, onConfirm, onClose }: CreatePackDial
     })
   }
 
-  const canSubmit = name.trim().length > 0 && selected.size > 0
+  const togglePreset = (presetName: string) => {
+    setSelectedPresets(current => {
+      const next = new Set(current)
+      if (next.has(presetName)) next.delete(presetName)
+      else next.add(presetName)
+      return next
+    })
+  }
+
+  const toggleSkill = (skillName: string) => {
+    setSelectedSkills(current => {
+      const next = new Set(current)
+      if (next.has(skillName)) next.delete(skillName)
+      else next.add(skillName)
+      return next
+    })
+  }
+
+  const toggleApplication = (addonId: string) => {
+    setSelectedApplications(current => {
+      const next = new Set(current)
+      if (next.has(addonId)) next.delete(addonId)
+      else next.add(addonId)
+      return next
+    })
+  }
+
+  const canSubmit = name.trim().length > 0 && (
+    selected.size > 0 || selectedPresets.size > 0 || selectedSkills.size > 0 || selectedApplications.size > 0
+  )
   const packId = packIdFromName(name)
 
   return (
@@ -99,6 +137,89 @@ export function CreatePackDialog({ plugins, onConfirm, onClose }: CreatePackDial
               </div>
             )}
           </div>
+          <div className="form-section divided">
+            <h3>包含预设（已选 {selectedPresets.size} / {presets.length}）</h3>
+            <p>从已安装且有来源记录的 Agent 预设中挑选；没有来源记录的预设无法随包导出/重装。</p>
+            {presets.length === 0 ? (
+              <div className="pack-checklist-empty">当前环境还没有可加入整合包的 Agent 预设。</div>
+            ) : (
+              <div className="pack-plugin-checklist">
+                {presets.map(preset => {
+                  const addable = Boolean(preset.repository && preset.sourcePath && preset.revision)
+                  const checked = selectedPresets.has(preset.name)
+                  return (
+                    <label className={`pack-checklist-item ${checked ? 'checked' : ''} ${addable ? '' : 'muted'}`} key={preset.name}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={!addable}
+                        onChange={() => togglePreset(preset.name)}
+                        aria-label={`${checked ? '取消' : '选择'} 预设 ${preset.name}`}
+                      />
+                      <span className="pack-item-glyph">{preset.name.slice(0, 2).toUpperCase()}</span>
+                      <span className="pack-checklist-copy">
+                        <strong>{preset.name}</strong>
+                        <small>{addable ? `${preset.repository} · ${preset.sourcePath}` : '无来源记录，不可加入'}</small>
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+          <div className="form-section divided">
+            <h3>包含技能（已选 {selectedSkills.size} / {skills.length}）</h3>
+            <p>从已安装且有来源记录的 Skill 中挑选。</p>
+            {skills.length === 0 ? (
+              <div className="pack-checklist-empty">当前环境还没有可加入整合包的 Skill。</div>
+            ) : (
+              <div className="pack-plugin-checklist">
+                {skills.map(skill => {
+                  const addable = Boolean(skill.repository && skill.sourcePath && skill.revision)
+                  const checked = selectedSkills.has(skill.name)
+                  return (
+                    <label className={`pack-checklist-item ${checked ? 'checked' : ''} ${addable ? '' : 'muted'}`} key={skill.name}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={!addable}
+                        onChange={() => toggleSkill(skill.name)}
+                        aria-label={`${checked ? '取消' : '选择'} Skill ${skill.name}`}
+                      />
+                      <span className="pack-item-glyph">{skill.name.slice(0, 2).toUpperCase()}</span>
+                      <span className="pack-checklist-copy">
+                        <strong>{skill.name}</strong>
+                        <small>{addable ? `${skill.repository} · ${skill.sourcePath}` : '无来源记录，不可加入'}</small>
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+          <div className="form-section divided">
+            <h3>包含应用（已选 {selectedApplications.size} / {applications.length}）</h3>
+            <p>从已安装的 Application Addon 中挑选。</p>
+            {applications.length === 0 ? (
+              <div className="pack-checklist-empty">当前环境还没有可加入整合包的应用加载项。</div>
+            ) : (
+              <div className="pack-plugin-checklist">
+                {applications.map(addon => {
+                  const checked = selectedApplications.has(addon.id)
+                  return (
+                    <label className={`pack-checklist-item ${checked ? 'checked' : ''}`} key={addon.id}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleApplication(addon.id)} aria-label={`${checked ? '取消' : '选择'} 应用 ${addon.name}`} />
+                      <span className="pack-item-glyph">{addon.name.slice(0, 2).toUpperCase()}</span>
+                      <span className="pack-checklist-copy">
+                        <strong>{addon.name}</strong>
+                        <small>{addon.repository}</small>
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </div>
         <footer>
           <button type="button" className="secondary-button" onClick={onClose}>取消</button>
@@ -110,6 +231,9 @@ export function CreatePackDialog({ plugins, onConfirm, onClose }: CreatePackDial
               name: name.trim(),
               description: description.trim(),
               packageNames: plugins.filter(plugin => selected.has(plugin.packageName)).map(plugin => plugin.packageName),
+              presetNames: presets.filter(preset => selectedPresets.has(preset.name)).map(preset => preset.name),
+              skillNames: skills.filter(skill => selectedSkills.has(skill.name)).map(skill => skill.name),
+              applicationIds: applications.filter(addon => selectedApplications.has(addon.id)).map(addon => addon.id),
             })}
           >
             <PackagePlus size={16} />创建整合包

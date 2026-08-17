@@ -59,20 +59,30 @@ plugins:
     expect(manifest.plugins[2]).toEqual({ packageName: '@demo/gamma', repository: 'demo/gamma', source: 'github' })
   })
 
-  it('未知字段与 skills 字段被忽略', () => {
+  it('未知字段被忽略，skills 被解析', () => {
     const manifest = parsePackManifest(`
 name: Ignore
 description: unknown fields are ignored
 version: 1.0.0
 unknownTop: hello
 skills:
-  - name: nope
+  - name: git-workflow
+    format: bundle
+    repository: demo/skill-repo
+    sourcePath: skills/git-workflow
+    revision: abc1234
 plugins:
   - packageName: alpha
     weirdField: 42
 `)
     expect(manifest.name).toBe('Ignore')
-    expect(manifest.skills).toBeUndefined()
+    expect(manifest.skills).toEqual([{
+      name: 'git-workflow',
+      format: 'bundle',
+      repository: 'demo/skill-repo',
+      sourcePath: 'skills/git-workflow',
+      revision: 'abc1234',
+    }])
     expect(manifest.plugins[0]).toEqual({ packageName: 'alpha', source: 'npm' })
   })
 
@@ -226,5 +236,89 @@ describe('buildManifestFromReceipts', () => {
       installedAt: '2026-08-16T00:00:00.000Z',
     }])
     expect(manifest.plugins).toEqual([{ packageName: 'alpha', source: 'local', version: '1.0.0' }])
+  })
+})
+
+describe('pack presets in manifest', () => {
+  it('parse/serialize presets', () => {
+    const yaml = `
+name: Preset Pack
+description: a pack with presets
+version: 1.0.0
+plugins:
+  - packageName: alpha
+presets:
+  - name: router-standard
+    repository: demo/preset-repo
+    sourcePath: preset/router-standard
+    revision: abc1234
+`
+    const manifest = parsePackManifest(yaml)
+    expect(manifest.presets).toEqual([
+      { name: 'router-standard', repository: 'demo/preset-repo', sourcePath: 'preset/router-standard', revision: 'abc1234' },
+    ])
+    const roundTrip = parsePackManifest(serializePackManifest(manifest))
+    expect(roundTrip.presets).toEqual(manifest.presets)
+  })
+
+  it('buildManifestFromReceipts includes preset receipts', () => {
+    const manifest = buildManifestFromReceipts('pack-x', [], [{
+      name: 'router-standard',
+      repository: 'demo/preset-repo',
+      sourcePath: 'preset/router-standard',
+      revision: 'abc1234',
+      installedAt: '2026-08-16T00:00:00.000Z',
+    }])
+    expect(manifest.presets).toEqual([
+      { name: 'router-standard', repository: 'demo/preset-repo', sourcePath: 'preset/router-standard', revision: 'abc1234' },
+    ])
+    expect(() => parsePackManifest(serializePackManifest(manifest))).not.toThrow()
+  })
+
+  it('parse/serialize skills and applications', () => {
+    const yaml = `
+name: Full Pack
+description: all resource types
+version: 1.0.0
+plugins: []
+skills:
+  - name: git-workflow
+    format: bundle
+    repository: demo/skill-repo
+    sourcePath: skills/git-workflow
+    revision: abc1234
+applications:
+  - id: routing-app
+    name: Routing App
+    repository: demo/routing-app
+    packageName: routing-app
+    version: 1.0.0
+    binName: routing
+    launchMode: after-runtime
+    launchArgs: ["--port", "3080"]
+    provides: ["routing"]
+`
+    const manifest = parsePackManifest(yaml)
+    expect(manifest.skills).toEqual([{
+      name: 'git-workflow',
+      format: 'bundle',
+      repository: 'demo/skill-repo',
+      sourcePath: 'skills/git-workflow',
+      revision: 'abc1234',
+    }])
+    expect(manifest.applications).toEqual([{
+      id: 'routing-app',
+      name: 'Routing App',
+      repository: 'demo/routing-app',
+      packageName: 'routing-app',
+      version: '1.0.0',
+      binName: 'routing',
+      launchMode: 'after-runtime',
+      launchArgs: ['--port', '3080'],
+      provides: ['routing'],
+    }])
+    const roundTrip = parsePackManifest(serializePackManifest(manifest))
+    expect(roundTrip.skills).toEqual(manifest.skills)
+    expect(roundTrip.applications).toEqual(manifest.applications)
   })
 })

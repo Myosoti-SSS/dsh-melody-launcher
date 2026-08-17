@@ -22,6 +22,7 @@ import type {
   RuntimeOutput,
   SkillInstallRequest,
   SkillInstallResult,
+  SkillInstallTarget,
   SkillRepositoryAnalysis,
 } from '../src/types'
 import { analyzeApplicationRepository } from './application-catalog'
@@ -41,6 +42,8 @@ import { analyzeMetaRepository } from './meta-repo-catalog'
 import { analyzeRepository } from './plugin-catalog'
 import { prepareSubdirectoryPlugin, type PluginSourceProgress } from './plugin-source'
 import { readPluginReceipts, recordPluginInstall, removePluginReceipt } from './plugin-receipts'
+import { readPresetReceipts, recordPresetInstall } from './preset-receipts'
+import { readSkillReceipts, recordSkillInstall } from './skill-receipts'
 import { readProfile } from './profile'
 import { withExecutableDirectoryOnPath } from './process'
 import { analyzeSkillRepository } from './skill-catalog'
@@ -110,6 +113,10 @@ export interface InstallerOptions {
   pluginSourceRoot: string
   /** 插件安装凭据文件的路径。 */
   pluginReceiptsPath: string
+  /** Agent 预设安装凭据文件的路径。 */
+  presetReceiptsPath: string
+  /** Skill 安装凭据文件的路径。 */
+  skillReceiptsPath: string
   /** Skill 仓库缓存根目录。 */
   skillSourceRoot: string
   emitOutput: (level: RuntimeOutput['level'], text: string) => void
@@ -153,6 +160,8 @@ export interface Installer {
   ): Promise<CatalogRepositoryAnalysis>
   /** 安装一个 Skill。 */
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
+  /** 按固定 pin 安装一个 Skill（整合包清单导入用，不重新分析 HEAD）。 */
+  installSkillPinned(request: { repository: string; target: SkillInstallTarget }): Promise<InstalledSkill>
   /** 读取已安装的 Skill 列表。 */
   readInstalledSkills(): Promise<InstalledSkill[]>
   /** 启用或停用一个本地 Skill。 */
@@ -593,7 +602,16 @@ export function createInstaller(options: InstallerOptions): Installer {
 
     async readInstalledSkills(): Promise<InstalledSkill[]> {
       const settings = await options.readSettings()
-      return readLocalSkills(settings.dshHome)
+      const [skills, receipts] = await Promise.all([
+        readLocalSkills(settings.dshHome),
+        readSkillReceipts(options.skillReceiptsPath),
+      ])
+      return skills.map(skill => {
+        const receipt = receipts.find(item => item.name === skill.name)
+        return receipt
+          ? { ...skill, repository: receipt.repository, sourcePath: receipt.sourcePath, revision: receipt.revision }
+          : skill
+      })
     },
 
     async toggleSkill(name: string, enabled: boolean): Promise<InstalledSkill[]> {
@@ -735,6 +753,14 @@ export function createInstaller(options: InstallerOptions): Installer {
         const installedSkill = options.githubFetch
           ? await installSkillFromRepository(options.skillSourceRoot, settings.dshHome, request.repository, target, onProgress, options.githubFetch)
           : await installSkillFromRepository(options.skillSourceRoot, settings.dshHome, request.repository, target, onProgress)
+        await recordSkillInstall(options.skillReceiptsPath, {
+          name: target.name,
+          format: target.format,
+          repository: request.repository,
+          sourcePath: target.sourcePath,
+          revision: target.revision,
+          installedAt: new Date().toISOString(),
+        })
         const installedSkills = await readLocalSkills(settings.dshHome)
         const verified = installedSkills.find(skill => skill.name === target.name)
         if (!verified) throw new Error('文件已写入，但 DSH 没有把它识别为有效 Skill。')
@@ -752,6 +778,24 @@ export function createInstaller(options: InstallerOptions): Installer {
       } finally {
         active = null
       }
+    },
+
+    async installSkillPinned({ repository, target }): Promise<InstalledSkill> {
+      const settings = await options.readSettings()
+      const onProgress = (percent: number, message: string) =>
+        emit({ repository, kind: 'skill', phase: 'downloading', percent, message })
+      const installedSkill = options.githubFetch
+        ? await installSkillFromRepository(options.skillSourceRoot, settings.dshHome, repository, target, onProgress, options.githubFetch)
+        : await installSkillFromRepository(options.skillSourceRoot, settings.dshHome, repository, target, onProgress)
+      await recordSkillInstall(options.skillReceiptsPath, {
+        name: target.name,
+        format: target.format,
+        repository,
+        sourcePath: target.sourcePath,
+        revision: target.revision,
+        installedAt: new Date().toISOString(),
+      })
+      return installedSkill
     },
 
     async installPreset(request: PresetInstallRequest): Promise<PresetInstallResult> {
@@ -774,6 +818,13 @@ export function createInstaller(options: InstallerOptions): Installer {
         const installedPreset = options.githubFetch
           ? await installPresetFromRepository(options.skillSourceRoot, settings.dshHome, request.repository, target, onProgress, options.githubFetch)
           : await installPresetFromRepository(options.skillSourceRoot, settings.dshHome, request.repository, target, onProgress)
+        await recordPresetInstall(options.presetReceiptsPath, {
+          name: target.name,
+          repository: request.repository,
+          sourcePath: request.sourcePath,
+          revision: request.revision,
+          installedAt: new Date().toISOString(),
+        })
         const installedPresets = await readLocalPresets(settings.dshHome)
         emit({ repository: request.repository, kind: 'preset', phase: 'complete', percent: 100, message: `${target.name} 已安装` })
         return { installedPreset, installedPresets }
@@ -793,7 +844,16 @@ export function createInstaller(options: InstallerOptions): Installer {
 
     async readInstalledPresets(): Promise<InstalledPreset[]> {
       const settings = await options.readSettings()
-      return readLocalPresets(settings.dshHome)
+      const [presets, receipts] = await Promise.all([
+        readLocalPresets(settings.dshHome),
+        readPresetReceipts(options.presetReceiptsPath),
+      ])
+      return presets.map(preset => {
+        const receipt = receipts.find(item => item.name === preset.name)
+        return receipt
+          ? { ...preset, repository: receipt.repository, sourcePath: receipt.sourcePath, revision: receipt.revision }
+          : preset
+      })
     },
 
     async togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]> {

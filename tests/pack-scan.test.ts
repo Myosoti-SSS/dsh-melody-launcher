@@ -8,6 +8,7 @@ import {
   DEFAULT_RAW_SCAN_LIMITS,
   extractRawPluginBodies,
   extractRawPluginBodiesFromPath,
+  extractRawPresetSourcesFromPath,
   extractRawSkillSources,
   scanRawPackZip,
   scanRawPackZipFromPath,
@@ -404,5 +405,34 @@ describe('streaming raw path API', () => {
     expect(bodies.get('beta')).toBe(path.join(root, 'bodies', 'beta'))
     expect(await readFile(path.join(root, 'bodies', 'alpha', 'package.json'), 'utf8')).toContain('"alpha"')
     expect(await readFile(path.join(root, 'bodies', 'beta', 'package.json'), 'utf8')).toContain('"beta"')
+  })
+})
+
+describe('raw Agent preset scan', () => {
+  it('scanRawPackZip 识别 preset.yml 目录为预设', () => {
+    const zip = makeZip({
+      'agent-presets/router-standard/preset.yml': 'name: router-standard\n',
+      'agent-presets/router-standard/helper.js': 'export {}',
+      'plugin-alpha/package.json': packageJson('alpha'),
+    })
+    const scan = scanRawPackZip(zip)
+    expect(scan.presets).toEqual([{ kind: 'preset', name: 'router-standard', entryPrefix: 'agent-presets/router-standard' }])
+  })
+
+  it('scanRawPackZipFromPath / extractRawPresetSourcesFromPath', async () => {
+    const root = await temporaryDirectory()
+    const zipPath = path.join(root, 'raw-preset.zip')
+    await writeFile(zipPath, makeZip({
+      'presets/router-standard/preset.yml': 'name: router-standard\n',
+      'presets/router-standard/helper.js': 'export {}',
+      'plugin-alpha/package.json': packageJson('alpha'),
+    }))
+
+    const scan = await scanRawPackZipFromPath(zipPath)
+    expect(scan.presets.map(preset => preset.name)).toEqual(['router-standard'])
+
+    const sources = await extractRawPresetSourcesFromPath(zipPath, scan.presets, path.join(root, 'presets'))
+    expect(sources.get('router-standard')).toBe(path.join(root, 'presets', 'router-standard'))
+    expect(await readFile(path.join(root, 'presets', 'router-standard', 'preset.yml'), 'utf8')).toContain('router-standard')
   })
 })

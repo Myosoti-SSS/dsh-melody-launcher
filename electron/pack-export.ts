@@ -65,8 +65,9 @@ export async function buildPackExportToFile(
   manifest: PackManifest,
   packageNames: string[],
   outputPath: string,
+  presetDirs: Map<string, string> = new Map(),
 ): Promise<{ zipPath: string; missing: string[] }> {
   const { bodies, missing } = await collectPackBodies(packProfileDir, packageNames)
-  await buildPackZipToFile(manifest, bodies, outputPath)
+  await buildPackZipToFile(manifest, bodies, outputPath, presetDirs)
   return { zipPath: outputPath, missing }
 }

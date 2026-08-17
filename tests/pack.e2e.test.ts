@@ -55,6 +55,8 @@ async function makeEnv(): Promise<{
   registryPath: string
   snapshotRoot: string
   pluginReceiptsPath: string
+  presetReceiptsPath: string
+  skillReceiptsPath: string
 }> {
   const root = await temporaryDirectory()
   const dshHome = path.join(root, 'dsh-home')
@@ -65,6 +67,8 @@ async function makeEnv(): Promise<{
     registryPath: path.join(root, 'packs.json'),
     snapshotRoot: path.join(root, 'pack-snapshots'),
     pluginReceiptsPath: path.join(root, 'plugin-installs.json'),
+    presetReceiptsPath: path.join(root, 'preset-installs.json'),
+    skillReceiptsPath: path.join(root, 'skill-installs.json'),
   }
 }
 
@@ -94,6 +98,13 @@ function makeManager(env: Env, installer: InstallInstaller, store: SettingsStore
     registryPath: env.registryPath,
     snapshotRoot: env.snapshotRoot,
     pluginReceiptsPath: env.pluginReceiptsPath,
+    presetReceiptsPath: env.presetReceiptsPath,
+    skillReceiptsPath: env.skillReceiptsPath,
+    applicationAddons: {
+      list: async () => [],
+      install: async () => ({}),
+      uninstall: async () => [],
+    },
     installer,
     emitEvent,
     isRuntimeRunning: () => false,
@@ -199,11 +210,72 @@ function createDshSimulator(dshHome: string, receiptsPath: string): DshSimulator
     return readProfile(dshHome, profile)
   }
 
+  const installPreset: InstallInstaller['installPreset'] = async request => {
+    if (failOn.has(request.name)) throw new Error(`模拟安装失败：${request.name}`)
+    const presetRoot = path.join(dshHome, '.agent-presets')
+    const destination = path.join(presetRoot, request.name)
+    await mkdir(destination, { recursive: true })
+    await writeFile(path.join(destination, 'preset.yml'), `name: ${request.name}\n`)
+    return {
+      installedPreset: { name: request.name, path: destination, enabled: true },
+      installedPresets: [],
+    }
+  }
+
+  const installPresetLocal: InstallInstaller['installPresetLocal'] = async (home, preset) => {
+    if (failOn.has(preset.name)) throw new Error(`模拟安装失败：${preset.name}`)
+    const destination = path.join(home, '.agent-presets', preset.name)
+    await mkdir(destination, { recursive: true })
+    await cp(preset.sourceDir, destination, { recursive: true })
+    return {}
+  }
+
+  const installSkill: InstallInstaller['installSkill'] = async request => {
+    if (failOn.has(request.targetId)) throw new Error(`模拟安装失败：${request.targetId}`)
+    return {
+      installedSkill: {
+        name: request.targetId,
+        description: '',
+        path: path.join(dshHome, 'skills', request.targetId),
+        format: 'bundle',
+        enabled: true,
+        modelInvocable: false,
+        userInvocable: false,
+      },
+      installedSkills: [],
+    }
+  }
+
+  const installSkillPinned: InstallInstaller['installSkillPinned'] = async ({ target }) => {
+    if (failOn.has(target.name)) throw new Error(`模拟安装失败：${target.name}`)
+    const destination = path.join(dshHome, 'skills', target.name)
+    await mkdir(destination, { recursive: true })
+    await writeFile(path.join(destination, 'SKILL.md'), `---\nname: ${target.name}\ndescription: x\n---\n`)
+    return {
+      name: target.name,
+      description: '',
+      path: destination,
+      format: target.format,
+      enabled: true,
+      modelInvocable: false,
+      userInvocable: false,
+    }
+  }
+
+  const toggleSkill: InstallInstaller['toggleSkill'] = async () => []
+  const togglePreset: InstallInstaller['togglePreset'] = async () => []
+
   return {
     failOn,
     installCalls,
     installPluginTarget,
     installSkillLocal,
+    installSkill,
+    installSkillPinned,
+    toggleSkill,
+    installPreset,
+    installPresetLocal,
+    togglePreset,
     remove,
     readProfile: (home, profileName) => readProfile(home, profileName),
     togglePlugin: (home, profileName, packageName, enabled) => togglePlugin(home, profileName, packageName, enabled),
@@ -526,5 +598,42 @@ describe('pack E2E · 从已装插件创建包', () => {
     const receipts = await readPluginReceipts(env.pluginReceiptsPath)
     expect(receipts.filter(r => r.profileName === 'pack-built-pack')).toEqual([])
     expect(receipts.filter(r => r.profileName === 'web').map(r => r.packageName).sort()).toEqual(['delta', 'gamma'])
+  })
+})
+
+describe('pack E2E · Agent 预设', () => {
+  it('导入含预设的整合包后记录预设，删除包时清理全局预设', async () => {
+    const env = await makeEnv()
+    const sim = createDshSimulator(env.dshHome, env.pluginReceiptsPath)
+    const store = makeSettingsStore(env.dshHome)
+    const { manager } = makeManager(env, sim, store)
+
+    const manifest: PackManifest = {
+      name: 'Preset E2E',
+      description: 'preset e2e',
+      version: '1.0.0',
+      plugins: [],
+      presets: [{
+        name: 'router-standard',
+        repository: 'demo/preset-repo',
+        sourcePath: 'preset/router-standard',
+        revision: 'abc1234',
+      }],
+    }
+    const zipPath = await writeStandardZip(env, 'preset-e2e.zip', manifest, new Map())
+
+    const result = await manager.importPack(zipPath)
+    expect(result.installed).toEqual(['router-standard'])
+    expect(result.state).toBe('complete')
+    const presetDir = path.join(env.dshHome, '.agent-presets', 'router-standard')
+    expect(existsSync(path.join(presetDir, 'preset.yml'))).toBe(true)
+
+    let records = await readPackRegistry(env.registryPath)
+    expect(records[0].presets).toEqual([{ name: 'router-standard', enabled: true }])
+
+    await manager.removePack('pack-preset-e2e')
+    expect(existsSync(presetDir)).toBe(false)
+    records = await readPackRegistry(env.registryPath)
+    expect(records).toEqual([])
   })
 })

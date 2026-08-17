@@ -1017,11 +1017,12 @@ export const demoApi: LauncherApi = {
       enabled: true,
       state: 'complete',
       plugins: request.packageNames.map(packageName => ({ packageName, enabled: true })),
+      ...(request.presetNames?.length ? { presets: request.presetNames.map(name => ({ name, enabled: true })) } : {}),
       installedAt: now,
       updatedAt: now,
     }
     demoPacks = [...demoPacks.filter(item => item.id !== id), pack]
-    return { id, installed: request.packageNames, failures: [], state: 'complete' }
+    return { id, installed: [...request.packageNames, ...(request.presetNames ?? [])], failures: [], state: 'complete' }
   },
   analyzePackImport: async () => ({
     // demo 无法读真实 zip，返回 raw 形态样例以演练扫描导入 UI（含可编辑包名）。
@@ -1077,12 +1078,75 @@ export const demoApi: LauncherApi = {
     demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
     return updated
   },
+  addPackPreset: async (packId, presetName) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const presets = pack.presets?.some(preset => preset.name === presetName)
+      ? pack.presets
+      : [...(pack.presets ?? []), { name: presetName, enabled: true }]
+    const updated: PackStatus = { ...pack, presets, updatedAt: new Date().toISOString() }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  addPackSkill: async (packId, skillName) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const skills = pack.skills?.some(skill => skill.name === skillName)
+      ? pack.skills
+      : [...(pack.skills ?? []), { name: skillName, format: 'bundle' as const, enabled: true }]
+    const updated: PackStatus = { ...pack, skills, updatedAt: new Date().toISOString() }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  addPackApplication: async (packId, addonId) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const applications = pack.applications?.some(addon => addon.id === addonId)
+      ? pack.applications
+      : [...(pack.applications ?? []), { id: addonId, name: addonId, enabled: true }]
+    const updated: PackStatus = { ...pack, applications, updatedAt: new Date().toISOString() }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
   togglePackItem: async (packId, packageName, enabled) => {
     const pack = demoPacks.find(item => item.id === packId)
     if (!pack) throw new Error(`未找到整合包：${packId}`)
     const updated: PackStatus = {
       ...pack,
       plugins: pack.plugins.map(plugin => (plugin.packageName === packageName ? { ...plugin, enabled } : plugin)),
+      updatedAt: new Date().toISOString(),
+    }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  togglePackPreset: async (packId, presetName, enabled) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const updated: PackStatus = {
+      ...pack,
+      presets: pack.presets?.map(preset => (preset.name === presetName ? { ...preset, enabled } : preset)),
+      updatedAt: new Date().toISOString(),
+    }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  togglePackSkill: async (packId, skillName, enabled) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const updated: PackStatus = {
+      ...pack,
+      skills: pack.skills?.map(skill => (skill.name === skillName ? { ...skill, enabled } : skill)),
+      updatedAt: new Date().toISOString(),
+    }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  togglePackApplication: async (packId, addonId, enabled) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const updated: PackStatus = {
+      ...pack,
+      applications: pack.applications?.map(addon => (addon.id === addonId ? { ...addon, enabled } : addon)),
       updatedAt: new Date().toISOString(),
     }
     demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
@@ -1096,6 +1160,30 @@ export const demoApi: LauncherApi = {
       plugins: pack.plugins.filter(plugin => plugin.packageName !== packageName),
       updatedAt: new Date().toISOString(),
     }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  removePackPreset: async (packId, presetName) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const presets = pack.presets?.filter(preset => preset.name !== presetName)
+    const updated: PackStatus = { ...pack, presets: presets?.length ? presets : undefined, updatedAt: new Date().toISOString() }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  removePackSkill: async (packId, skillName) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const skills = pack.skills?.filter(skill => skill.name !== skillName)
+    const updated: PackStatus = { ...pack, skills: skills?.length ? skills : undefined, updatedAt: new Date().toISOString() }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  removePackApplication: async (packId, addonId) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const applications = pack.applications?.filter(addon => addon.id !== addonId)
+    const updated: PackStatus = { ...pack, applications: applications?.length ? applications : undefined, updatedAt: new Date().toISOString() }
     demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
     return updated
   },

@@ -331,6 +331,21 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     if (!Array.isArray(request.packageNames) || request.packageNames.some(name => !isSafePackageName(name))) {
       throw new Error('插件列表无效。')
     }
+    if (request.presetNames !== undefined && (
+      !Array.isArray(request.presetNames) || request.presetNames.some(name => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
+    )) {
+      throw new Error('预设列表无效。')
+    }
+    if (request.skillNames !== undefined && (
+      !Array.isArray(request.skillNames) || request.skillNames.some(name => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
+    )) {
+      throw new Error('Skill 列表无效。')
+    }
+    if (request.applicationIds !== undefined && (
+      !Array.isArray(request.applicationIds) || request.applicationIds.some(id => !/^[a-z0-9](?:[a-z0-9._-]{0,78}[a-z0-9])?$/.test(id))
+    )) {
+      throw new Error('应用加载项列表无效。')
+    }
     return packManager.createPack(request)
   })
 
@@ -403,6 +418,51 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.packsAddPlugin, async (_event, payload: { packId: string; packageName: string }) => {
     if (!isSafeProfileName(payload.packId) || !isSafePackageName(payload.packageName)) throw new Error('参数无效。')
     return packManager.addPackPlugin(payload.packId, payload.packageName)
+  })
+
+  ipcMain.handle(IPC.packsAddPreset, async (_event, payload: { packId: string; presetName: string }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.presetName)) throw new Error('参数无效。')
+    return packManager.addPackPreset(payload.packId, payload.presetName)
+  })
+
+  ipcMain.handle(IPC.packsTogglePreset, async (_event, payload: { packId: string; presetName: string; enabled: boolean }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.presetName)) throw new Error('参数无效。')
+    return packManager.togglePackPreset(payload.packId, payload.presetName, Boolean(payload.enabled))
+  })
+
+  ipcMain.handle(IPC.packsRemovePreset, async (_event, payload: { packId: string; presetName: string }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.presetName)) throw new Error('参数无效。')
+    return packManager.removePackPreset(payload.packId, payload.presetName)
+  })
+
+  ipcMain.handle(IPC.packsAddSkill, async (_event, payload: { packId: string; skillName: string }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.skillName)) throw new Error('参数无效。')
+    return packManager.addPackSkill(payload.packId, payload.skillName)
+  })
+
+  ipcMain.handle(IPC.packsToggleSkill, async (_event, payload: { packId: string; skillName: string; enabled: boolean }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.skillName)) throw new Error('参数无效。')
+    return packManager.togglePackSkill(payload.packId, payload.skillName, Boolean(payload.enabled))
+  })
+
+  ipcMain.handle(IPC.packsRemoveSkill, async (_event, payload: { packId: string; skillName: string }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.skillName)) throw new Error('参数无效。')
+    return packManager.removePackSkill(payload.packId, payload.skillName)
+  })
+
+  ipcMain.handle(IPC.packsAddApplication, async (_event, payload: { packId: string; addonId: string }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9](?:[a-z0-9._-]{0,78}[a-z0-9])?$/.test(payload.addonId)) throw new Error('参数无效。')
+    return packManager.addPackApplication(payload.packId, payload.addonId)
+  })
+
+  ipcMain.handle(IPC.packsToggleApplication, async (_event, payload: { packId: string; addonId: string; enabled: boolean }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9](?:[a-z0-9._-]{0,78}[a-z0-9])?$/.test(payload.addonId)) throw new Error('参数无效。')
+    return packManager.togglePackApplication(payload.packId, payload.addonId, Boolean(payload.enabled))
+  })
+
+  ipcMain.handle(IPC.packsRemoveApplication, async (_event, payload: { packId: string; addonId: string }) => {
+    if (!isSafeProfileName(payload.packId) || !/^[a-z0-9](?:[a-z0-9._-]{0,78}[a-z0-9])?$/.test(payload.addonId)) throw new Error('参数无效。')
+    return packManager.removePackApplication(payload.packId, payload.addonId)
   })
 
   ipcMain.handle(IPC.packsToggleItem, async (_event, payload: { packId: string; packageName: string; enabled: boolean }) => {

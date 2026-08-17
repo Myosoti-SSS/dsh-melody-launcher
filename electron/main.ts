@@ -30,6 +30,7 @@ import { recordPluginInstall } from './plugin-receipts'
 import { configureProcessTracker, withExecutableDirectoryOnPath } from './process'
 import { createProcessSupervisor, type ProcessSupervisor } from './process-supervisor'
 import { readProfile, togglePlugin } from './profile'
+import { installPresetFromDirectory } from './preset-install'
 import { installSkillFromDirectory } from './skill-install'
 import { createRendererEvents } from './renderer-events'
 import { createRuntimeController, type RuntimeController } from './runtime'
@@ -72,6 +73,8 @@ function createServices(): Services {
   const managedPnpmRoot = path.join(userData, 'pnpm-runtime')
   const pluginSourceRoot = path.join(userData, 'plugin-sources')
   const pluginReceiptsPath = path.join(userData, 'plugin-installs.json')
+  const presetReceiptsPath = path.join(userData, 'preset-installs.json')
+  const skillReceiptsPath = path.join(userData, 'skill-installs.json')
   const skillSourceRoot = path.join(userData, 'skill-sources')
   const applicationRoot = path.join(userData, 'application-addons')
   const proxyAwareFetch = createProxyAwareFetch((input, init) => net.fetch(input, init))
@@ -166,6 +169,8 @@ function createServices(): Services {
     preparePnpmRuntime: (nodeRuntime, onProgress) => preparePnpmRuntime('plugin', nodeRuntime, onProgress),
     pluginSourceRoot,
     pluginReceiptsPath,
+    presetReceiptsPath,
+    skillReceiptsPath,
     skillSourceRoot,
     emitOutput: (level, text) => events.output('plugin', level, text),
     emitProgress: progress => events.installProgress(progress),
@@ -269,6 +274,12 @@ function createServices(): Services {
     togglePlugin: (dshHome, profileName, packageName, enabled) => togglePlugin(dshHome, profileName, packageName, enabled),
     // raw 整合包导入的技能：从本地 staging 目录全局安装（bundle 目录或 flat 单文件）。
     installSkillLocal: (dshHome, skill) => installSkillFromDirectory(dshHome, skill.name, skill.format, skill.sourceDir),
+    installSkill: request => installer.installSkill(request),
+    installSkillPinned: request => installer.installSkillPinned(request),
+    toggleSkill: (name, enabled) => installer.toggleSkill(name, enabled),
+    installPreset: request => installer.installPreset(request),
+    installPresetLocal: (dshHome, preset) => installPresetFromDirectory(dshHome, preset.name, preset.sourceDir),
+    togglePreset: (name, enabled) => installer.togglePreset(name, enabled),
   }
 
   const packManager = createPackManager({
@@ -277,7 +288,10 @@ function createServices(): Services {
     registryPath: path.join(userData, 'packs.json'),
     snapshotRoot: path.join(userData, 'pack-snapshots'),
     pluginReceiptsPath,
+    presetReceiptsPath,
+    skillReceiptsPath,
     installer: packInstaller,
+    applicationAddons,
     emitOutput: (level, text) => events.output('plugin', level, text),
     emitEvent: event => events.packProgress(event),
     isRuntimeRunning: () => runtime.isRunning(),

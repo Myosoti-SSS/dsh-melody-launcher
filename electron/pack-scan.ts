@@ -52,12 +52,20 @@ export interface RawScanSkill {
   entryPrefix: string
 }
 
+export interface RawScanPreset {
+  kind: 'preset'
+  name: string
+  /** 含 preset.yml 的目录（post-strip 相对路径）。 */
+  entryPrefix: string
+}
+
 export interface RawScanResult {
   kind: 'raw'
   /** 整体包裹层目录名（剥离后），无则 null。 */
   topName: string | null
   plugins: RawScanPlugin[]
   skills: RawScanSkill[]
+  presets: RawScanPreset[]
   skipped: { entryPrefix: string; reason: string }[]
 }
 
@@ -170,6 +178,7 @@ function scanRawArchive(archive: RawArchive, limits: RawScanLimits): RawScanResu
   const plugins: RawScanPlugin[] = []
   const pluginSeen = new Set<string>()
   const skillSeen = new Map<string, RawScanSkill>()
+  const presetSeen = new Map<string, RawScanPreset>()
   const skipped: RawScanResult['skipped'] = []
 
   // ---- 技能候选（bundle：SKILL.md；flat：likelyFlatSkill）----
@@ -196,6 +205,17 @@ function scanRawArchive(archive: RawArchive, limits: RawScanLimits): RawScanResu
       if (!parsed) continue
       upsertSkill(skillSeen, { kind: 'skill', name: parsed.name, format: 'flat', entryPrefix: rel })
     }
+  }
+
+  // ---- Agent 预设候选：目录内含 preset.yml ----
+  for (const rel of archive.byRel.keys()) {
+    if (!/(^|\/)preset\.yml$/i.test(rel)) continue
+    const dir = rel.slice(0, rel.lastIndexOf('/'))
+    if (!dir || isExcludedTree(dir, pruneRoots)) continue
+    const name = dir.split('/').pop() ?? ''
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) continue
+    if (presetSeen.has(name)) continue
+    presetSeen.set(name, { kind: 'preset', name, entryPrefix: dir })
   }
 
   // ---- 插件候选（含 root 级插件与 suite 内多插件）----
@@ -242,9 +262,9 @@ function scanRawArchive(archive: RawArchive, limits: RawScanLimits): RawScanResu
   }
 
   // 根级插件（entryPrefix=''）只在它是唯一候选时合法：整个压缩包（或剥掉包裹层后）即该插件的本体。
-  // 只要存在同级插件或技能候选，根级 package.json 的「本体」就会吞掉同压缩包的其它组件，明确拒绝。
+  // 只要存在同级插件/技能/预设候选，根级 package.json 的「本体」就会吞掉同压缩包的其它组件，明确拒绝。
   const rootPlugins = plugins.filter(plugin => plugin.entryPrefix === '')
-  if (rootPlugins.length > 0 && (plugins.length > rootPlugins.length || skillSeen.size > 0)) {
+  if (rootPlugins.length > 0 && (plugins.length > rootPlugins.length || skillSeen.size > 0 || presetSeen.size > 0)) {
     for (const plugin of rootPlugins) {
       skipped.push({ entryPrefix: '.', reason: '根目录 package.json 会吞并同压缩包其它组件，不视为插件目录' })
     }
@@ -253,7 +273,15 @@ function scanRawArchive(archive: RawArchive, limits: RawScanLimits): RawScanResu
 
   const sortedPlugins = plugins.sort((a, b) => a.entryPrefix.localeCompare(b.entryPrefix))
   const sortedSkills = [...skillSeen.values()].sort((a, b) => a.entryPrefix.localeCompare(b.entryPrefix))
-  return { kind: 'raw', topName: archive.stripRoot, plugins: sortedPlugins, skills: sortedSkills, skipped }
+  const sortedPresets = [...presetSeen.values()].sort((a, b) => a.entryPrefix.localeCompare(b.entryPrefix))
+  return {
+    kind: 'raw',
+    topName: archive.stripRoot,
+    plugins: sortedPlugins,
+    skills: sortedSkills,
+    presets: sortedPresets,
+    skipped,
+  }
 }
 
 function upsertSkill(seen: Map<string, RawScanSkill>, candidate: RawScanSkill): void {
@@ -428,6 +456,7 @@ async function scanRawArchivePath(archive: RawZipPath, limits: RawScanLimits): P
   const plugins: RawScanPlugin[] = []
   const pluginSeen = new Set<string>()
   const skillSeen = new Map<string, RawScanSkill>()
+  const presetSeen = new Map<string, RawScanPreset>()
   const skipped: RawScanResult['skipped'] = []
 
   for (const rel of archive.byRel.keys()) {
@@ -463,6 +492,17 @@ async function scanRawArchivePath(archive: RawZipPath, limits: RawScanLimits): P
       if (!parsed) continue
       upsertSkill(skillSeen, { kind: 'skill', name: parsed.name, format: 'flat', entryPrefix: rel })
     }
+  }
+
+  // ---- Agent 预设候选：目录内含 preset.yml ----
+  for (const rel of archive.byRel.keys()) {
+    if (!/(^|\/)preset\.yml$/i.test(rel)) continue
+    const dir = rel.slice(0, rel.lastIndexOf('/'))
+    if (!dir || isExcludedTree(dir, pruneRoots)) continue
+    const name = dir.split('/').pop() ?? ''
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) continue
+    if (presetSeen.has(name)) continue
+    presetSeen.set(name, { kind: 'preset', name, entryPrefix: dir })
   }
 
   for (const rel of archive.byRel.keys()) {
@@ -507,7 +547,7 @@ async function scanRawArchivePath(archive: RawZipPath, limits: RawScanLimits): P
   }
 
   const rootPlugins = plugins.filter(plugin => plugin.entryPrefix === '')
-  if (rootPlugins.length > 0 && (plugins.length > rootPlugins.length || skillSeen.size > 0)) {
+  if (rootPlugins.length > 0 && (plugins.length > rootPlugins.length || skillSeen.size > 0 || presetSeen.size > 0)) {
     for (const plugin of rootPlugins) {
       skipped.push({ entryPrefix: '.', reason: '根目录 package.json 会吞并同压缩包其它组件，不视为插件目录' })
     }
@@ -516,7 +556,15 @@ async function scanRawArchivePath(archive: RawZipPath, limits: RawScanLimits): P
 
   const sortedPlugins = plugins.sort((a, b) => a.entryPrefix.localeCompare(b.entryPrefix))
   const sortedSkills = [...skillSeen.values()].sort((a, b) => a.entryPrefix.localeCompare(b.entryPrefix))
-  return { kind: 'raw', topName: archive.stripRoot, plugins: sortedPlugins, skills: sortedSkills, skipped }
+  const sortedPresets = [...presetSeen.values()].sort((a, b) => a.entryPrefix.localeCompare(b.entryPrefix))
+  return {
+    kind: 'raw',
+    topName: archive.stripRoot,
+    plugins: sortedPlugins,
+    skills: sortedSkills,
+    presets: sortedPresets,
+    skipped,
+  }
 }
 
 async function extractUnderPrefixPath(
@@ -601,6 +649,32 @@ export async function extractRawSkillSourcesFromPath(
         await extractUnderPrefixPath(archive, skill.entryPrefix, target, limits, sharedBudget)
         result.set(skill.name, target)
       }
+    }
+    return result
+  } finally {
+    await archive.handle.close()
+  }
+}
+
+/** 文件路径版提取 raw 包中的 Agent 预设目录：解到 workDir/<name>。 */
+export async function extractRawPresetSourcesFromPath(
+  filePath: string,
+  presets: RawScanPreset[],
+  workDir: string,
+  limits: RawScanLimits = DEFAULT_RAW_SCAN_LIMITS,
+  budget?: ExtractByteBudget,
+): Promise<Map<string, string>> {
+  const archive = await openRawZipFromPath(filePath, limits)
+  try {
+    const resolvedWorkDir = path.resolve(workDir)
+    await mkdir(resolvedWorkDir, { recursive: true })
+    const sharedBudget = budget ?? { extracted: 0 }
+    const result = new Map<string, string>()
+    for (const preset of presets) {
+      const target = path.join(resolvedWorkDir, preset.name)
+      assertInside(resolvedWorkDir, target)
+      await extractUnderPrefixPath(archive, preset.entryPrefix, target, limits, sharedBudget)
+      result.set(preset.name, target)
     }
     return result
   } finally {
