@@ -247,7 +247,6 @@ export async function analyzeRepository(
   fetchImpl: typeof fetch = fetch,
 ): Promise<RepositoryAnalysis> {
   if (!isSafeRepositoryName(repository) || !safeBranch(defaultBranch)) throw new Error('仓库名称或默认分支无效。')
-
   let commit: string
   try {
     const commitResult = await fetchJson<{ sha?: string }>(

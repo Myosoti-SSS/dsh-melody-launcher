@@ -15,6 +15,7 @@ import { readProfile } from '../electron/profile'
 import { recordPluginInstall, removePluginReceipt } from '../electron/plugin-receipts'
 import { analyzeMetaRepository } from '../electron/meta-repo-catalog'
 import { analyzeSkillRepository } from '../electron/skill-catalog'
+import { analyzeApplicationRepository } from '../electron/application-catalog'
 import type { NodeRuntime } from '../electron/node-runtime'
 import type { AppSettings, CatalogRepositoryAnalysis, PluginInstallTarget, ProfileState } from '../src/types'
 
@@ -36,6 +37,11 @@ vi.mock('../electron/plugin-receipts', async importOriginal => {
 vi.mock('../electron/skill-catalog', async importOriginal => {
   const actual = await importOriginal<typeof import('../electron/skill-catalog')>()
   return { ...actual, analyzeSkillRepository: vi.fn() }
+})
+
+vi.mock('../electron/application-catalog', async importOriginal => {
+  const actual = await importOriginal<typeof import('../electron/application-catalog')>()
+  return { ...actual, analyzeApplicationRepository: vi.fn() }
 })
 
 vi.mock('../electron/meta-repo-catalog', () => ({
@@ -128,6 +134,13 @@ beforeEach(async () => {
     openAfterLaunch: true,
   }
   vi.resetAllMocks()
+  vi.mocked(analyzeApplicationRepository).mockResolvedValue({
+    repository: 'demo/repository',
+    defaultBranch: 'main',
+    installability: 'invalid',
+    summary: 'no application addon',
+    targets: [],
+  })
 })
 
 afterEach(async () => {
@@ -397,6 +410,7 @@ describe('analyzeCatalogRepository meta-repo 展开', () => {
     repository: 'yjh051108/dsh-routing-suite',
     defaultBranch: 'main',
     kind: 'hybrid',
+    componentKinds: ['plugin', 'skill'],
     summary: '聚合仓库',
     pluginAnalysis: {
       repository: 'yjh051108/dsh-routing-suite',
@@ -412,6 +426,8 @@ describe('analyzeCatalogRepository meta-repo 展开', () => {
       summary: '1 skill',
       targets: [],
     },
+    applicationAnalysis: null,
+    presetAnalysis: null,
     warnings: [],
   }
 

@@ -272,9 +272,12 @@ export async function analyzeMetaRepository(
     repository: fullName,
     defaultBranch,
     kind,
+    componentKinds: [hasPlugin && 'plugin', hasSkill && 'skill', hasPreset && 'preset']
+      .filter((value): value is 'plugin' | 'skill' | 'preset' => Boolean(value)),
     summary: `聚合仓库（meta-repo）：可确定性安装 ${pluginTargets.length} 个 Plugin、${skillTargets.length} 个 Skill 与 ${presetTargets.length} 个预设（${components.join('；')}）。`,
     pluginAnalysis,
     skillAnalysis,
+    applicationAnalysis: null,
     presetAnalysis,
     warnings: [],
   }

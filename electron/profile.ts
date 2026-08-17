@@ -102,19 +102,19 @@ export async function readProfile(dshHome: string, profileName: string): Promise
     }
   }
 
-  const activeBundles = [...(manifest.dsh?.profile?.bundles ?? [])]
+  const profileBundles = [...(manifest.dsh?.profile?.bundles ?? [])]
   const dependencies = Object.keys(manifest.dependencies ?? {})
-  const allNames = [...new Set([...activeBundles, ...dependencies])]
+  const allNames = [...new Set([...profileBundles, ...dependencies])]
   const manifests = new Map<string, ResolvedDependency>()
   await Promise.all(dependencies.map(async packageName => {
     manifests.set(packageName, await resolveDependencyManifest(profileDir, packageName))
   }))
 
-  const plugins: ManagedPlugin[] = allNames
+  const managedComponents: ManagedPlugin[] = allNames
     .map(packageName => {
       const resolvedDependency = manifests.get(packageName)
       const dependencyManifest = resolvedDependency?.manifest
-      const enabled = activeBundles.includes(packageName)
+      const enabled = profileBundles.includes(packageName)
       const builtin = !dependencies.includes(packageName)
       const compatible = builtin || enabled || Boolean(resolvedDependency?.bundleAvailable)
       const manifestRepo = repositoryUrl(dependencyManifest ?? {})
@@ -132,7 +132,9 @@ export async function readProfile(dshHome: string, profileName: string): Promise
         builtin,
         locked: CORE_BUNDLES.has(packageName),
         compatible,
-        order: enabled ? activeBundles.indexOf(packageName) + 1 : null,
+        order: enabled
+          ? profileBundles.indexOf(packageName) + 1
+          : null,
       }
     })
     .sort((a, b) => {
@@ -145,10 +147,10 @@ export async function readProfile(dshHome: string, profileName: string): Promise
     initialized: true,
     profileDir,
     manifestPath,
-    plugins,
-    activeBundles,
-    dependencyCount: dependencies.length,
-    disabledCount: plugins.filter(plugin => !plugin.enabled).length,
+    plugins: managedComponents,
+    activeBundles: profileBundles,
+    dependencyCount: managedComponents.filter(plugin => !plugin.builtin).length,
+    disabledCount: managedComponents.filter(plugin => !plugin.enabled).length,
   }
 }
 

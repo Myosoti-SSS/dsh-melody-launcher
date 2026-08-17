@@ -3,7 +3,9 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { DEFAULT_PROFILE_NAME, DSH_PACKAGE_NAME } from '../src/constants'
 import type {
+  ApplicationRepositoryAnalysis,
   AppSettings,
+  CatalogAnalysisProgress,
   CatalogRepositoryAnalysis,
   DshInstallationStatus,
   DshUpdateStatus,
@@ -22,8 +24,9 @@ import type {
   SkillInstallResult,
   SkillRepositoryAnalysis,
 } from '../src/types'
+import { analyzeApplicationRepository } from './application-catalog'
 import { runCommand, type CommandOptions, type CommandResult, type OutputLevel } from './command'
-import { classifyCatalogRepository } from './catalog-analysis'
+import { analyzeCatalogWithProgress } from './catalog-analysis'
 import {
   findInstalledDsh,
   getManagedDshStatus,
@@ -140,8 +143,14 @@ export interface Installer {
   analyzePlugin(fullName: string, defaultBranch: string): Promise<RepositoryAnalysis>
   /** 检测一个 Skill 仓库，返回可安装组件清单（带 5 分钟缓存）。 */
   analyzeSkill(fullName: string, defaultBranch: string): Promise<SkillRepositoryAnalysis>
-  /** 同时检测 Plugin 与 Skill，返回统一资源市场分类。 */
-  analyzeCatalogRepository(fullName: string, defaultBranch: string): Promise<CatalogRepositoryAnalysis>
+  /** 检测一个独立应用仓库，返回可安装应用加载项。 */
+  analyzeApplication(fullName: string, defaultBranch: string): Promise<ApplicationRepositoryAnalysis>
+  /** 同时检测 Plugin、Skill 与应用加载项，返回统一资源市场分类。 */
+  analyzeCatalogRepository(
+    fullName: string,
+    defaultBranch: string,
+    onProgress?: (progress: CatalogAnalysisProgress) => void,
+  ): Promise<CatalogRepositoryAnalysis>
   /** 安装一个 Skill。 */
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
   /** 读取已安装的 Skill 列表。 */
@@ -200,6 +209,7 @@ export function createInstaller(options: InstallerOptions): Installer {
   /** 仓库结构检测结果缓存 5 分钟，避免同一仓库反复触发 GitHub 请求。 */
   const repositoryAnalysisCache = new Map<string, { expiresAt: number; analysis: RepositoryAnalysis }>()
   const skillAnalysisCache = new Map<string, { expiresAt: number; analysis: SkillRepositoryAnalysis }>()
+  const applicationAnalysisCache = new Map<string, { expiresAt: number; analysis: ApplicationRepositoryAnalysis }>()
 
   const analyzePlugin = async (fullName: string, defaultBranch: string): Promise<RepositoryAnalysis> => {
     const settings = await options.readSettings()
@@ -224,25 +234,39 @@ export function createInstaller(options: InstallerOptions): Installer {
     return analysis
   }
 
+  const analyzeApplication = async (
+    fullName: string,
+    defaultBranch: string,
+  ): Promise<ApplicationRepositoryAnalysis> => {
+    const cacheKey = `${fullName.toLowerCase()}#${defaultBranch}`
+    const cached = applicationAnalysisCache.get(cacheKey)
+    if (cached && cached.expiresAt > Date.now()) return cached.analysis
+    const analysis = options.githubFetch
+      ? await analyzeApplicationRepository(fullName, defaultBranch, options.githubFetch)
+      : await analyzeApplicationRepository(fullName, defaultBranch)
+    applicationAnalysisCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60_000, analysis })
+    return analysis
+  }
+
   const analyzeCatalogRepository = async (
     fullName: string,
     defaultBranch: string,
+    onProgress?: (progress: CatalogAnalysisProgress) => void,
   ): Promise<CatalogRepositoryAnalysis> => {
-    if (isDshRepository(fullName)) return classifyCatalogRepository(
+    const analysis = await analyzeCatalogWithProgress(
       fullName,
       defaultBranch,
-      { status: 'rejected', reason: new Error('skipped') },
-      { status: 'rejected', reason: new Error('skipped') },
+      {
+        plugin: () => analyzePlugin(fullName, defaultBranch),
+        skill: () => analyzeSkill(fullName, defaultBranch),
+        application: () => analyzeApplication(fullName, defaultBranch),
+      },
+      onProgress,
     )
-
-    const [pluginResult, skillResult] = await Promise.allSettled([
-      analyzePlugin(fullName, defaultBranch),
-      analyzeSkill(fullName, defaultBranch),
-    ])
 
     // 聚合仓库（meta-repo）：plugin 分析判为 application 通常意味着仓库根目录只有
     // git submodule。确定性展开子模块（不调大模型）；展开无果才回落常规分类。
-    if (pluginResult.status === 'fulfilled' && pluginResult.value.installability === 'application') {
+    if (analysis.pluginAnalysis?.installability === 'application') {
       const metaAnalysis = options.githubFetch
         ? await analyzeMetaRepository(
             fullName,
@@ -260,7 +284,7 @@ export function createInstaller(options: InstallerOptions): Installer {
       if (metaAnalysis) return metaAnalysis
     }
 
-    return classifyCatalogRepository(fullName, defaultBranch, pluginResult, skillResult)
+    return analysis
   }
 
   /** 准备 Node.js，同时把下载进度折算进当前安装任务的进度条。 */
@@ -562,6 +586,8 @@ export function createInstaller(options: InstallerOptions): Installer {
     analyzePlugin,
 
     analyzeSkill,
+
+    analyzeApplication,
 
     analyzeCatalogRepository,
 

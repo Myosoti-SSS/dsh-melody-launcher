@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
 import { mkdir, open, readdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { spawnCommand, withExecutableDirectoryOnPath } from './process'
+import { spawnCommand, trackSpawnedProcess, withExecutableDirectoryOnPath } from './process'
 
 export const NODE_RUNTIME_VERSION = 'v24.19.0'
 export const PNPM_VERSION = '11.21.0'
@@ -222,10 +222,10 @@ async function installManagedNodeRuntime(runtimeRoot: string, onProgress?: Progr
     }
 
     onProgress?.({ percent: 84, message: '正在解压 Node.js 运行环境' })
-    const extractor = spawn('tar.exe', ['-xf', archivePath, '-C', stagingRoot], {
+    const extractor = trackSpawnedProcess(spawn('tar.exe', ['-xf', archivePath, '-C', stagingRoot], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    }))
     let extractionError = ''
     extractor.stderr.on('data', chunk => { extractionError += chunk.toString('utf8') })
     const exitCode = await waitForExit(extractor)

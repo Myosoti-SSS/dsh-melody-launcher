@@ -1,7 +1,62 @@
+import { EventEmitter } from 'node:events'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createServer } from 'node:net'
-import { describe, expect, it } from 'vitest'
-import { extractLocalUrl, findAvailableWebPort, isDshWebLaunch, runtimeEnvironment, withDshWebPort } from '../electron/runtime'
+import { PassThrough } from 'node:stream'
+import path from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  createRuntimeController,
+  extractLocalUrl,
+  findAvailableWebPort,
+  isDshWebLaunch,
+  runtimeEnvironment,
+  withDshWebPort,
+} from '../electron/runtime'
+import type { ApplicationLaunchPlan } from '../electron/application-addons'
+import type { NodeRuntime } from '../electron/node-runtime'
 import type { AppSettings } from '../src/types'
+
+type WritableChild = ChildProcessWithoutNullStreams & {
+  stdin: PassThrough
+  stdout: PassThrough
+  stderr: PassThrough
+}
+
+function fakeChild(pid: number): WritableChild {
+  const child = new EventEmitter() as WritableChild
+  Object.assign(child, {
+    pid,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: vi.fn(() => true),
+  })
+  return child
+}
+
+function controllerSettings(): AppSettings {
+  return {
+    dshInstallPath: path.join(process.cwd(), 'dsh-runtime'),
+    dshHome: path.join(process.cwd(), '.dsh'),
+    profileName: 'web',
+    workspace: process.cwd(),
+    launchExecutable: 'dsh.cmd',
+    launchArgs: ['web'],
+    webPort: 3080,
+    openAfterLaunch: true,
+  }
+}
+
+function managedNode(): NodeRuntime {
+  const root = path.join(process.cwd(), 'managed-node')
+  return {
+    root,
+    node: path.join(root, process.platform === 'win32' ? 'node.exe' : 'node'),
+    npm: path.join(root, process.platform === 'win32' ? 'npm.cmd' : 'npm'),
+    npx: path.join(root, process.platform === 'win32' ? 'npx.cmd' : 'npx'),
+    managed: true,
+  }
+}
 
 describe('extractLocalUrl', () => {
   it('picks up a loopback address with a port', () => {
@@ -94,5 +149,114 @@ describe('DSH Web 端口', () => {
     } finally {
       await new Promise<void>(resolve => server.close(() => resolve()))
     }
+  })
+})
+
+describe('应用加载项运行模式', () => {
+  it('使用替代宿主入口，并完全绕过设置中的 dsh web', async () => {
+    const settings = controllerSettings()
+    const nodeRuntime = managedNode()
+    const replacementEntry = path.join(process.cwd(), 'addons', 'desktop', 'main.js')
+    const child = fakeChild(4101)
+    const spawnProcess = vi.fn((_executable: string, _args: string[]) => child)
+    const stopProcess = vi.fn(async () => {})
+    const openExternal = vi.fn()
+    const plan: ApplicationLaunchPlan = {
+      replacement: {
+        id: 'dsh-desktop',
+        name: 'DSH Desktop',
+        mode: 'runtime-replacement',
+        executable: nodeRuntime.node,
+        args: [replacementEntry, '--tray'],
+        cwd: settings.workspace,
+      },
+      companions: [],
+    }
+    const runtime = createRuntimeController({
+      readSettings: async () => settings,
+      prepareNodeRuntime: async () => nodeRuntime,
+      fallbackWorkspace: () => process.cwd(),
+      emitOutput: () => {},
+      emitState: () => {},
+      openExternal,
+      resolveApplicationLaunchPlan: async () => plan,
+      spawnProcess,
+      stopProcess,
+    })
+
+    const state = await runtime.start()
+    expect(state).toMatchObject({
+      running: true,
+      launchMode: 'application-replacement',
+      applicationAddonId: 'dsh-desktop',
+      applicationAddonName: 'DSH Desktop',
+      port: null,
+    })
+    expect(spawnProcess).toHaveBeenCalledTimes(1)
+    expect(spawnProcess.mock.calls[0][0]).toBe(nodeRuntime.node)
+    expect(spawnProcess.mock.calls[0][1]).toEqual([replacementEntry, '--tray'])
+    expect(spawnProcess.mock.calls[0][1]).not.toContain('web')
+
+    child.stdout.write('ready at http://127.0.0.1:3080\n')
+    expect(openExternal).not.toHaveBeenCalled()
+
+    const stopped = await runtime.stop()
+    expect(stopped.running).toBe(false)
+    expect(stopProcess).toHaveBeenCalledWith(child)
+  })
+
+  it('Web 就绪后只启动一次伴随应用，并在停止时一起清理', async () => {
+    const settings = {
+      ...controllerSettings(),
+      launchExecutable: path.join(process.cwd(), 'demo-server.exe'),
+      launchArgs: ['serve'],
+    }
+    const main = fakeChild(4201)
+    const companion = fakeChild(4202)
+    const children = [main, companion]
+    const spawnProcess = vi.fn((_executable: string, _args: string[]) => {
+      const child = children.shift()
+      if (!child) throw new Error('unexpected duplicate launch')
+      return child
+    })
+    const stopProcess = vi.fn(async () => {})
+    const openExternal = vi.fn()
+    const runtime = createRuntimeController({
+      readSettings: async () => settings,
+      prepareNodeRuntime: async () => managedNode(),
+      fallbackWorkspace: () => process.cwd(),
+      emitOutput: () => {},
+      emitState: () => {},
+      openExternal,
+      resolveApplicationLaunchPlan: async () => ({
+        replacement: null,
+        companions: [{
+          id: 'tray-helper',
+          name: 'Tray Helper',
+          mode: 'after-runtime',
+          executable: managedNode().node,
+          args: [path.join(process.cwd(), 'addons', 'tray', 'main.js')],
+          cwd: settings.workspace,
+        }],
+      }),
+      spawnProcess,
+      stopProcess,
+    })
+
+    await runtime.start()
+    expect(spawnProcess).toHaveBeenCalledTimes(1)
+    main.stdout.write('ready at http://127.0.0.1:3080\n')
+    main.stdout.write('also at http://localhost:3081\n')
+
+    expect(spawnProcess).toHaveBeenCalledTimes(2)
+    expect(openExternal).toHaveBeenCalledTimes(2)
+    expect(spawnProcess.mock.calls[1][1]).toEqual([
+      path.join(process.cwd(), 'addons', 'tray', 'main.js'),
+    ])
+
+    await runtime.stop()
+    expect(stopProcess).toHaveBeenCalledTimes(2)
+    expect(stopProcess).toHaveBeenCalledWith(main)
+    expect(stopProcess).toHaveBeenCalledWith(companion)
   })
 })

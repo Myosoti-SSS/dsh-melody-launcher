@@ -1,6 +1,6 @@
 import type { CatalogRepositoryAnalysis } from '../types'
 
-const STORAGE_KEY = 'dsh-launcher.catalog-analysis.v2'
+const STORAGE_KEY = 'dsh-launcher.catalog-analysis.v5'
 const memoryCache = new Map<string, CatalogCacheEntry>()
 
 export interface CatalogCacheEntry {

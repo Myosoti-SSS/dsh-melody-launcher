@@ -165,9 +165,11 @@ describe('importCatalogFromUrl', () => {
     repository: 'someone/dsh-example',
     defaultBranch: 'main',
     kind: 'plugin',
+    componentKinds: ['plugin'],
     summary: 'ok',
     pluginAnalysis: null,
     skillAnalysis: null,
+    applicationAnalysis: null,
     warnings: [],
   }
 

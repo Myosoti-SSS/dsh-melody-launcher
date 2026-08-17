@@ -1,7 +1,7 @@
-import { CircleCheck, CircleStop, ExternalLink, LoaderCircle, Play, Settings, SquareTerminal, Wrench } from 'lucide-react'
+import { AppWindow, CircleCheck, CircleStop, ExternalLink, LoaderCircle, Play, Settings, SquareTerminal, Wrench } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { PageHeading } from '../components/PageHeading'
-import type { AppSettings, RuntimeOutput, RuntimeState } from '../types'
+import type { AppSettings, InstalledApplicationAddon, RuntimeOutput, RuntimeState } from '../types'
 
 /** 运行与日志页：进程状态、启动参数与实时输出。 */
 
@@ -16,6 +16,7 @@ interface RuntimeViewProps {
   onOpenSettings: () => void
   onRepairRuntime: () => void
   aiActive: boolean
+  activeRuntimeReplacement: InstalledApplicationAddon | null
 }
 
 export function RuntimeView({
@@ -29,6 +30,7 @@ export function RuntimeView({
   onOpenSettings,
   onRepairRuntime,
   aiActive,
+  activeRuntimeReplacement,
 }: RuntimeViewProps) {
   const logEnd = useRef<HTMLDivElement>(null)
 
@@ -42,13 +44,13 @@ export function RuntimeView({
       <PageHeading
         eyebrow="LOCAL RUNTIME"
         title="运行 DeepSeek Harness"
-        description="从当前工作目录启动 Web 界面，并在这里查看进程状态与实时输出。"
+        description={activeRuntimeReplacement ? `${activeRuntimeReplacement.name} 已接管启动流程，不会同时启动普通 dsh web。` : '从当前工作目录启动 Web 界面，并在这里查看进程状态与实时输出。'}
         actions={<button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={16} />启动设置</button>}
       />
       <section className={`runtime-band ${runtime.running ? 'running' : ''}`}>
-        <div className="runtime-status-icon">{runtime.running ? <CircleCheck size={25} /> : <CircleStop size={25} />}</div>
-        <div className="runtime-copy"><span>{runtime.running ? 'DSH 正在运行' : 'DSH 当前已停止'}</span><strong>{runtime.running ? runtime.url ?? '正在等待 Web 地址…' : '准备从本地启动'}</strong></div>
-        <div className="runtime-metadata"><span>配置 <strong>{settings.profileName}</strong></span><span>{runtime.pid ? `PID ${runtime.pid}` : '无活动进程'} · 端口 {runtime.port ?? settings.webPort}</span></div>
+        <div className="runtime-status-icon">{activeRuntimeReplacement ? <AppWindow size={25} /> : runtime.running ? <CircleCheck size={25} /> : <CircleStop size={25} />}</div>
+        <div className="runtime-copy"><span>{runtime.running ? `${runtime.applicationAddonName ?? 'DSH'} 正在运行` : 'DSH 当前已停止'}</span><strong>{runtime.running ? runtime.url ?? (runtime.launchMode === 'application-replacement' ? '桌面宿主已启动' : '正在等待 Web 地址…') : activeRuntimeReplacement ? `准备启动 ${activeRuntimeReplacement.name}` : '准备从本地启动'}</strong></div>
+        <div className="runtime-metadata"><span>配置 <strong>{activeRuntimeReplacement?.name ?? settings.profileName}</strong></span><span>{runtime.pid ? `PID ${runtime.pid}` : '无活动进程'}{activeRuntimeReplacement ? ' · 应用宿主' : ` · 端口 ${runtime.port ?? settings.webPort}`}</span></div>
         {runtime.url && <button type="button" className="secondary-button" onClick={onOpenHarness}>打开工作台<ExternalLink size={15} /></button>}
         {!runtime.running && runtime.lastFailure && (
           <button type="button" className="secondary-button accent runtime-repair-button" onClick={onRepairRuntime} disabled={busy || aiActive} title="调用 DSH Flash 模型分析最近一次启动错误并尝试修复">
@@ -63,10 +65,10 @@ export function RuntimeView({
       </section>
 
       <div className="launch-facts">
-        <div><span>启动命令</span><code>{settings.launchExecutable} {settings.launchArgs.join(' ')}</code></div>
+        <div><span>启动命令</span><code>{activeRuntimeReplacement ? `${activeRuntimeReplacement.packageName}@${activeRuntimeReplacement.version}` : `${settings.launchExecutable} ${settings.launchArgs.join(' ')}`}</code></div>
         <div><span>工作目录</span><code>{settings.workspace}</code></div>
         <div><span>DSH_HOME</span><code>{settings.dshHome}</code></div>
-        <div><span>Web 端口</span><code>{runtime.port ? `${runtime.port}（当前）` : `${settings.webPort}（首选）`}</code></div>
+        <div><span>启动模式</span><code>{activeRuntimeReplacement ? '应用加载项替代 Web' : runtime.port ? `Web · ${runtime.port}（当前）` : `Web · ${settings.webPort}（首选）`}</code></div>
       </div>
 
       <section className="log-panel">

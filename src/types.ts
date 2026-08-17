@@ -16,6 +16,29 @@ export interface CredentialStatus {
   configured: boolean
 }
 
+export type CustomApiProtocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
+
+export interface CustomApiProvider {
+  route: string
+  displayName: string
+  baseUrl: string
+  protocol: CustomApiProtocol
+  modelIds: string[]
+  credentialName: string | null
+  hasApiKey: boolean
+}
+
+export interface CustomApiProviderInput {
+  originalRoute?: string
+  route: string
+  displayName: string
+  baseUrl: string
+  protocol: CustomApiProtocol
+  modelIds: string[]
+  /** 编辑时留空表示保留现有密钥；新建时留空表示该服务无需鉴权。 */
+  apiKey?: string
+}
+
 export interface GitHubRateLimit {
   limit: number
   remaining: number
@@ -64,8 +87,9 @@ export interface ProfileState {
   disabledCount: number
 }
 
-export type CatalogCandidateType = 'plugin' | 'skill'
-export type CatalogKind = 'plugin' | 'skill' | 'preset' | 'hybrid' | 'dsh' | 'invalid'
+export type CatalogCandidateType = 'plugin' | 'skill' | 'application'
+export type CatalogComponentKind = 'plugin' | 'skill' | 'application' | 'preset'
+export type CatalogKind = CatalogComponentKind | 'hybrid' | 'dsh' | 'invalid'
 
 export interface CatalogRepositoryResult {
   id: number
@@ -204,6 +228,72 @@ export interface SkillInstallResult {
   installedSkills: InstalledSkill[]
 }
 
+export type ApplicationLaunchMode = 'runtime-replacement' | 'after-runtime' | 'standalone'
+export type ApplicationInstallProvider = 'npm'
+
+export interface ApplicationInstallTarget {
+  id: string
+  addonId: string
+  name: string
+  description: string
+  provider: ApplicationInstallProvider
+  packageName: string
+  version: string | null
+  binName: string
+  launchMode: ApplicationLaunchMode
+  launchArgs: string[]
+  platforms: Array<'win32' | 'darwin' | 'linux'>
+  supported: boolean
+  verified: boolean
+  provides: string[]
+}
+
+export interface ApplicationRepositoryAnalysis {
+  repository: string
+  defaultBranch: string
+  installability: 'ready' | 'choice' | 'unsupported' | 'invalid'
+  summary: string
+  targets: ApplicationInstallTarget[]
+}
+
+export interface InstalledApplicationAddon {
+  id: string
+  name: string
+  description: string
+  repository: string
+  provider: ApplicationInstallProvider
+  packageName: string
+  version: string
+  binName: string
+  entryPath: string
+  installPath: string
+  launchMode: ApplicationLaunchMode
+  launchArgs: string[]
+  enabled: boolean
+  verified: boolean
+  provides: string[]
+  installedAt: string
+  updatedAt: string
+}
+
+export interface ApplicationInstallRequest {
+  repository: string
+  defaultBranch: string
+  targetId: string
+}
+
+export interface ApplicationInstallResult {
+  installedAddon: InstalledApplicationAddon
+  installedAddons: InstalledApplicationAddon[]
+  profile: ProfileState
+}
+
+export interface LinkedComponentToggleResult {
+  profile: ProfileState
+  installedApplications: InstalledApplicationAddon[]
+  linked: boolean
+}
+
 /**
  * Agent 预设安装目标。DSH 的 agent-preset 是一份含 preset.yml 的目录，
  * 安装 = 把子模块仓库内 `sourcePath` 目录复制到 `~/.dsh/.agent-presets/<name>`。
@@ -256,12 +346,27 @@ export interface CatalogRepositoryAnalysis {
   repository: string
   defaultBranch: string
   kind: CatalogKind
+  componentKinds: CatalogComponentKind[]
   summary: string
   pluginAnalysis: RepositoryAnalysis | null
   skillAnalysis: SkillRepositoryAnalysis | null
+  applicationAnalysis: ApplicationRepositoryAnalysis | null
   /** agent-preset 组件（meta-repo 子模块里的预设目录），非聚合仓库无此字段。 */
   presetAnalysis?: PresetRepositoryAnalysis | null
   warnings: string[]
+}
+
+export type CatalogAnalysisCheck = 'plugin' | 'skill' | 'application'
+export type CatalogAnalysisCheckState = 'pending' | 'running' | 'complete' | 'failed'
+
+/** 单个仓库的实时检测步骤。三个结构检测器并行执行，不表示虚拟下载百分比。 */
+export interface CatalogAnalysisProgress {
+  repository: string
+  phase: 'preparing' | 'checking' | 'classifying' | 'complete' | 'error'
+  message: string
+  completed: number
+  total: 3
+  checks: Record<CatalogAnalysisCheck, CatalogAnalysisCheckState>
 }
 
 export interface CatalogDiscoveryResult {
@@ -274,6 +379,7 @@ export interface CatalogDiscoveryResult {
   dshInstallation: DshInstallationStatus
   installedRepositories: string[]
   installedSkills: InstalledSkill[]
+  installedApplications: InstalledApplicationAddon[]
   installedPresets: InstalledPreset[]
 }
 
@@ -285,7 +391,7 @@ export interface CatalogImportResult {
 
 export interface InstallProgress {
   repository: string
-  kind: 'plugin' | 'dsh' | 'skill' | 'preset'
+  kind: 'plugin' | 'dsh' | 'skill' | 'application' | 'preset'
   phase: 'preparing' | 'resolving' | 'downloading' | 'building' | 'configuring' | 'verifying' | 'complete' | 'error'
   percent: number
   message: string
@@ -309,6 +415,9 @@ export interface RuntimeState {
   startedAt: string | null
   url: string | null
   port: number | null
+  launchMode?: 'web' | 'application-replacement'
+  applicationAddonId?: string | null
+  applicationAddonName?: string | null
   /** 最近一次非正常退出，供界面显示 AI 修复入口。新一轮启动时清空。 */
   lastFailure?: RuntimeFailure | null
 }
@@ -486,6 +595,9 @@ export interface LauncherApi {
   getDeepSeekCredentialStatus(): Promise<CredentialStatus>
   setDeepSeekApiKey(apiKey: string): Promise<CredentialStatus>
   clearDeepSeekApiKey(): Promise<CredentialStatus>
+  listCustomApiProviders(): Promise<CustomApiProvider[]>
+  saveCustomApiProvider(input: CustomApiProviderInput): Promise<CustomApiProvider[]>
+  removeCustomApiProvider(route: string): Promise<CustomApiProvider[]>
   getGitHubAuthStatus(): Promise<GitHubAuthStatus>
   loginGitHubWithToken(token: string): Promise<GitHubAuthStatus>
   beginGitHubDeviceLogin(): Promise<GitHubDeviceAuthorization>
@@ -494,7 +606,7 @@ export interface LauncherApi {
   logoutGitHub(): Promise<GitHubAuthStatus>
   chooseDirectory(kind: 'dshInstallPath' | 'dshHome' | 'workspace'): Promise<string | null>
   readProfile(): Promise<ProfileState>
-  togglePlugin(packageName: string, enabled: boolean, profileName?: string): Promise<ProfileState>
+  togglePlugin(packageName: string, enabled: boolean, profileName?: string): Promise<LinkedComponentToggleResult>
   reorderPlugins(packageNames: string[]): Promise<ProfileState>
   discoverCatalog(query: string, sort: 'stars' | 'updated', page: number): Promise<CatalogDiscoveryResult>
   analyzeCatalogRepository(fullName: string, defaultBranch: string): Promise<CatalogRepositoryAnalysis>
@@ -506,6 +618,10 @@ export interface LauncherApi {
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
   readInstalledSkills(): Promise<InstalledSkill[]>
   toggleSkill(name: string, enabled: boolean): Promise<InstalledSkill[]>
+  installApplication(request: ApplicationInstallRequest): Promise<ApplicationInstallResult>
+  readInstalledApplications(): Promise<InstalledApplicationAddon[]>
+  toggleApplication(id: string, enabled: boolean): Promise<LinkedComponentToggleResult>
+  uninstallApplication(id: string): Promise<InstalledApplicationAddon[]>
   installPreset(request: PresetInstallRequest): Promise<PresetInstallResult>
   readInstalledPresets(): Promise<InstalledPreset[]>
   togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]>
@@ -538,6 +654,7 @@ export interface LauncherApi {
   addPackPlugin(packId: string, packageName: string): Promise<PackStatus>
   togglePackItem(packId: string, packageName: string, enabled: boolean): Promise<PackStatus>
   removePackItem(packId: string, packageName: string): Promise<PackStatus>
+  onCatalogAnalysisProgress(listener: (progress: CatalogAnalysisProgress) => void): () => void
   onPackProgress(listener: (event: PackProgressEvent) => void): () => void
   onRuntimeOutput(listener: (output: RuntimeOutput) => void): () => void
   onRuntimeState(listener: (state: RuntimeState) => void): () => void
