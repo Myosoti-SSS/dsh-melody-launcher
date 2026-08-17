@@ -310,11 +310,21 @@ export function DiscoverView({
 
   const inspect = async (repo: CatalogRepositoryResult) => {
     if (repo.kind === 'dsh') return
+    const cached = readCatalogAnalysisCache(repo.fullName, repo.defaultBranch)
+    if (cached) {
+      onAnalysis(repo.fullName, cached)
+      if (cached.kind === 'hybrid'
+        || pluginTargets(cached).length + skillTargets(cached).length + applicationTargets(cached).length + presetTargets(cached).length > 1) {
+        setTargetDialog({ repo, analysis: cached })
+      }
+      return
+    }
+
     resetAnalysisProgress(repo.fullName)
     setRepositoryChecking(repo.fullName, true)
     try {
       const analysis = await api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch)
-      if (analysis.warnings.length === 0) writeCatalogAnalysisCache(repo.fullName, repo.defaultBranch, analysis)
+      writeCatalogAnalysisCache(repo.fullName, repo.defaultBranch, analysis)
       onAnalysis(repo.fullName, analysis)
       if (analysis.kind === 'hybrid'
         || pluginTargets(analysis).length + skillTargets(analysis).length + applicationTargets(analysis).length + presetTargets(analysis).length > 1) {
@@ -331,6 +341,21 @@ export function DiscoverView({
     const candidates = repositories.filter(repo => repo.kind !== 'dsh')
     if (candidates.length === 0 || batchRunning) return
 
+    // 已缓存过的仓库直接使用缓存结果，不再请求 GitHub；只检查未缓存的仓库。
+    const uncached: CatalogRepositoryResult[] = []
+    for (const repo of candidates) {
+      const cached = readCatalogAnalysisCache(repo.fullName, repo.defaultBranch)
+      if (cached) {
+        onAnalysis(repo.fullName, cached)
+      } else {
+        uncached.push(repo)
+      }
+    }
+    if (uncached.length === 0) {
+      setBatchScan({ phase: 'complete', total: candidates.length, completed: candidates.length, available: 0, failed: 0 })
+      return
+    }
+
     const runId = batchRunRef.current + 1
     batchRunRef.current = runId
     let completed = 0
@@ -339,30 +364,28 @@ export function DiscoverView({
     setTargetDialog(null)
     setAnalysisProgress(current => {
       const next = { ...current }
-      for (const repo of candidates) delete next[repo.fullName]
+      for (const repo of uncached) delete next[repo.fullName]
       return next
     })
-    setCheckingRepositories(new Set(candidates.map(repo => repo.fullName)))
-    setBatchScan({ phase: 'running', total: candidates.length, completed, available, failed })
+    setCheckingRepositories(new Set(uncached.map(repo => repo.fullName)))
+    setBatchScan({ phase: 'running', total: uncached.length, completed, available, failed })
 
     await analyzeCatalogPageInParallel(
-      candidates,
+      uncached,
       repo => api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch),
       (outcome, settledCount) => {
         if (batchRunRef.current !== runId) return
         completed = settledCount
         if (outcome.status === 'fulfilled') {
           const analysis = outcome.analysis
-          if (analysis.warnings.length === 0) {
-            writeCatalogAnalysisCache(outcome.repository.fullName, outcome.repository.defaultBranch, analysis)
-          }
+          writeCatalogAnalysisCache(outcome.repository.fullName, outcome.repository.defaultBranch, analysis)
           onAnalysis(outcome.repository.fullName, analysis)
           if (analysis.kind !== 'invalid') available += 1
         } else {
           failed += 1
         }
         setRepositoryChecking(outcome.repository.fullName, false)
-        setBatchScan({ phase: 'running', total: candidates.length, completed, available, failed })
+        setBatchScan({ phase: 'running', total: uncached.length, completed, available, failed })
       },
     )
     if (batchRunRef.current !== runId) return
