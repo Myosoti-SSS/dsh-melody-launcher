@@ -289,12 +289,24 @@ export function buildPackZip(manifest: PackManifest, bodyDirs: Map<string, strin
 // 流式路径 API（大整合包）
 // ===========================================================================
 
+/** yauzl 打开读取流真正依赖的字段；不保留 fileNameRaw/extraFieldRaw 等大 Buffer。 */
+interface YauzlEntryRef {
+  compressedSize: number
+  uncompressedSize: number
+  relativeOffsetOfLocalHeader: number
+  generalPurposeBitFlag: number
+  compressionMethod: number
+  isEncrypted(): boolean
+  isCompressed(): boolean
+  canDecodeFileData(): boolean
+}
+
 export interface ZipPathEntry {
   readonly entryName: string
   readonly isDirectory: boolean
   readonly declaredSize: number
-  /** 仅供 pack-zip 内部实现使用的 yauzl 原始条目；外部不要直接依赖。 */
-  readonly raw: yauzl.Entry
+  /** 仅供 pack-zip 内部实现使用的轻量 yauzl 引用；外部不要直接依赖。 */
+  readonly raw: YauzlEntryRef
 }
 
 export interface WriteEntryOptions {
@@ -338,10 +350,11 @@ async function openYauzlZip(filePath: string): Promise<yauzl.ZipFile> {
   })
 }
 
-async function readYauzlEntries(zipfile: yauzl.ZipFile): Promise<yauzl.Entry[]> {
-  const entries: yauzl.Entry[] = []
+async function readZipPathEntries(zipfile: yauzl.ZipFile): Promise<ZipPathEntry[]> {
+  const entries: ZipPathEntry[] = []
   for await (const entry of zipfile.eachEntry()) {
-    entries.push(entry)
+    // 立刻转成轻量引用并丢弃 yauzl 原始 Entry（避免 fileNameRaw/extraFieldRaw 等 Buffer 常驻）。
+    entries.push(toZipPathEntry(entry))
   }
   return entries
 }
@@ -351,7 +364,22 @@ function toZipPathEntry(entry: yauzl.Entry): ZipPathEntry {
     entryName: entry.fileName,
     isDirectory: isDirectoryEntry(entry),
     declaredSize: entry.uncompressedSize,
-    raw: entry,
+    raw: {
+      compressedSize: entry.compressedSize,
+      uncompressedSize: entry.uncompressedSize,
+      relativeOffsetOfLocalHeader: entry.relativeOffsetOfLocalHeader,
+      generalPurposeBitFlag: entry.generalPurposeBitFlag,
+      compressionMethod: entry.compressionMethod,
+      isEncrypted() {
+        return (this.generalPurposeBitFlag & 0x1) !== 0
+      },
+      isCompressed() {
+        return this.compressionMethod === 8
+      },
+      canDecodeFileData() {
+        return !this.isEncrypted() && (this.compressionMethod === 0 || this.compressionMethod === 8)
+      },
+    },
   }
 }
 
@@ -417,11 +445,11 @@ function makePathHandle(zipfile: yauzl.ZipFile, entries: ZipPathEntry[], stripRo
     stripRoot,
     async readEntryData(entry, maxBytes) {
       const limit = maxBytes ?? Math.max(entry.declaredSize, 1)
-      const stream = await zipfile.openReadStreamPromise(entry.raw)
+      const stream = await zipfile.openReadStreamPromise(entry.raw as unknown as yauzl.Entry)
       return readStream(stream, limit)
     },
     async writeEntryToFile(entry, targetPath, options) {
-      const stream = await zipfile.openReadStreamPromise(entry.raw)
+      const stream = await zipfile.openReadStreamPromise(entry.raw as unknown as yauzl.Entry)
       return writeStreamToFile(stream, targetPath, options)
     },
     async close() {
@@ -435,8 +463,7 @@ export async function openZipPathFromFile(filePath: string, limits: PackZipPathL
   if (fileStats.size > limits.maxArchiveBytes) throw new Error('整合包压缩包过大。')
   const zipfile = await openYauzlZip(filePath)
   try {
-    const rawEntries = await readYauzlEntries(zipfile)
-    const entries = rawEntries.map(toZipPathEntry)
+    const entries = await readZipPathEntries(zipfile)
     if (entries.length === 0) throw new Error('整合包压缩包为空。')
     if (entries.length > limits.maxFiles) throw new Error('整合包文件数量超过安全限制。')
 
