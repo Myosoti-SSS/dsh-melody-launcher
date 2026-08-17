@@ -29,6 +29,7 @@ import { PageHeading } from '../components/PageHeading'
 import { AI_INSTALL_ENABLED, EMPTY_DSH_INSTALLATION } from '../constants'
 import { errorText, formatBytes, formatRelativeTime, formatStars } from '../lib/format'
 import { readCatalogAnalysisCache, writeCatalogAnalysisCache } from '../lib/catalog-cache'
+import { analyzeCatalogPageInParallel } from '../lib/catalog-batch'
 import { isInstallProgressActive } from '../lib/install-progress'
 import type {
   ApplicationInstallResult,
@@ -220,7 +221,7 @@ export function DiscoverView({
   const [warnings, setWarnings] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState<InstallingState | null>(null)
-  const [checking, setChecking] = useState<string | null>(null)
+  const [checkingRepositories, setCheckingRepositories] = useState<Set<string>>(() => new Set())
   const [analysisProgress, setAnalysisProgress] = useState<Record<string, CatalogAnalysisProgress>>({})
   const [batchScan, setBatchScan] = useState<BatchScanState | null>(null)
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
@@ -239,6 +240,7 @@ export function DiscoverView({
     setBatchScan(null)
     setTargetDialog(null)
     setAnalysisProgress({})
+    setCheckingRepositories(new Set())
     setLoading(true)
     try {
       const result = await api.discoverCatalog(searchQuery, searchSort, searchPage)
@@ -286,21 +288,30 @@ export function DiscoverView({
     [installedPresets],
   )
   const batchRunning = batchScan?.phase === 'running'
+  const checkingCount = checkingRepositories.size
+  const hasActiveChecks = checkingCount > 0
   const restoredInstalling: InstallingState | null = isInstallProgressActive(installProgress)
     ? { repository: installProgress.repository, kind: installProgress.kind }
     : null
   const activeInstalling = installing ?? restoredInstalling
-  const currentAnalysisProgress = checking ? analysisProgress[checking] : undefined
   const resetAnalysisProgress = (repository: string) => setAnalysisProgress(current => {
     const next = { ...current }
     delete next[repository]
     return next
   })
+  const setRepositoryChecking = (repository: string, active: boolean) => {
+    setCheckingRepositories(current => {
+      const next = new Set(current)
+      if (active) next.add(repository)
+      else next.delete(repository)
+      return next
+    })
+  }
 
   const inspect = async (repo: CatalogRepositoryResult) => {
     if (repo.kind === 'dsh') return
     resetAnalysisProgress(repo.fullName)
-    setChecking(repo.fullName)
+    setRepositoryChecking(repo.fullName, true)
     try {
       const analysis = await api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch)
       if (analysis.warnings.length === 0) writeCatalogAnalysisCache(repo.fullName, repo.defaultBranch, analysis)
@@ -312,7 +323,7 @@ export function DiscoverView({
     } catch (error) {
       onError(errorText(error))
     } finally {
-      setChecking(null)
+      setRepositoryChecking(repo.fullName, false)
     }
   }
 
@@ -325,37 +336,39 @@ export function DiscoverView({
     let completed = 0
     let available = 0
     let failed = 0
-    let consecutiveFailures = 0
-    let stopped = false
     setTargetDialog(null)
+    setAnalysisProgress(current => {
+      const next = { ...current }
+      for (const repo of candidates) delete next[repo.fullName]
+      return next
+    })
+    setCheckingRepositories(new Set(candidates.map(repo => repo.fullName)))
     setBatchScan({ phase: 'running', total: candidates.length, completed, available, failed })
 
-    for (const repo of candidates) {
-      if (batchRunRef.current !== runId) return
-      resetAnalysisProgress(repo.fullName)
-      setChecking(repo.fullName)
-      try {
-        const analysis = await api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch)
-        if (analysis.warnings.length === 0) writeCatalogAnalysisCache(repo.fullName, repo.defaultBranch, analysis)
+    await analyzeCatalogPageInParallel(
+      candidates,
+      repo => api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch),
+      (outcome, settledCount) => {
         if (batchRunRef.current !== runId) return
-        onAnalysis(repo.fullName, analysis)
-        if (analysis.kind !== 'invalid') available += 1
-        consecutiveFailures = 0
-      } catch (error) {
-        if (batchRunRef.current !== runId) return
-        failed += 1
-        consecutiveFailures += 1
-        const message = errorText(error)
-        stopped = /403|rate.?limit|请求额度|请求频率/i.test(message) || consecutiveFailures >= 3
-      }
-      completed += 1
-      setBatchScan({ phase: 'running', total: candidates.length, completed, available, failed })
-      if (stopped) break
-    }
-
-    setChecking(null)
+        completed = settledCount
+        if (outcome.status === 'fulfilled') {
+          const analysis = outcome.analysis
+          if (analysis.warnings.length === 0) {
+            writeCatalogAnalysisCache(outcome.repository.fullName, outcome.repository.defaultBranch, analysis)
+          }
+          onAnalysis(outcome.repository.fullName, analysis)
+          if (analysis.kind !== 'invalid') available += 1
+        } else {
+          failed += 1
+        }
+        setRepositoryChecking(outcome.repository.fullName, false)
+        setBatchScan({ phase: 'running', total: candidates.length, completed, available, failed })
+      },
+    )
+    if (batchRunRef.current !== runId) return
+    setCheckingRepositories(new Set())
     setBatchScan({
-      phase: stopped || completed < candidates.length ? 'partial' : 'complete',
+      phase: failed > 0 ? 'partial' : 'complete',
       total: candidates.length,
       completed,
       available,
@@ -554,9 +567,9 @@ export function DiscoverView({
           <button
             type="button"
             className="secondary-button catalog-scan-button"
-            disabled={loading || batchRunning || checking !== null || activeInstalling !== null || repositories.every(repo => repo.kind === 'dsh')}
+            disabled={loading || batchRunning || hasActiveChecks || activeInstalling !== null || repositories.every(repo => repo.kind === 'dsh')}
             onClick={() => void inspectAll()}
-            title="检测当前页中的全部 Plugin、Skill 与应用加载项候选"
+            title="并行检测当前页中的全部 Plugin、Skill、应用加载项与 Agent 预设候选"
           >
             {batchRunning ? <LoaderCircle className="spin" size={15} /> : <ScanSearch size={15} />}
             {batchRunning ? `检测 ${batchScan.completed}/${batchScan.total}` : batchScan ? '再次检测当前页' : '检测当前页'}
@@ -564,7 +577,7 @@ export function DiscoverView({
           <button
             type="button"
             className="secondary-button catalog-scan-button"
-            disabled={loading || batchRunning || checking !== null || activeInstalling !== null || aiActive || importing}
+            disabled={loading || batchRunning || hasActiveChecks || activeInstalling !== null || aiActive || importing}
             onClick={() => setImportOpen(true)}
             title="从 GitHub 链接导入仓库，加入市场并复用检测 / 安装流程"
           >
@@ -578,10 +591,10 @@ export function DiscoverView({
         <div className={`batch-scan-status ${batchScan.phase}`} role="status" aria-live="polite">
           {batchRunning ? <LoaderCircle className="spin" size={15} /> : batchScan.phase === 'complete' ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
           <span>{batchRunning
-            ? `正在检测 ${checking ?? '当前仓库'}（${Math.min(batchScan.completed + 1, batchScan.total)}/${batchScan.total}）：${currentAnalysisProgress?.message ?? '正在准备仓库结构检测'}`
+            ? `正在并行检测当前页：${checkingCount} 个仓库进行中，已完成 ${batchScan.completed}/${batchScan.total}；详细步骤显示在对应仓库行中`
             : batchScan.phase === 'complete'
               ? `检测完成：${batchScan.total} 个候选中有 ${batchScan.available} 个 DSH 资源${batchScan.failed ? `，${batchScan.failed} 个检测失败` : ''}`
-              : `检测已暂停：完成 ${batchScan.completed}/${batchScan.total}，发现 ${batchScan.available} 个资源，${batchScan.failed} 个请求失败`}</span>
+              : `并行检测结束：完成 ${batchScan.completed}/${batchScan.total}，发现 ${batchScan.available} 个资源，${batchScan.failed} 个检测失败`}</span>
           <div className="batch-scan-track" aria-hidden="true"><i style={{ width: `${Math.round(batchScan.completed / batchScan.total * 100)}%` }} /></div>
         </div>
       )}
@@ -593,7 +606,7 @@ export function DiscoverView({
         pageCount={pageCount}
         visibleCount={repositories.length}
         loading={loading}
-        disabled={batchRunning || checking !== null || activeInstalling !== null}
+        disabled={batchRunning || hasActiveChecks || activeInstalling !== null}
         onPageChange={nextPage => void search(query, sort, nextPage)}
       />
 
@@ -628,7 +641,7 @@ export function DiscoverView({
             ? installProgress
             : null
           const indeterminate = progress?.indeterminate === true && progress.phase !== 'error'
-          const isChecking = checking === repo.fullName
+          const isChecking = checkingRepositories.has(repo.fullName)
           const needsDialog = analysis?.kind === 'hybrid' || totalTargets > 1
           const singlePlugin = plugins.length === 1 && skills.length === 0 && applications.length === 0 && presets.length === 0 ? plugins[0] : undefined
           const singleSkill = skills.length === 1 && plugins.length === 0 && applications.length === 0 && presets.length === 0 ? skills[0] : undefined
@@ -650,7 +663,7 @@ export function DiscoverView({
                     ? '选择组件'
                     : anyInstalled ? '更新' : '安装'
           const actionDisabled = activeInstalling !== null
-            || checking !== null
+            || hasActiveChecks
             || aiActive
             || Boolean(analysis && (analysis.kind === 'invalid' || totalTargets === 0))
             || Boolean(singleApplication && !singleApplication.supported)
@@ -763,7 +776,7 @@ export function DiscoverView({
                       <button
                         type="button"
                         className="secondary-button accent ai-try-button"
-                        disabled={aiActive || checking !== null || activeInstalling !== null}
+                        disabled={aiActive || hasActiveChecks || activeInstalling !== null}
                         onClick={() => onAiInstall(repo)}
                         title="让 DSH 的 AI 研究仓库并尝试安装（实验性，只读自动放行、写操作需批准、可一键还原快照）"
                       >
