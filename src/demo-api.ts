@@ -14,6 +14,8 @@ import type {
   InstalledPreset,
   InstalledSkill,
   LauncherApi,
+  LauncherUpdateProgress,
+  LauncherUpdateStatus,
   ManagedPlugin,
   PackProgressEvent,
   PackStatus,
@@ -138,6 +140,10 @@ let demoGitHubAuth: GitHubAuthStatus = {
 }
 let demoDshInstallation: DshInstallationStatus = { installed: false, version: null, executable: null, source: null }
 const demoRemoteDshVersion = '0.1.0-rc.7'
+/** demo：置 true 可模拟「发现启动器新版本」，验证自更新 UI 与进度条。 */
+let demoLauncherUpdateAvailable = false
+const demoLauncherVersion = '0.1.9'
+let demoOnLauncherUpdateProgress: ((progress: LauncherUpdateProgress) => void) | null = null
 const outputListeners = new Set<(output: RuntimeOutput) => void>()
 const stateListeners = new Set<(state: RuntimeState) => void>()
 const installProgressListeners = new Set<(progress: InstallProgress) => void>()
@@ -406,6 +412,43 @@ export const demoApi: LauncherApi = {
       checkedAt: new Date().toISOString(),
       message: available ? `发现 DSH 新版本 ${demoRemoteDshVersion}。` : '当前 DSH 已是最新版本。',
     }
+  },
+  checkLauncherUpdate: async (): Promise<LauncherUpdateStatus> => {
+    const remoteVersion = demoLauncherUpdateAvailable ? '0.1.10' : demoLauncherVersion
+    const available = remoteVersion !== demoLauncherVersion
+    return {
+      state: available ? 'update-available' : 'up-to-date',
+      localVersion: demoLauncherVersion,
+      remoteVersion,
+      releaseUrl: 'https://github.com/rirko/dsh-melody-launcher/releases/latest',
+      assetName: `DSH-Launcher-${remoteVersion}-portable.exe`,
+      assetSize: available ? 95_731_397 : null,
+      checkedAt: new Date().toISOString(),
+      message: available ? `发现启动器新版本 ${remoteVersion}。` : '启动器已是最新版本。',
+    }
+  },
+  downloadLauncherUpdate: async (): Promise<LauncherUpdateStatus> => {
+    const status: LauncherUpdateStatus = {
+      state: 'downloading',
+      localVersion: demoLauncherVersion,
+      remoteVersion: '0.1.10',
+      releaseUrl: 'https://github.com/rirko/dsh-melody-launcher/releases/latest',
+      assetName: 'DSH-Launcher-0.1.10-portable.exe',
+      assetSize: 95_731_397,
+      checkedAt: new Date().toISOString(),
+      message: '正在下载启动器新版本…',
+    }
+    const progress: LauncherUpdateProgress = { phase: 'downloading', percent: 100, downloadedBytes: 95_731_397, totalBytes: 95_731_397 }
+    demoOnLauncherUpdateProgress?.(progress)
+    return status
+  },
+  applyLauncherUpdate: async (): Promise<void> => {
+    // demo 模式不真正替换可执行文件，仅提示已模拟。
+    return
+  },
+  onLauncherUpdateProgress: listener => {
+    demoOnLauncherUpdateProgress = listener
+    return () => { demoOnLauncherUpdateProgress = null }
   },
   getDeepSeekCredentialStatus: async () => demoCredential,
   setDeepSeekApiKey: async apiKey => {

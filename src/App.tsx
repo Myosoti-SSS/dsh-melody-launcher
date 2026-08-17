@@ -12,6 +12,7 @@ import { GitHubAccountDialog } from './components/dialogs/GitHubAccountDialog'
 import { CreatePackDialog } from './components/dialogs/CreatePackDialog'
 import { PackInstallDialog } from './components/dialogs/PackInstallDialog'
 import { SettingsDialog } from './components/dialogs/SettingsDialog'
+import { UpdateDialog } from './components/dialogs/UpdateDialog'
 import { DSH_REPOSITORY } from './constants'
 import { useAiInstall } from './hooks/use-ai-install'
 import { BUSY } from './hooks/use-async-action'
@@ -56,6 +57,7 @@ function LauncherShell() {
   const [credentialOpen, setCredentialOpen] = useState(false)
   const [githubAccountOpen, setGitHubAccountOpen] = useState(false)
   const [createPackOpen, setCreatePackOpen] = useState(false)
+  const [updateOpen, setUpdateOpen] = useState(false)
   const [confirmingRemoval, setConfirmingRemoval] = useState<ManagedPlugin | null>(null)
   // 仓库结构检测结果由各视图发起，App 统一持有，避免切页后丢失。
   const [repositoryAnalyses, setRepositoryAnalyses] = useState<Record<string, CatalogRepositoryAnalysis>>({})
@@ -125,11 +127,13 @@ function LauncherShell() {
             profileName={settings.profileName}
             credentialStatus={store.credentialStatus}
             githubAuthStatus={store.githubAuthStatus}
+            launcherUpdate={store.launcherUpdate}
             onBack={navigation.showLauncher}
             onCredential={() => setCredentialOpen(true)}
             onGitHubAccount={() => setGitHubAccountOpen(true)}
             onSettings={() => setSettingsOpen(true)}
             onToggleRuntime={toggleRuntime}
+            onUpdate={() => setUpdateOpen(true)}
             onClose={closeWindow}
           />
           <div className="app-body">
@@ -322,6 +326,16 @@ function LauncherShell() {
             })()
           }}
           onClose={packInstall.reset}
+        />
+      )}
+      {updateOpen && store.launcherUpdate && (
+        <UpdateDialog
+          status={store.launcherUpdate}
+          progress={store.launcherUpdateProgress}
+          busy={store.busy === 'launcher-update-download' || store.busy === 'launcher-update-apply'}
+          onDownload={() => { void store.downloadLauncherUpdate() }}
+          onApply={() => { void store.applyLauncherUpdate() }}
+          onClose={() => setUpdateOpen(false)}
         />
       )}
       {store.toast && <Toast toast={store.toast} onClose={store.dismissToast} />}
