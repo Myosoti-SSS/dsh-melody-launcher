@@ -313,12 +313,13 @@ describe('pack E2E · 标准包完整生命周期', () => {
     expect((await sim.readProfile(env.dshHome, 'pack-alpha-pack')).activeBundles).toEqual(['alpha'])
 
     // 5. 导出：manifest 引用 alpha（local 源），本体进包。
-    const { zip } = await manager.exportPack('pack-alpha-pack')
-    const inspection = inspectPackZip(zip)
+    const { zipPath: exportedZipPath } = await manager.exportPack('pack-alpha-pack')
+    const exportedBytes = await readFile(exportedZipPath)
+    const inspection = inspectPackZip(exportedBytes)
     expect(inspection.manifest.plugins).toEqual([{ packageName: 'alpha', source: 'local' }])
     expect(inspection.hasBodies).toBe(true)
     expect(inspection.bodyPackageNames).toEqual(['alpha'])
-    const exportedZip = new AdmZip(Buffer.from(zip))
+    const exportedZip = new AdmZip(Buffer.from(exportedBytes))
     expect(exportedZip.getEntry('dsh-pack.yaml')!.getData().toString('utf8')).toContain('name: alpha-pack')
     expect(exportedZip.getEntry('plugin-bodies/alpha/notes.txt')!.getData().toString('utf8')).toBe('hello from alpha')
 
@@ -332,7 +333,7 @@ describe('pack E2E · 标准包完整生命周期', () => {
 
     // 7. 把导出的 zip 写盘回导：包重建、插件可再读回。
     const exportedPath = path.join(env.root, 'roundtrip.zip')
-    await writeFile(exportedPath, Buffer.from(zip))
+    await writeFile(exportedPath, exportedBytes)
     const reimported = await manager.importPack(exportedPath)
     expect(reimported.installed).toEqual(['alpha'])
     records = await readPackRegistry(env.registryPath)

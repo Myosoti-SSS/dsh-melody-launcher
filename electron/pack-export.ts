@@ -5,7 +5,7 @@ import { access } from 'node:fs/promises'
 import path from 'node:path'
 import type { PackManifest } from '../src/types'
 import { isSafePackageName } from './profile'
-import { buildPackZip } from './pack-zip'
+import { buildPackZip, buildPackZipToFile } from './pack-zip'
 
 export interface PackBodyCollection {
   bodies: Map<string, string>
@@ -57,4 +57,16 @@ export async function buildPackExport(
 ): Promise<{ zip: Uint8Array; missing: string[] }> {
   const { bodies, missing } = await collectPackBodies(packProfileDir, packageNames)
   return { zip: buildPackZip(manifest, bodies), missing }
+}
+
+/** 流式把导出包写入指定文件；缺失的本体会被跳过并返回其包名。 */
+export async function buildPackExportToFile(
+  packProfileDir: string,
+  manifest: PackManifest,
+  packageNames: string[],
+  outputPath: string,
+): Promise<{ zipPath: string; missing: string[] }> {
+  const { bodies, missing } = await collectPackBodies(packProfileDir, packageNames)
+  await buildPackZipToFile(manifest, bodies, outputPath)
+  return { zipPath: outputPath, missing }
 }
