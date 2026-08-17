@@ -11,14 +11,18 @@ import type {
   DshUpdateStatus,
   GitHubAuthStatus,
   InstallProgress,
+  InstalledPreset,
   InstalledSkill,
   LauncherApi,
   ManagedPlugin,
   PackProgressEvent,
   PackStatus,
+  PluginInstallTarget,
   PluginTrialResult,
+  PresetInstallTarget,
   ProfileState,
   RepositoryAnalysis,
+  SkillInstallTarget,
   RuntimeOutput,
   RuntimeState,
   SkillRepositoryAnalysis,
@@ -111,9 +115,14 @@ const demoRepositories: CatalogRepositoryResult[] = [
   { id: 102, fullName: 'v587d/dsh-multimodal-skill', name: 'dsh-multimodal-skill', owner: 'v587d', description: 'Multimodal image and audio workflows.', url: 'https://github.com/v587d/dsh-multimodal-skill', stars: 96, language: 'Python', updatedAt: '2026-08-14T23:10:00Z', topics: ['dsh-skill', 'multimodal'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['skill'] },
   { id: 103, fullName: '2BingLing/dsh-market', name: 'dsh-market', owner: '2BingLing', description: '同时提供 Plugin 与 Skill 的 DSH 生态市场。', url: 'https://github.com/2BingLing/dsh-market', stars: 350, language: 'TypeScript', updatedAt: '2026-08-15T02:10:00Z', topics: ['dsh-plugin', 'dsh-skill', 'market'], defaultBranch: 'master', kind: 'repository', candidateTypes: ['plugin', 'skill'] },
   { id: 104, fullName: 'nexu-io/open-design', name: 'open-design', owner: 'nexu-io', description: '普通应用仓库，用于演示错误 topic 的无效候选。', url: 'https://github.com/nexu-io/open-design', stars: 28, sizeKb: 1_788_202, language: 'TypeScript', updatedAt: '2026-08-13T12:10:00Z', topics: ['dsh-plugin'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['plugin'] },
+  { id: 200, fullName: 'yjh051108/dsh-routing-suite', name: 'dsh-routing-suite', owner: 'yjh051108', description: '内置路由套件：dsh-super-injector、dsh-mode-boost 插件与 dsh-router-standard 预设，一键安装全部组件。', url: 'https://github.com/yjh051108/dsh-routing-suite', stars: 0, language: null, updatedAt: '2026-08-01T00:00:00Z', topics: ['dsh-plugin', 'dsh-skill'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['plugin', 'skill'], featured: true },
+  { id: 201, fullName: 'yjh051108/dsh-super-injector', name: 'dsh-super-injector', owner: 'yjh051108', description: '插件注入器（routing-suite 子模块）。', url: 'https://github.com/yjh051108/dsh-super-injector', stars: 0, language: null, updatedAt: '2026-08-01T00:00:00Z', topics: ['dsh-plugin'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['plugin'] },
+  { id: 202, fullName: 'yjh051108/dsh-mode-boost', name: 'dsh-mode-boost', owner: 'yjh051108', description: '模式增强（routing-suite 子模块）。', url: 'https://github.com/yjh051108/dsh-mode-boost', stars: 0, language: null, updatedAt: '2026-08-01T00:00:00Z', topics: ['dsh-plugin'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['plugin'] },
+  { id: 203, fullName: 'yjh051108/dsh-router-standard', name: 'dsh-router-standard', owner: 'yjh051108', description: '标准路由预设（routing-suite 子模块）。', url: 'https://github.com/yjh051108/dsh-router-standard', stars: 0, language: null, updatedAt: '2026-08-01T00:00:00Z', topics: ['dsh-skill'], defaultBranch: 'main', kind: 'repository', candidateTypes: ['skill'] },
 ]
 
 let demoInstalledSkills: InstalledSkill[] = []
+let demoInstalledPresets: InstalledPreset[] = []
 
 let demoRuntime: RuntimeState = { running: false, pid: null, startedAt: null, url: null, port: null }
 let demoCredential: CredentialStatus = { configured: false }
@@ -249,7 +258,9 @@ function demoSkillAnalysis(fullName: string, defaultBranch: string): SkillReposi
     ? ['academic-paper-completion', 'skill-optimizer']
     : fullName === '2BingLing/dsh-market'
       ? ['dsh-market-guide']
-      : ['multimodal-workflow']
+      : fullName === 'yjh051108/dsh-router-standard'
+        ? ['router-standard']
+        : ['multimodal-workflow']
   return {
     repository: fullName,
     defaultBranch,
@@ -277,6 +288,74 @@ function demoCatalogAnalysis(fullName: string, defaultBranch: string): CatalogRe
       summary: '这是 DeepSeek Harness 官方仓库，将作为 DSH 本体安装。',
       pluginAnalysis: null,
       skillAnalysis: null,
+      warnings: [],
+    }
+  }
+  if (fullName === 'yjh051108/dsh-routing-suite') {
+    // 与真实 meta-repo 分析一致：super-injector 走 Release tgz；mode-boost 无 dsh 元数据（官方脚本不装）；
+    // router-standard 是 agent-preset 而非 skill（preset/ 目录）。
+    const pluginTargets: PluginInstallTarget[] = [
+      {
+        id: '@yjh051108/dsh-super-injector:.',
+        packageName: '@yjh051108/dsh-super-injector',
+        version: '0.3.3',
+        source: 'release',
+        profileName: 'web',
+        platform: 'web',
+        subdirectory: null,
+        commit: 'c'.repeat(40),
+        requiresBuild: false,
+        buildScripts: [],
+        nodeRange: null,
+        sourceRepository: 'yjh051108/dsh-super-injector',
+        tarballUrl: 'https://github.com/yjh051108/dsh-super-injector/releases/download/v0.3.3/dsh-super-injector-0.3.3.tgz',
+      },
+    ]
+    const skillTargets: SkillInstallTarget[] = []
+    const presetTargets: PresetInstallTarget[] = [
+      {
+        id: 'router-standard:preset/router-standard',
+        name: 'router-standard',
+        description: 'Standard routing agent preset（含 preset.yml 的 DSH 预设目录）。',
+        sourceRepository: 'yjh051108/dsh-router-standard',
+        revision: 'e'.repeat(40),
+        sourcePath: 'preset/router-standard',
+      },
+      {
+        id: 'router-spec:preset/router-spec',
+        name: 'router-spec',
+        description: 'Routing spec agent preset（含 preset.yml 的 DSH 预设目录）。',
+        sourceRepository: 'yjh051108/dsh-router-standard',
+        revision: 'e'.repeat(40),
+        sourcePath: 'preset/router-spec',
+      },
+    ]
+    return {
+      repository: fullName,
+      defaultBranch,
+      kind: 'hybrid',
+      summary: `确认包含 ${pluginTargets.length} 个 Plugin 组件和 ${presetTargets.length} 个 Agent 预设。`,
+      pluginAnalysis: {
+        repository: fullName,
+        defaultBranch,
+        installability: 'ready',
+        summary: `检测到 ${pluginTargets.length} 个可安装 Plugin 组件。`,
+        targets: pluginTargets,
+      },
+      skillAnalysis: {
+        repository: fullName,
+        defaultBranch,
+        installability: 'invalid',
+        summary: '未在子模块中检测到 Skill 组件。',
+        targets: skillTargets,
+      },
+      presetAnalysis: {
+        repository: fullName,
+        defaultBranch,
+        installability: 'ready',
+        summary: `检测到 ${presetTargets.length} 个可安装 Agent 预设。`,
+        targets: presetTargets,
+      },
       warnings: [],
     }
   }
@@ -420,6 +499,7 @@ export const demoApi: LauncherApi = {
       dshInstallation: demoDshInstallation,
       installedRepositories: demoPlugins.map(plugin => plugin.repositoryFullName).filter((value): value is string => Boolean(value)),
       installedSkills: demoInstalledSkills,
+      installedPresets: demoInstalledPresets,
     }
   },
   analyzeCatalogRepository: async (fullName, defaultBranch) => demoCatalogAnalysis(fullName, defaultBranch),
@@ -539,6 +619,27 @@ export const demoApi: LauncherApi = {
   toggleSkill: async (name, enabled) => {
     demoInstalledSkills = demoInstalledSkills.map(skill => skill.name === name ? { ...skill, enabled } : skill)
     return demoInstalledSkills
+  },
+  installPreset: async request => {
+    const repo = demoRepositories.find(item => item.fullName === request.repository)
+    const analysis = demoCatalogAnalysis(request.repository, repo?.defaultBranch ?? 'main')
+    const target = analysis.presetAnalysis?.targets.find(item => item.id === request.targetId)
+    if (!target) throw new Error('预设安装目标无效。')
+    installProgressListeners.forEach(listener => listener({ repository: request.repository, kind: 'preset', phase: 'downloading', percent: 42, message: '正在下载 Agent 预设' }))
+    await wait(500)
+    const installedPreset: InstalledPreset = {
+      name: target.name,
+      path: `${demoSettings.dshHome}\\.agent-presets\\${target.name}`,
+      enabled: true,
+    }
+    demoInstalledPresets = [...demoInstalledPresets.filter(preset => preset.name !== target.name), installedPreset]
+    installProgressListeners.forEach(listener => listener({ repository: request.repository, kind: 'preset', phase: 'complete', percent: 100, message: `${target.name} 已安装` }))
+    return { installedPreset, installedPresets: demoInstalledPresets }
+  },
+  readInstalledPresets: async () => demoInstalledPresets,
+  togglePreset: async (name, enabled) => {
+    demoInstalledPresets = demoInstalledPresets.map(preset => preset.name === name ? { ...preset, enabled } : preset)
+    return demoInstalledPresets
   },
   getRuntimeState: async () => demoRuntime,
   startRuntime: async () => {

@@ -206,9 +206,10 @@ function isTemplatePackageName(packageName: string): boolean {
 function targetPreference(target: PluginInstallTarget): [number, number, number, string] {
   const sourceRank: Record<PluginInstallSource, number> = {
     npm: 0,
-    github: 1,
-    'archive-subdirectory': 2,
-    'local-directory': 3,
+    release: 1,
+    github: 2,
+    'archive-subdirectory': 3,
+    'local-directory': 4,
   }
   const directory = target.subdirectory ?? ''
   const depth = directory ? directory.split('/').length : 0

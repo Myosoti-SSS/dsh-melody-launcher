@@ -975,7 +975,7 @@ input:focus-visible {
 
 .plugin-management-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.42fr);
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.42fr) minmax(200px, 0.38fr);
   min-width: 0;
 }
 
@@ -992,6 +992,16 @@ input:focus-visible {
 .skill-management-column {
   min-width: 0;
   background: #fbfcfb;
+}
+
+.preset-management-column {
+  background: #faf7fb;
+}
+
+.preset-management-column .preset-glyph {
+  border-color: #cfb8dd;
+  color: #6d3d94;
+  background: #f4ecf9;
 }
 
 .skill-column-heading {
@@ -1865,6 +1875,12 @@ input:focus-visible {
   background: #fbf6e8;
 }
 
+.repo-icon.preset-icon {
+  color: #6d4bbd;
+  border-color: #cfc1ee;
+  background: #f5f0ff;
+}
+
 .repo-main > div:last-child {
   min-width: 0;
 }
@@ -1900,6 +1916,17 @@ input:focus-visible {
   font-weight: 750;
 }
 
+.featured-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid #cbbdf0;
+  border-radius: 4px;
+  color: #7c5cd6;
+  background: #f5f0ff;
+  font-size: 9px;
+  font-weight: 750;
+}
+
 .repository-analysis-badge {
   flex: 0 0 auto;
   padding: 2px 6px;
@@ -1929,6 +1956,12 @@ input:focus-visible {
   color: #795b1c;
   border-color: #e2d3a4;
   background: #fbf6e8;
+}
+
+.repository-analysis-badge.preset {
+  color: #6d4bbd;
+  border-color: #cfc1ee;
+  background: #f5f0ff;
 }
 
 .repository-analysis-badge.pending {
@@ -2537,6 +2570,12 @@ input:focus-visible {
   color: #236a76;
   border-color: #bddae0;
   background: #edf7f8;
+}
+
+.plugin-target-icon.preset-icon {
+  color: #6d4bbd;
+  border-color: #cfc1ee;
+  background: #f5f0ff;
 }
 
 .plugin-target-list {
@@ -3273,6 +3312,10 @@ input:focus-visible {
   }
 
   .skill-management-column {
+    border-top: 1px solid var(--line);
+  }
+
+  .preset-management-column {
     border-top: 1px solid var(--line);
   }
 
