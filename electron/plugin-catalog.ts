@@ -25,7 +25,7 @@ interface PackageManifest {
 
 interface GitHubTree {
   truncated?: boolean
-  tree?: Array<{ path: string; type: 'blob' | 'tree' }>
+  tree?: Array<{ path: string; type: 'blob' | 'tree' | 'commit' }>
 }
 
 const GITHUB_HEADERS = {
@@ -206,9 +206,10 @@ function isTemplatePackageName(packageName: string): boolean {
 function targetPreference(target: PluginInstallTarget): [number, number, number, string] {
   const sourceRank: Record<PluginInstallSource, number> = {
     npm: 0,
-    github: 1,
-    'archive-subdirectory': 2,
-    'local-directory': 3,
+    release: 1,
+    github: 2,
+    'archive-subdirectory': 3,
+    'local-directory': 4,
   }
   const directory = target.subdirectory ?? ''
   const depth = directory ? directory.split('/').length : 0
@@ -353,6 +354,23 @@ export async function analyzeRepository(
         ? `检测到可安装的 ${installTargets[0].packageName}。`
         : `检测到 ${installTargets.length} 个可安装组件，请选择需要的组件。`,
       targets: installTargets,
+    }
+  }
+
+  // git tree 里 type === 'commit' 的条目是 gitlink（git submodule）。GitHub archive
+  // 快照不含子模块内容，真正可安装的组件在子模块里，归类为应用/源码工作区，
+  // 提示用户走「AI 尝试」（启动器会预取子模块内容）。
+  const submodulePaths = entries
+    .filter(entry => entry.type === 'commit')
+    .map(entry => entry.path)
+    .slice(0, 8)
+  if (submodulePaths.length > 0) {
+    return {
+      repository,
+      defaultBranch,
+      installability: 'application',
+      summary: `这是聚合仓库（meta-repo），含 ${submodulePaths.length} 个子模块（${submodulePaths.join('、')}）。子模块才是可安装组件，请用「AI 尝试」研究并安装。`,
+      targets: [],
     }
   }
 

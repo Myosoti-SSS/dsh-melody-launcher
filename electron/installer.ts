@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { DEFAULT_PROFILE_NAME, DSH_PACKAGE_NAME } from '../src/constants'
 import type {
@@ -10,8 +10,12 @@ import type {
   DshInstallationStatus,
   DshUpdateStatus,
   InstallProgress,
+  InstalledPreset,
   InstalledSkill,
   PluginInstallTarget,
+  PresetInstallRequest,
+  PresetInstallResult,
+  PresetInstallTarget,
   ProfileState,
   RepositoryAnalysis,
   RepositoryInstallResult,
@@ -33,6 +37,7 @@ import {
 import { checkDshUpdate } from './dsh-update'
 import { resolveNodeExecutable, type NodeRuntime, type NodeRuntimeProgress, type PnpmRuntime } from './node-runtime'
 import { approveIgnoredGitHubBuilds } from './plugin-install'
+import { analyzeMetaRepository } from './meta-repo-catalog'
 import { analyzeRepository } from './plugin-catalog'
 import { prepareSubdirectoryPlugin, type PluginSourceProgress } from './plugin-source'
 import { readPluginReceipts, recordPluginInstall, removePluginReceipt } from './plugin-receipts'
@@ -40,6 +45,8 @@ import { readProfile } from './profile'
 import { withExecutableDirectoryOnPath } from './process'
 import { analyzeSkillRepository } from './skill-catalog'
 import { readInstalledSkills as readLocalSkills, toggleInstalledSkill } from './skill-format'
+import { installPresetFromRepository, readInstalledPresets as readLocalPresets, toggleInstalledPreset } from './preset-install'
+import { downloadReleaseAsset } from './release-download'
 import { installSkillFromRepository } from './skill-install'
 
 /**
@@ -127,6 +134,8 @@ export interface Installer {
       commit?: string
       /** 整合包声明的固定版本（npm 源），覆盖重新分析得到的版本。 */
       version?: string
+      /** release 源插件的 tgz 直链（meta-repo 分析时解析），覆盖重分析得到的 github 源。 */
+      tarballUrl?: string
     },
     profileOverride?: string,
   ): Promise<RepositoryInstallResult>
@@ -148,6 +157,12 @@ export interface Installer {
   readInstalledSkills(): Promise<InstalledSkill[]>
   /** 启用或停用一个本地 Skill。 */
   toggleSkill(name: string, enabled: boolean): Promise<InstalledSkill[]>
+  /** 安装一个 agent-preset（meta-repo 子模块里的预设目录）。 */
+  installPreset(request: PresetInstallRequest): Promise<PresetInstallResult>
+  /** 读取已安装的 agent-preset 列表。 */
+  readInstalledPresets(): Promise<InstalledPreset[]>
+  /** 启用或停用一个本地 agent-preset。 */
+  togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]>
   /** 汇总当前 Profile 与安装凭据里已安装的仓库，用于在列表中标记「已安装」。 */
   listInstalledRepositories(): Promise<string[]>
   /** 从指定 Profile 中卸载一个插件（缺省为当前 Profile）。 */
@@ -161,6 +176,9 @@ export interface Installer {
 const NODE_RUNTIME_PROGRESS_FLOOR = 5
 const NODE_RUNTIME_PROGRESS_CEILING = 17
 const DOWNLOAD_PROGRESS_FLOOR = 28
+
+/** Release 插件 tgz 安装包体积上限（插件可能比 Skill 大，放宽到 256 MiB）。 */
+const MAX_RELEASE_BYTES = 256 * 1024 * 1024
 
 export function createInstaller(options: InstallerOptions): Installer {
   let active: InstallProgress | null = null
@@ -235,7 +253,7 @@ export function createInstaller(options: InstallerOptions): Installer {
     defaultBranch: string,
     onProgress?: (progress: CatalogAnalysisProgress) => void,
   ): Promise<CatalogRepositoryAnalysis> => {
-    return analyzeCatalogWithProgress(
+    const analysis = await analyzeCatalogWithProgress(
       fullName,
       defaultBranch,
       {
@@ -245,6 +263,28 @@ export function createInstaller(options: InstallerOptions): Installer {
       },
       onProgress,
     )
+
+    // 聚合仓库（meta-repo）：plugin 分析判为 application 通常意味着仓库根目录只有
+    // git submodule。确定性展开子模块（不调大模型）；展开无果才回落常规分类。
+    if (analysis.pluginAnalysis?.installability === 'application') {
+      const metaAnalysis = options.githubFetch
+        ? await analyzeMetaRepository(
+            fullName,
+            defaultBranch,
+            (repository, branch) => analyzePlugin(repository, branch),
+            (repository, branch) => analyzeSkill(repository, branch),
+            options.githubFetch,
+          )
+        : await analyzeMetaRepository(
+            fullName,
+            defaultBranch,
+            (repository, branch) => analyzePlugin(repository, branch),
+            (repository, branch) => analyzeSkill(repository, branch),
+          )
+      if (metaAnalysis) return metaAnalysis
+    }
+
+    return analysis
   }
 
   /** 准备 Node.js，同时把下载进度折算进当前安装任务的进度条。 */
@@ -353,6 +393,35 @@ export function createInstaller(options: InstallerOptions): Installer {
       })
     } finally {
       tracker?.stop()
+    }
+
+    // pnpm 升级后，旧 Profile 的 node_modules 可能还链着旧版 store（ERR_PNPM_UNEXPECTED_STORE）。
+    // 按 pnpm 的提示在 Profile 里跑一次 `pnpm install` 迁移到当前 store，然后重试一次。
+    if (result.exitCode !== 0 && installingRepository && allowBuildRetry && result.output.includes('ERR_PNPM_UNEXPECTED_STORE')) {
+      const profilePath = path.join(settings.dshHome, 'profiles', targetProfile)
+      options.emitOutput('info', '检测到 pnpm store 版本升级，正在迁移 Profile 依赖后自动重试。')
+      emit({
+        repository: installingRepository,
+        kind: 'plugin',
+        phase: 'configuring',
+        percent: Math.max(78, currentPercent(78)),
+        message: '正在迁移插件依赖（pnpm store 升级）',
+      })
+      const migrate = await executeCommand(pnpmRuntime.executable, ['install'], {
+        cwd: profilePath,
+        env: withExecutableDirectoryOnPath(nodeRuntime.node, {
+          ...process.env,
+          CI: 'true',
+          DSH_HOME: settings.dshHome,
+          FORCE_COLOR: '0',
+        }),
+        onOutput: (text, level: OutputLevel) => options.emitOutput(level, text),
+      })
+      if (migrate.exitCode === 0) {
+        options.emitOutput('info', 'Profile 依赖已迁移到当前 pnpm store，正在重试安装。')
+        return runPluginCommand(args, installingRepository, false, profileName)
+      }
+      throw new Error(`插件依赖迁移失败（代码 ${migrate.exitCode}），请查看运行日志。`)
     }
 
     // pnpm 默认拒绝执行依赖里的构建脚本。只为当前正在安装的仓库放行，然后重试一次。
@@ -553,12 +622,15 @@ export function createInstaller(options: InstallerOptions): Installer {
         commit?: string
         /** 整合包声明的固定版本（npm 源），覆盖重新分析得到的版本。 */
         version?: string
+        /** release 源插件：meta-repo 分析得到的 tgz 直链，覆盖重分析得到的 github 源。 */
+        tarballUrl?: string
       },
       profileOverride?: string,
     ): Promise<RepositoryInstallResult> {
       const fullName = request.repository
       if (active) throw new Error(`正在安装 ${active.repository}，请等待当前任务完成。`)
       emit({ repository: fullName, kind: 'plugin', phase: 'preparing', percent: 5, message: '正在检查插件结构' })
+      const temporaryArtifacts: string[] = []
       try {
         const analysis = await analyzePlugin(fullName, request.defaultBranch)
         const found = analysis.targets.find(item => item.id === request.targetId)
@@ -567,6 +639,11 @@ export function createInstaller(options: InstallerOptions): Installer {
         // 尊重整合包声明的 pin：仓库已前进时仍按导出时的 commit / version 安装。
         if (request.commit && target.source === 'github') target.commit = request.commit
         if (request.version && target.source === 'npm') target.version = request.version
+        // release 源插件：meta-repo 分析已解析出官方 tgz，覆盖重分析得到的 github 源。
+        if (request.tarballUrl && target.source === 'github') {
+          target.source = 'release'
+          target.tarballUrl = request.tarballUrl
+        }
         const profileName = resolveInstallProfile(target, profileOverride)
 
         let specifier: string
@@ -574,6 +651,18 @@ export function createInstaller(options: InstallerOptions): Installer {
           specifier = target.version ? `${target.packageName}@${target.version}` : target.packageName
         } else if (target.source === 'github') {
           specifier = `github:${fullName}#${target.commit}`
+        } else if (target.source === 'release') {
+          // 源码 pin 不一定带构建产物，Release tgz 是官方安装包：下载后 `dsh plugin add file:<tgz>`。
+          if (!target.tarballUrl) throw new Error('Release 插件缺少下载地址。')
+          const tgzPath = path.join(options.pluginSourceRoot, `.release-${process.pid}-${Date.now()}.tgz`)
+          await mkdir(options.pluginSourceRoot, { recursive: true })
+          emit({ repository: fullName, kind: 'plugin', phase: 'downloading', percent: 30, message: '正在下载 Release 安装包' })
+          const asset = options.githubFetch
+            ? await downloadReleaseAsset(target.tarballUrl, MAX_RELEASE_BYTES, undefined, options.githubFetch)
+            : await downloadReleaseAsset(target.tarballUrl, MAX_RELEASE_BYTES)
+          await writeFile(tgzPath, asset, { flag: 'wx' })
+          temporaryArtifacts.push(tgzPath)
+          specifier = `file:${tgzPath}`
         } else if (target.source === 'local-directory') {
           specifier = `file:${validateLocalPluginDirectory(target.localDirectory)}`
         } else {
@@ -628,6 +717,7 @@ export function createInstaller(options: InstallerOptions): Installer {
         })
         throw error
       } finally {
+        for (const file of temporaryArtifacts) await rm(file, { force: true }).catch(() => undefined)
         active = null
       }
     },
@@ -662,6 +752,53 @@ export function createInstaller(options: InstallerOptions): Installer {
       } finally {
         active = null
       }
+    },
+
+    async installPreset(request: PresetInstallRequest): Promise<PresetInstallResult> {
+      if (active) throw new Error(`正在安装 ${active.repository}，请等待当前任务完成。`)
+      emit({ repository: request.repository, kind: 'preset', phase: 'preparing', percent: 5, message: '正在确认 Agent 预设目录' })
+      try {
+        // 预设来自 meta-repo 子模块，revision 已钉死为 pin commit（内容不可变），
+        // 不需要像插件/Skill 那样重分析 HEAD；下载后仍校验 preset.yml 与名称一致。
+        const target: PresetInstallTarget = {
+          id: request.targetId,
+          name: request.name,
+          description: '',
+          sourceRepository: request.repository,
+          revision: request.revision,
+          sourcePath: request.sourcePath,
+        }
+        const settings = await options.readSettings()
+        const onProgress = (percent: number, message: string) =>
+          emit({ repository: request.repository, kind: 'preset', phase: 'downloading', percent, message })
+        const installedPreset = options.githubFetch
+          ? await installPresetFromRepository(options.skillSourceRoot, settings.dshHome, request.repository, target, onProgress, options.githubFetch)
+          : await installPresetFromRepository(options.skillSourceRoot, settings.dshHome, request.repository, target, onProgress)
+        const installedPresets = await readLocalPresets(settings.dshHome)
+        emit({ repository: request.repository, kind: 'preset', phase: 'complete', percent: 100, message: `${target.name} 已安装` })
+        return { installedPreset, installedPresets }
+      } catch (error) {
+        emit({
+          repository: request.repository,
+          kind: 'preset',
+          phase: 'error',
+          percent: currentPercent(0),
+          message: error instanceof Error ? error.message : 'Agent 预设安装失败',
+        })
+        throw error
+      } finally {
+        active = null
+      }
+    },
+
+    async readInstalledPresets(): Promise<InstalledPreset[]> {
+      const settings = await options.readSettings()
+      return readLocalPresets(settings.dshHome)
+    },
+
+    async togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]> {
+      const settings = await options.readSettings()
+      return toggleInstalledPreset(settings.dshHome, name, Boolean(enabled))
     },
   }
 }

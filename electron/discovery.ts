@@ -3,6 +3,7 @@ import type {
   CatalogRepositoryResult,
 } from '../src/types'
 import { isDshRepository } from './dsh-install'
+import { prependFeatured } from './featured'
 
 /** GitHub Plugin / Skill 统一目录检索。解析与映射是纯函数，网络调用单独一层。 */
 
@@ -206,7 +207,7 @@ export async function searchCatalogRepositories(
   const remaining = [pluginFound?.rateRemaining, skillFound?.rateRemaining, applicationFound?.rateRemaining]
     .filter((value): value is number => value !== undefined)
   return {
-    repositories: [...repositories.values()].sort(repositoryOrder(sort)),
+    repositories: prependFeatured([...repositories.values()].sort(repositoryOrder(sort))),
     topicTotals: {
       plugin: pluginFound?.totalCount ?? 0,
       skill: skillFound?.totalCount ?? 0,

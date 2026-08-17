@@ -13,11 +13,15 @@ import type {
   DshUpdateStatus,
   GitHubAuthStatus,
   InstallProgress,
+  InstalledPreset,
   InstalledSkill,
   InstalledApplicationAddon,
+  LauncherUpdateProgress,
+  LauncherUpdateStatus,
   ManagedPlugin,
   PackStatus,
   PluginTrialResult,
+  PresetInstallResult,
   ProfileState,
   RepositoryInstallResult,
   RuntimeOutput,
@@ -49,11 +53,14 @@ export function useLauncherStore() {
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME_STATE)
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
   const [dshUpdate, setDshUpdate] = useState<DshUpdateStatus | null>(null)
+  const [launcherUpdate, setLauncherUpdate] = useState<LauncherUpdateStatus | null>(null)
+  const [launcherUpdateProgress, setLauncherUpdateProgress] = useState<LauncherUpdateProgress | null>(null)
   const [installProgress, setInstallProgress] = useState<InstallProgress | null>(null)
   const [pluginTrials, setPluginTrials] = useState<Record<string, PluginTrialResult>>({})
   const [installedRepositories, setInstalledRepositories] = useState<Set<string>>(new Set())
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([])
   const [installedApplications, setInstalledApplications] = useState<InstalledApplicationAddon[]>([])
+  const [installedPresets, setInstalledPresets] = useState<InstalledPreset[]>([])
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>({ configured: false })
   const [customApiProviders, setCustomApiProviders] = useState<CustomApiProvider[]>([])
   const [customApiLoading, setCustomApiLoading] = useState(false)
@@ -95,12 +102,13 @@ export function useLauncherStore() {
       api.detectDshInstallation(),
       api.readInstalledSkills(),
       api.readInstalledApplications(),
+      api.readInstalledPresets(),
       api.listPacks(),
       api.packHasSnapshot(),
       api.readPluginTrials(),
       api.listCustomApiProviders().catch(() => [] as CustomApiProvider[]),
     ])
-      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextGitHubAuthStatus, nextDshInstallation, nextInstalledSkills, nextInstalledApplications, nextPacks, nextPackSnapshot, nextPluginTrials, nextCustomApiProviders]) => {
+      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextGitHubAuthStatus, nextDshInstallation, nextInstalledSkills, nextInstalledApplications, nextInstalledPresets, nextPacks, nextPackSnapshot, nextPluginTrials, nextCustomApiProviders]) => {
         setSettings(nextSettings)
         setProfile(nextProfile)
         setRuntime(nextRuntime)
@@ -109,6 +117,7 @@ export function useLauncherStore() {
         setDshInstallation(nextDshInstallation)
         setInstalledSkills(nextInstalledSkills)
         setInstalledApplications(nextInstalledApplications)
+        setInstalledPresets(nextInstalledPresets)
         setSelectedPlugin(nextProfile.plugins[0]?.packageName ?? null)
         setPacks(nextPacks)
         setPackSnapshotsAvailable(nextPackSnapshot)
@@ -123,10 +132,27 @@ export function useLauncherStore() {
       .then(next => { if (!disposed) setDshUpdate(next) })
       .catch(() => { /* 主进程已把网络失败转换为状态；演示 API 也不应阻塞启动 */ })
 
+    // 启动器自更新：同样后台检测；发现新版本后自动开始下载，UI 提示由 AppHeader 的更新按钮承载。
+    void api.checkLauncherUpdate()
+      .then(next => {
+        if (disposed) return
+        setLauncherUpdate(next)
+        if (next.state === 'update-available') {
+          void api.downloadLauncherUpdate()
+            .then(downloaded => { if (!disposed) setLauncherUpdate(downloaded) })
+            .catch(() => { /* 下载失败由主进程收敛为 error 状态，这里静默 */ })
+        }
+      })
+      .catch(() => { /* 主进程已把网络失败转换为 error 状态 */ })
+
     const unsubscribers = [
       api.onRuntimeOutput(output => setLogs(current => [...current.slice(-(MAX_LOG_LINES - 1)), output])),
       api.onRuntimeState(setRuntime),
       api.onInstallProgress(setInstallProgress),
+      api.onLauncherUpdateProgress(progress => {
+        setLauncherUpdateProgress(progress)
+        setLauncherUpdate(current => current ? { ...current, state: progress.phase === 'applying' ? 'applying' : 'downloading' } : current)
+      }),
       api.onPluginTrialEvent(result => {
         setPluginTrials(current => ({ ...current, [pluginTrialStateKey(result.profileName, result.packageName)]: result }))
       }),
@@ -169,10 +195,12 @@ export function useLauncherStore() {
     repositories: string[],
     skills: InstalledSkill[],
     applications: InstalledApplicationAddon[],
+    presets: InstalledPreset[],
   ) => {
     setInstalledRepositories(new Set(repositories.map(repository => repository.toLowerCase())))
     setInstalledSkills(skills)
     setInstalledApplications(applications)
+    setInstalledPresets(presets)
   }, [])
 
   const applyCatalogPluginInstall = useCallback((repository: string, result: RepositoryInstallResult) => {
@@ -196,6 +224,10 @@ export function useLauncherStore() {
     setInstalledApplications(result.installedAddons)
     adoptProfile(result.profile)
   }, [adoptProfile])
+
+  const applyCatalogPresetInstall = useCallback((result: PresetInstallResult) => {
+    setInstalledPresets(result.installedPresets)
+  }, [])
 
   const beginInstall = useCallback((progress: InstallProgress) => {
     setInstallProgress(progress)
@@ -244,6 +276,29 @@ export function useLauncherStore() {
     const result = await installDsh()
     return result !== undefined
   }, [installDsh])
+
+  /** 启动器自更新：检测到新版本后自动开始后台下载（幂等，已有临时文件则跳过）。 */
+  const downloadLauncherUpdate = useCallback(async (): Promise<LauncherUpdateStatus | null> => {
+    const next = await run('launcher-update-download', () => api.downloadLauncherUpdate(), {
+      success: status => status.state === 'downloaded'
+        ? `启动器新版本已下载（${status.assetName ?? ''}）。`
+        : '启动器更新正在后台下载…',
+      onError: error => showToast({ kind: 'error', message: errorText(error) }),
+    })
+    if (next) {
+      setLauncherUpdate(next)
+      if (next.state !== 'downloading') setLauncherUpdateProgress(null)
+    }
+    return next ?? null
+  }, [api, run, showToast])
+
+  /** 用户点击「立即更新」：应用自动关闭 → 原位替换 exe → 重启。 */
+  const applyLauncherUpdate = useCallback(async (): Promise<void> => {
+    await run('launcher-update-apply', () => api.applyLauncherUpdate(), {
+      success: '正在应用更新并重启启动器…',
+      onError: error => showToast({ kind: 'error', message: errorText(error) }),
+    })
+  }, [api, run])
 
   const saveSettings = useCallback(async (next: AppSettings): Promise<boolean> => {
     const saved = await run(BUSY.settings, async () => {
@@ -344,6 +399,13 @@ export function useLauncherStore() {
       success: `${application.name} 已卸载。`,
     })
     if (next) setInstalledApplications(next)
+  }, [api, run])
+
+  const togglePreset = useCallback(async (preset: InstalledPreset, enabled: boolean) => {
+    const next = await run(`preset:${preset.name}`, () => api.togglePreset(preset.name, enabled), {
+      success: enabled ? `预设「${preset.name}」已启用。` : `预设「${preset.name}」已停用。`,
+    })
+    if (next) setInstalledPresets(next)
   }, [api, run])
 
   /** 先本地重排让拖拽有即时反馈，主进程写盘失败再回滚。 */
@@ -482,12 +544,15 @@ export function useLauncherStore() {
     runtime,
     dshInstallation,
     dshUpdate,
+    launcherUpdate,
+    launcherUpdateProgress,
     installProgress,
     pluginTrials,
     installedRepositories,
     installedSkills,
     installedApplications,
     activeRuntimeReplacement,
+    installedPresets,
     credentialStatus,
     customApiProviders,
     customApiLoading,
@@ -512,10 +577,13 @@ export function useLauncherStore() {
     applyCatalogPluginInstall,
     applyCatalogSkillInstall,
     applyCatalogApplicationInstall,
+    applyCatalogPresetInstall,
     beginInstall,
     finishInstall,
     toggleRuntime,
     updateDsh,
+    downloadLauncherUpdate,
+    applyLauncherUpdate,
     saveSettings,
     saveApiKey,
     clearApiKey,
@@ -526,6 +594,7 @@ export function useLauncherStore() {
     toggleSkill,
     toggleApplication,
     uninstallApplication,
+    togglePreset,
     reorderPlugins,
     uninstallPlugin,
     trialPlugin,

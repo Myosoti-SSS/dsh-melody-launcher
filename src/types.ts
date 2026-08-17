@@ -88,7 +88,7 @@ export interface ProfileState {
 }
 
 export type CatalogCandidateType = 'plugin' | 'skill' | 'application'
-export type CatalogComponentKind = 'plugin' | 'skill' | 'application'
+export type CatalogComponentKind = 'plugin' | 'skill' | 'application' | 'preset'
 export type CatalogKind = CatalogComponentKind | 'hybrid' | 'dsh' | 'invalid'
 
 export interface CatalogRepositoryResult {
@@ -107,11 +107,13 @@ export interface CatalogRepositoryResult {
   defaultBranch: string
   kind: 'repository' | 'dsh'
   candidateTypes: CatalogCandidateType[]
+  /** 市场内置（featured）条目，列表顶部固定展示。 */
+  featured?: boolean
 }
 
 export type PluginInstallability = 'ready' | 'choice' | 'dynamic' | 'application' | 'invalid'
 
-export type PluginInstallSource = 'npm' | 'github' | 'archive-subdirectory' | 'local-directory'
+export type PluginInstallSource = 'npm' | 'github' | 'archive-subdirectory' | 'local-directory' | 'release'
 
 export interface PluginInstallTarget {
   id: string
@@ -127,6 +129,10 @@ export interface PluginInstallTarget {
   nodeRange: string | null
   /** `local-directory` 源专用：本地插件本体所在目录（已存在的绝对路径）。 */
   localDirectory?: string
+  /** `release` 源专用：GitHub Release tgz 资产直链（meta-repo 分析时解析，安装时透传请求）。 */
+  tarballUrl?: string
+  /** 聚合仓库（meta-repo）子模块来源：安装请求应指向该仓库，而非父 meta-repo。 */
+  sourceRepository?: string
 }
 
 export interface RepositoryAnalysis {
@@ -142,6 +148,8 @@ export interface PluginInstallRequest {
   defaultBranch: string
   targetId: string
   profileName?: string // 安装到指定 profile
+  /** release 源插件：meta-repo 分析得到的 tgz 直链，安装时覆盖重分析得到的 github 源。 */
+  tarballUrl?: string
 }
 
 export interface DshInstallationStatus {
@@ -160,6 +168,24 @@ export interface DshUpdateStatus {
   message: string
 }
 
+export interface LauncherUpdateStatus {
+  state: 'up-to-date' | 'update-available' | 'downloading' | 'downloaded' | 'applying' | 'error'
+  localVersion: string | null
+  remoteVersion: string | null
+  releaseUrl: string | null
+  assetName: string | null
+  assetSize: number | null
+  checkedAt: string | null
+  message: string
+}
+
+export interface LauncherUpdateProgress {
+  phase: 'downloading' | 'applying'
+  percent: number
+  downloadedBytes?: number
+  totalBytes?: number
+}
+
 export interface SkillInstallTarget {
   id: string
   name: string
@@ -169,6 +195,8 @@ export interface SkillInstallTarget {
   revision: string
   modelInvocable: boolean
   userInvocable: boolean
+  /** 聚合仓库（meta-repo）子模块来源：安装请求应指向该仓库，而非父 meta-repo。 */
+  sourceRepository?: string
 }
 
 export interface SkillRepositoryAnalysis {
@@ -266,6 +294,54 @@ export interface LinkedComponentToggleResult {
   linked: boolean
 }
 
+/**
+ * Agent 预设安装目标。DSH 的 agent-preset 是一份含 preset.yml 的目录，
+ * 安装 = 把子模块仓库内 `sourcePath` 目录复制到 `~/.dsh/.agent-presets/<name>`。
+ */
+export interface PresetInstallTarget {
+  id: string
+  name: string
+  description: string
+  /** 子模块仓库（meta-repo 分析时确定），安装请求应指向它而非父 meta-repo。 */
+  sourceRepository: string
+  /** 精确 pin commit。 */
+  revision: string
+  /** 子模块内预设目录，如 `preset/router-standard`。 */
+  sourcePath: string
+}
+
+export interface PresetRepositoryAnalysis {
+  repository: string
+  defaultBranch: string
+  installability: 'ready' | 'invalid'
+  summary: string
+  targets: PresetInstallTarget[]
+}
+
+export interface InstalledPreset {
+  name: string
+  path: string
+  /** false 表示被停用（目录在 .agent-presets/.disabled 下，DSH 不可见）。 */
+  enabled: boolean
+}
+
+export interface PresetInstallRequest {
+  /** 子模块仓库（meta-repo 分析确定），不是父 meta-repo。 */
+  repository: string
+  targetId: string
+  /** 预设名（.agent-presets/<name> 目录名）。 */
+  name: string
+  /** 子模块内预设目录，如 `preset/router-standard`。 */
+  sourcePath: string
+  /** 精确 pin commit。预设安装不做重分析：revision 已钉死，内容不可变。 */
+  revision: string
+}
+
+export interface PresetInstallResult {
+  installedPreset: InstalledPreset
+  installedPresets: InstalledPreset[]
+}
+
 export interface CatalogRepositoryAnalysis {
   repository: string
   defaultBranch: string
@@ -275,6 +351,8 @@ export interface CatalogRepositoryAnalysis {
   pluginAnalysis: RepositoryAnalysis | null
   skillAnalysis: SkillRepositoryAnalysis | null
   applicationAnalysis: ApplicationRepositoryAnalysis | null
+  /** agent-preset 组件（meta-repo 子模块里的预设目录），非聚合仓库无此字段。 */
+  presetAnalysis?: PresetRepositoryAnalysis | null
   warnings: string[]
 }
 
@@ -302,6 +380,7 @@ export interface CatalogDiscoveryResult {
   installedRepositories: string[]
   installedSkills: InstalledSkill[]
   installedApplications: InstalledApplicationAddon[]
+  installedPresets: InstalledPreset[]
 }
 
 /** 从 GitHub 链接导入的结果：市场行 + 已完成的仓库分析。 */
@@ -312,7 +391,7 @@ export interface CatalogImportResult {
 
 export interface InstallProgress {
   repository: string
-  kind: 'plugin' | 'dsh' | 'skill' | 'application'
+  kind: 'plugin' | 'dsh' | 'skill' | 'application' | 'preset'
   phase: 'preparing' | 'resolving' | 'downloading' | 'building' | 'configuring' | 'verifying' | 'complete' | 'error'
   percent: number
   message: string
@@ -509,6 +588,10 @@ export interface LauncherApi {
   saveSettings(settings: AppSettings): Promise<AppSettings>
   detectDshInstallation(): Promise<DshInstallationStatus>
   checkDshUpdate(): Promise<DshUpdateStatus>
+  checkLauncherUpdate(): Promise<LauncherUpdateStatus>
+  downloadLauncherUpdate(): Promise<LauncherUpdateStatus>
+  applyLauncherUpdate(): Promise<void>
+  onLauncherUpdateProgress(listener: (progress: LauncherUpdateProgress) => void): () => void
   getDeepSeekCredentialStatus(): Promise<CredentialStatus>
   setDeepSeekApiKey(apiKey: string): Promise<CredentialStatus>
   clearDeepSeekApiKey(): Promise<CredentialStatus>
@@ -539,6 +622,9 @@ export interface LauncherApi {
   readInstalledApplications(): Promise<InstalledApplicationAddon[]>
   toggleApplication(id: string, enabled: boolean): Promise<LinkedComponentToggleResult>
   uninstallApplication(id: string): Promise<InstalledApplicationAddon[]>
+  installPreset(request: PresetInstallRequest): Promise<PresetInstallResult>
+  readInstalledPresets(): Promise<InstalledPreset[]>
+  togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]>
   getRuntimeState(): Promise<RuntimeState>
   startRuntime(): Promise<RuntimeState>
   stopRuntime(): Promise<RuntimeState>

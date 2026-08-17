@@ -4,6 +4,9 @@
 /** DSH 本体的 GitHub 仓库。出现在插件列表中时按本体而非普通插件处理。 */
 export const DSH_REPOSITORY = 'deepseek-ai/deepseek-harness'
 
+/** 启动器自身的 GitHub 仓库。自更新检测以它的 Release 页为准。 */
+export const LAUNCHER_REPOSITORY = 'rirko/dsh-melody-launcher'
+
 /** DSH 本体的 npm 包名。检测与安装都以它为准。 */
 export const DSH_PACKAGE_NAME = '@deepseek-ai/dsh'
 
@@ -32,6 +35,9 @@ export const IPC = {
   settingsSave: 'settings:save',
   dshDetect: 'dsh:detect-installation',
   dshUpdateCheck: 'dsh:check-update',
+  launcherUpdateCheck: 'launcher:update-check',
+  launcherUpdateDownload: 'launcher:update-download',
+  launcherUpdateApply: 'launcher:update-apply',
   credentialStatus: 'credentials:deepseek-status',
   credentialSet: 'credentials:deepseek-set',
   credentialClear: 'credentials:deepseek-clear',
@@ -70,6 +76,9 @@ export const IPC = {
   applicationsReadInstalled: 'applications:read-installed',
   applicationsToggle: 'applications:toggle',
   applicationsUninstall: 'applications:uninstall',
+  presetsInstall: 'presets:install',
+  presetsReadInstalled: 'presets:read-installed',
+  presetsToggle: 'presets:toggle',
   runtimeState: 'runtime:state',
   runtimeStart: 'runtime:start',
   runtimeStop: 'runtime:stop',
@@ -99,6 +108,7 @@ export const IPC_EVENTS = {
   runtimeStateChanged: 'runtime:state-changed',
   catalogAnalysisProgress: 'catalog:analysis-progress',
   installProgress: 'plugins:install-progress',
+  launcherUpdateProgress: 'launcher:update-progress',
   pluginTrialEvent: 'plugins:trial-event',
   aiInstallEvent: 'ai:install-event',
   packProgress: 'packs:progress',

@@ -12,6 +12,7 @@ import { GitHubAccountDialog } from './components/dialogs/GitHubAccountDialog'
 import { CreatePackDialog } from './components/dialogs/CreatePackDialog'
 import { PackInstallDialog } from './components/dialogs/PackInstallDialog'
 import { SettingsDialog } from './components/dialogs/SettingsDialog'
+import { UpdateDialog } from './components/dialogs/UpdateDialog'
 import { DSH_REPOSITORY } from './constants'
 import { useAiInstall } from './hooks/use-ai-install'
 import { BUSY } from './hooks/use-async-action'
@@ -56,6 +57,7 @@ function LauncherShell() {
   const [credentialOpen, setCredentialOpen] = useState(false)
   const [githubAccountOpen, setGitHubAccountOpen] = useState(false)
   const [createPackOpen, setCreatePackOpen] = useState(false)
+  const [updateOpen, setUpdateOpen] = useState(false)
   const [confirmingRemoval, setConfirmingRemoval] = useState<ManagedPlugin | null>(null)
   // 仓库结构检测结果由各视图发起，App 统一持有，避免切页后丢失。
   const [repositoryAnalyses, setRepositoryAnalyses] = useState<Record<string, CatalogRepositoryAnalysis>>({})
@@ -134,11 +136,13 @@ function LauncherShell() {
             customApiCount={store.customApiProviders.length}
             githubAuthStatus={store.githubAuthStatus}
             activeRuntimeReplacement={store.activeRuntimeReplacement}
+            launcherUpdate={store.launcherUpdate}
             onBack={navigation.showLauncher}
             onCredential={openApiConfig}
             onGitHubAccount={() => setGitHubAccountOpen(true)}
             onSettings={() => setSettingsOpen(true)}
             onToggleRuntime={toggleRuntime}
+            onUpdate={() => setUpdateOpen(true)}
             onClose={closeWindow}
           />
           <div className="app-body">
@@ -156,6 +160,7 @@ function LauncherShell() {
                   profileName={settings.profileName}
                   installedSkills={store.installedSkills}
                   installedApplications={store.installedApplications}
+                  installedPresets={store.installedPresets}
                   pluginTrials={store.pluginTrials}
                   selected={store.selected}
                   busy={store.busy}
@@ -164,6 +169,7 @@ function LauncherShell() {
                   onToggleSkill={store.toggleSkill}
                   onToggleApplication={store.toggleApplication}
                   onUninstallApplication={store.uninstallApplication}
+                  onTogglePreset={store.togglePreset}
                   onReorder={store.reorderPlugins}
                   onRefresh={store.refreshProfile}
                   onBrowse={() => navigation.setView('discover')}
@@ -184,6 +190,7 @@ function LauncherShell() {
                   installedRepositories={store.installedRepositories}
                   installedSkills={store.installedSkills}
                   installedApplications={store.installedApplications}
+                  installedPresets={store.installedPresets}
                   pluginTrials={store.pluginTrials}
                   onAnalysis={(repository, analysis) => {
                     setRepositoryAnalyses(current => ({ ...current, [repository]: analysis }))
@@ -210,6 +217,10 @@ function LauncherShell() {
                       kind: 'success',
                       message: `${result.installedAddon.name} 已作为应用加载项安装${result.installedAddon.enabled ? '并激活' : ''}。`,
                     })
+                  }}
+                  onPresetInstalled={result => {
+                    store.applyCatalogPresetInstall(result)
+                    store.showToast({ kind: 'success', message: `Agent 预设 ${result.installedPreset.name} 已安装到 DSH 预设目录。` })
                   }}
                   onError={message => store.showToast({ kind: 'error', message })}
                   onOpenRepository={url => void api.openExternal(url)}
@@ -340,6 +351,16 @@ function LauncherShell() {
             })()
           }}
           onClose={packInstall.reset}
+        />
+      )}
+      {updateOpen && store.launcherUpdate && (
+        <UpdateDialog
+          status={store.launcherUpdate}
+          progress={store.launcherUpdateProgress}
+          busy={store.busy === 'launcher-update-download' || store.busy === 'launcher-update-apply'}
+          onDownload={() => { void store.downloadLauncherUpdate() }}
+          onApply={() => { void store.applyLauncherUpdate() }}
+          onClose={() => setUpdateOpen(false)}
         />
       )}
       {store.toast && <Toast toast={store.toast} onClose={store.dismissToast} />}

@@ -38,11 +38,14 @@ import type {
   CatalogRepositoryAnalysis,
   CatalogRepositoryResult,
   DshInstallationStatus,
+  InstalledPreset,
   InstalledSkill,
   InstalledApplicationAddon,
   InstallProgress,
   PluginInstallTarget,
   PluginTrialResult,
+  PresetInstallResult,
+  PresetInstallTarget,
   ProfileState,
   RepositoryInstallResult,
   SkillInstallResult,
@@ -69,14 +72,16 @@ interface DiscoverViewProps {
   installedRepositories: Set<string>
   installedSkills: InstalledSkill[]
   installedApplications: InstalledApplicationAddon[]
+  installedPresets: InstalledPreset[]
   pluginTrials: Record<string, PluginTrialResult>
   onAnalysis: (repository: string, analysis: CatalogRepositoryAnalysis) => void
-  onInstallationState: (repositories: string[], skills: InstalledSkill[], applications: InstalledApplicationAddon[]) => void
+  onInstallationState: (repositories: string[], skills: InstalledSkill[], applications: InstalledApplicationAddon[], presets: InstalledPreset[]) => void
   onInstallStarted: (progress: InstallProgress) => void
   onInstallFinished: (repository: string) => void
   onPluginInstalled: (repository: string, result: RepositoryInstallResult) => void
   onSkillInstalled: (result: SkillInstallResult) => void
   onApplicationInstalled: (result: ApplicationInstallResult) => void
+  onPresetInstalled: (result: PresetInstallResult) => void
   onError: (message: string) => void
   onOpenRepository: (url: string) => void
   /** 启动「AI 尝试」安装（仅非标准形态显示）。 */
@@ -111,10 +116,18 @@ function applicationTargets(analysis: CatalogRepositoryAnalysis | undefined): Ap
     : []
 }
 
+function presetTargets(analysis: CatalogRepositoryAnalysis | undefined): PresetInstallTarget[] {
+  if (!analysis?.presetAnalysis) return []
+  return analysis.presetAnalysis.installability === 'ready'
+    ? analysis.presetAnalysis.targets
+    : []
+}
+
 function analysisBadge(analysis: CatalogRepositoryAnalysis): { className: string; label: string } {
-  if (analysis.kind === 'hybrid') return { className: 'hybrid', label: 'Plugin + Skill' }
+  if (analysis.kind === 'hybrid') return { className: 'hybrid', label: 'Plugin + Skill 等' }
   if (analysis.kind === 'skill') return { className: 'skill', label: 'Skill' }
   if (analysis.kind === 'application') return { className: 'application', label: '应用加载项' }
+  if (analysis.kind === 'preset') return { className: 'preset', label: 'Agent 预设' }
   if (analysis.kind === 'plugin') {
     return analysis.pluginAnalysis?.installability === 'dynamic'
       ? { className: 'dynamic', label: 'Plugin · 动态' }
@@ -178,6 +191,7 @@ export function DiscoverView({
   installedRepositories,
   installedSkills,
   installedApplications,
+  installedPresets,
   pluginTrials,
   onAnalysis,
   onInstallationState,
@@ -186,6 +200,7 @@ export function DiscoverView({
   onPluginInstalled,
   onSkillInstalled,
   onApplicationInstalled,
+  onPresetInstalled,
   onError,
   onOpenRepository,
   onAiInstall,
@@ -215,6 +230,8 @@ export function DiscoverView({
   } | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [importing, setImporting] = useState(false)
+  /** 「一键安装全部」整轮进行中（覆盖组件间切换的 busy 空档）。 */
+  const [installingAll, setInstallingAll] = useState(false)
   const batchRunRef = useRef(0)
 
   const search = useCallback(async (searchQuery = query, searchSort = sort, searchPage = page) => {
@@ -231,7 +248,7 @@ export function DiscoverView({
       setPageCount(result.pageCount)
       setWarnings(result.warnings)
       setDshInstallation(result.dshInstallation)
-      onInstallationState(result.installedRepositories, result.installedSkills, result.installedApplications)
+      onInstallationState(result.installedRepositories, result.installedSkills, result.installedApplications, result.installedPresets)
       for (const repo of result.repositories) {
         const cached = readCatalogAnalysisCache(repo.fullName, repo.defaultBranch)
         if (cached) onAnalysis(repo.fullName, cached)
@@ -264,6 +281,10 @@ export function DiscoverView({
     () => new Set(installedApplications.map(application => application.repository.toLowerCase())),
     [installedApplications],
   )
+  const installedPresetNames = useMemo(
+    () => new Set(installedPresets.map(preset => preset.name)),
+    [installedPresets],
+  )
   const batchRunning = batchScan?.phase === 'running'
   const restoredInstalling: InstallingState | null = isInstallProgressActive(installProgress)
     ? { repository: installProgress.repository, kind: installProgress.kind }
@@ -285,7 +306,7 @@ export function DiscoverView({
       if (analysis.warnings.length === 0) writeCatalogAnalysisCache(repo.fullName, repo.defaultBranch, analysis)
       onAnalysis(repo.fullName, analysis)
       if (analysis.kind === 'hybrid'
-        || pluginTargets(analysis).length + skillTargets(analysis).length + applicationTargets(analysis).length > 1) {
+        || pluginTargets(analysis).length + skillTargets(analysis).length + applicationTargets(analysis).length + presetTargets(analysis).length > 1) {
         setTargetDialog({ repo, analysis })
       }
     } catch (error) {
@@ -357,7 +378,7 @@ export function DiscoverView({
         return [repository, ...without]
       })
       if (analysis.kind === 'hybrid'
-        || pluginTargets(analysis).length + skillTargets(analysis).length + applicationTargets(analysis).length > 1) {
+        || pluginTargets(analysis).length + skillTargets(analysis).length + applicationTargets(analysis).length + presetTargets(analysis).length > 1) {
         setTargetDialog({ repo: repository, analysis })
       }
     } catch (error) {
@@ -367,10 +388,12 @@ export function DiscoverView({
     }
   }
 
-  const installPlugin = async (repo: CatalogRepositoryResult, target?: PluginInstallTarget) => {
+  const installPlugin = async (repo: CatalogRepositoryResult, target?: PluginInstallTarget, keepDialog = false) => {
     const kind = repo.kind === 'dsh' ? 'dsh' : 'plugin'
+    // meta-repo 子模块目标指向子模块自身仓库与精确 commit；普通仓库仍是父仓库 + 默认分支。
+    const sourceRepository = target?.sourceRepository
     setInstalling({ repository: repo.fullName, kind })
-    setTargetDialog(null)
+    if (!keepDialog) setTargetDialog(null)
     onInstallStarted({
       repository: repo.fullName,
       kind,
@@ -382,8 +405,8 @@ export function DiscoverView({
       const result = await api.installPlugin(repo.kind === 'dsh'
         ? repo.fullName
         : {
-            repository: repo.fullName,
-            defaultBranch: repo.defaultBranch,
+            repository: sourceRepository ?? repo.fullName,
+            defaultBranch: sourceRepository && target ? target.commit : repo.defaultBranch,
             targetId: target?.id ?? '',
           })
       setDshInstallation(result.dshInstallation)
@@ -396,9 +419,9 @@ export function DiscoverView({
     }
   }
 
-  const installSkill = async (repo: CatalogRepositoryResult, target: SkillInstallTarget) => {
+  const installSkill = async (repo: CatalogRepositoryResult, target: SkillInstallTarget, keepDialog = false) => {
     setInstalling({ repository: repo.fullName, kind: 'skill' })
-    setTargetDialog(null)
+    if (!keepDialog) setTargetDialog(null)
     onInstallStarted({
       repository: repo.fullName,
       kind: 'skill',
@@ -408,8 +431,8 @@ export function DiscoverView({
     })
     try {
       const result = await api.installSkill({
-        repository: repo.fullName,
-        defaultBranch: repo.defaultBranch,
+        repository: target.sourceRepository ?? repo.fullName,
+        defaultBranch: target.sourceRepository ? target.revision : repo.defaultBranch,
         targetId: target.id,
       })
       onSkillInstalled(result)
@@ -443,6 +466,62 @@ export function DiscoverView({
     } finally {
       setInstalling(null)
       onInstallFinished(repo.fullName)
+    }
+  }
+
+  const installPreset = async (repo: CatalogRepositoryResult, target: PresetInstallTarget, keepDialog = false) => {
+    setInstalling({ repository: repo.fullName, kind: 'preset' })
+    if (!keepDialog) setTargetDialog(null)
+    onInstallStarted({
+      repository: repo.fullName,
+      kind: 'preset',
+      phase: 'preparing',
+      percent: 0,
+      message: '正在准备 Agent 预设目录',
+    })
+    try {
+      // 预设来自 meta-repo 子模块，revision 已钉死，直接指向子模块仓库安装。
+      const result = await api.installPreset({
+        repository: target.sourceRepository,
+        targetId: target.id,
+        name: target.name,
+        sourcePath: target.sourcePath,
+        revision: target.revision,
+      })
+      onPresetInstalled(result)
+    } catch (error) {
+      onError(errorText(error))
+    } finally {
+      setInstalling(null)
+      onInstallFinished(repo.fullName)
+    }
+  }
+
+  /** 「一键安装全部」：按顺序装完未安装的组件，对话框保持打开、逐个刷新状态。
+   *  用本地 Set 记录本轮已装组件，避免闭包里的 installedRepos / profile 陈旧。 */
+  const installAll = async (repo: CatalogRepositoryResult, analysis: CatalogRepositoryAnalysis) => {
+    setInstallingAll(true)
+    try {
+      const installedPlugins = new Set(profile.plugins.map(plugin => plugin.packageName.toLowerCase()))
+      const installedSkillSet = new Set(installedSkills.map(skill => skill.name.toLowerCase()))
+      const installedPresetSet = new Set(installedPresets.map(preset => preset.name.toLowerCase()))
+      for (const target of pluginTargets(analysis)) {
+        if (installedPlugins.has(target.packageName.toLowerCase())) continue
+        await installPlugin(repo, target, true)
+        installedPlugins.add(target.packageName.toLowerCase())
+      }
+      for (const target of skillTargets(analysis)) {
+        if (installedSkillSet.has(target.name.toLowerCase())) continue
+        await installSkill(repo, target, true)
+        installedSkillSet.add(target.name.toLowerCase())
+      }
+      for (const target of presetTargets(analysis)) {
+        if (installedPresetSet.has(target.name.toLowerCase())) continue
+        await installPreset(repo, target, true)
+        installedPresetSet.add(target.name.toLowerCase())
+      }
+    } finally {
+      setInstallingAll(false)
     }
   }
 
@@ -529,13 +608,20 @@ export function DiscoverView({
           const plugins = pluginTargets(analysis)
           const skills = skillTargets(analysis)
           const applications = applicationTargets(analysis)
-          const totalTargets = plugins.length + skills.length + applications.length
-          const pluginInstalled = installedRepos.has(repo.fullName.toLowerCase())
+          const presets = presetTargets(analysis)
+          const totalTargets = plugins.length + skills.length + applications.length + presets.length
+          const pluginSourceRepos = plugins
+            .map(target => target.sourceRepository)
+            .filter((value): value is string => Boolean(value))
+          const pluginInstalled = pluginSourceRepos.length > 0
+            ? pluginSourceRepos.every(repository => installedRepos.has(repository.toLowerCase()))
+            : installedRepos.has(repo.fullName.toLowerCase())
           const installedSkillCount = skills.filter(target => installedSkillNames.has(target.name)).length
           const applicationInstalled = installedApplicationRepositories.has(repo.fullName.toLowerCase())
+          const installedPresetCount = presets.filter(target => installedPresetNames.has(target.name)).length
           const anyInstalled = repo.kind === 'dsh'
             ? dshInstallation.installed
-            : pluginInstalled || installedSkillCount > 0 || applicationInstalled
+            : pluginInstalled || installedSkillCount > 0 || applicationInstalled || installedPresetCount > 0
           const progress = activeInstalling?.repository === repo.fullName
             && installProgress?.repository === repo.fullName
             && installProgress.kind === activeInstalling.kind
@@ -544,10 +630,11 @@ export function DiscoverView({
           const indeterminate = progress?.indeterminate === true && progress.phase !== 'error'
           const isChecking = checking === repo.fullName
           const needsDialog = analysis?.kind === 'hybrid' || totalTargets > 1
-          const singlePlugin = plugins.length === 1 && skills.length === 0 && applications.length === 0 ? plugins[0] : undefined
-          const singleSkill = skills.length === 1 && plugins.length === 0 && applications.length === 0 ? skills[0] : undefined
-          const singleApplication = applications.length === 1 && plugins.length === 0 && skills.length === 0 ? applications[0] : undefined
-          const trialTarget = plugins.length === 1 && pluginInstalled ? plugins[0] : undefined
+          const singlePlugin = plugins.length === 1 && skills.length === 0 && applications.length === 0 && presets.length === 0 ? plugins[0] : undefined
+          const singleSkill = skills.length === 1 && plugins.length === 0 && applications.length === 0 && presets.length === 0 ? skills[0] : undefined
+          const singleApplication = applications.length === 1 && plugins.length === 0 && skills.length === 0 && presets.length === 0 ? applications[0] : undefined
+          const singlePreset = presets.length === 1 && plugins.length === 0 && skills.length === 0 && applications.length === 0 ? presets[0] : undefined
+          const trialTarget = plugins.length === 1 && anyInstalled ? plugins[0] : undefined
           const trial = trialTarget ? pluginTrials[`${trialTarget.profileName}:${trialTarget.packageName}`] : undefined
           const actionLabel = repo.kind === 'dsh'
             ? dshInstallation.installed ? '更新 DSH' : '安装 DSH'
@@ -581,30 +668,35 @@ export function DiscoverView({
             if (singlePlugin) return void installPlugin(repo, singlePlugin)
             if (singleSkill) return void installSkill(repo, singleSkill)
             if (singleApplication) void installApplication(repo, singleApplication)
+            if (singlePreset) void installPreset(repo, singlePreset)
           }
           const badge = analysis ? analysisBadge(analysis) : null
           const iconKind = analysis?.kind === 'skill'
             ? 'skill'
             : analysis?.kind === 'application'
               ? 'application'
-            : analysis?.kind === 'hybrid'
-              ? 'hybrid'
-              : repo.kind === 'dsh' ? 'dsh' : 'plugin'
+            : analysis?.kind === 'preset'
+              ? 'preset'
+              : analysis?.kind === 'hybrid'
+                ? 'hybrid'
+                : repo.kind === 'dsh' ? 'dsh' : 'plugin'
           const installedLabel = repo.kind === 'dsh'
             ? `${dshInstallation.source === 'system' ? '系统 DSH' : '本地 DSH'} ${dshInstallation.version ?? ''}`
             : analysis?.kind === 'hybrid'
-              ? `${pluginInstalled ? 'Plugin 已安装' : 'Plugin 未安装'} · Skills ${installedSkillCount}/${skills.length} · ${applicationInstalled ? '应用已安装' : '应用未安装'}`
-              : pluginInstalled
-                ? 'Plugin 已安装'
-                : skills.length > 0
-                  ? `Skills ${installedSkillCount}/${skills.length} 已安装`
-                  : applicationInstalled ? '应用加载项已安装' : '已安装'
+              ? `${pluginInstalled ? 'Plugin 已安装' : 'Plugin 未安装'} · Skills ${installedSkillCount}/${skills.length} · ${applicationInstalled ? '应用已安装' : '应用未安装'} · 预设 ${installedPresetCount}/${presets.length}`
+              : analysis?.kind === 'application'
+                ? applicationInstalled ? '应用加载项已安装' : '应用加载项未安装'
+              : analysis?.kind === 'preset'
+                ? `预设 ${installedPresetCount}/${presets.length} 已安装`
+                : pluginInstalled
+                  ? 'Plugin 已安装'
+                  : skills.length > 0 ? `Skills ${installedSkillCount}/${skills.length} 已安装` : '已安装'
 
           return (
             <article className={`repository-row ${repo.kind === 'dsh' ? 'dsh-core-row' : ''}`} key={repo.id}>
               <div className="repo-main">
-                <div className={`repo-icon ${iconKind === 'dsh' ? 'dsh-core-icon' : iconKind === 'skill' ? 'skill-icon' : iconKind === 'application' ? 'application-icon' : iconKind === 'hybrid' ? 'hybrid-icon' : ''}`}>
-                  {iconKind === 'dsh' ? <Layers3 size={18} /> : iconKind === 'skill' ? <BookOpenCheck size={18} /> : iconKind === 'application' ? <AppWindow size={18} /> : iconKind === 'hybrid' ? <Layers3 size={18} /> : <FolderGit2 size={18} />}
+                <div className={`repo-icon ${iconKind === 'dsh' ? 'dsh-core-icon' : iconKind === 'skill' ? 'skill-icon' : iconKind === 'application' ? 'application-icon' : iconKind === 'preset' ? 'preset-icon' : iconKind === 'hybrid' ? 'hybrid-icon' : ''}`}>
+                  {iconKind === 'dsh' ? <Layers3 size={18} /> : iconKind === 'skill' ? <BookOpenCheck size={18} /> : iconKind === 'application' ? <AppWindow size={18} /> : iconKind === 'preset' ? <Bot size={18} /> : iconKind === 'hybrid' ? <Layers3 size={18} /> : <FolderGit2 size={18} />}
                 </div>
                 <div>
                   <div className="repo-title-line">
@@ -614,6 +706,7 @@ export function DiscoverView({
                       : badge
                         ? <span className={`repository-analysis-badge ${badge.className}`}>{badge.label}</span>
                         : <span className="repository-analysis-badge pending">待检测</span>}
+                    {repo.featured && <span className="featured-badge">内置</span>}
                   </div>
                   <p>{repo.description}</p>
                   {isChecking && <CatalogAnalysisSteps progress={analysisProgress[repo.fullName]} />}
@@ -702,14 +795,18 @@ export function DiscoverView({
           installedRepositories={installedRepos}
           installedSkillNames={installedSkillNames}
           installedApplicationRepositories={installedApplicationRepositories}
+          installedPresetNames={installedPresetNames}
           pluginTrials={pluginTrials}
-          busy={activeInstalling !== null}
+          busy={activeInstalling !== null || installingAll}
+          installingAll={installingAll}
           aiActive={aiActive}
           aiSubject={aiSubject}
           onClose={() => setTargetDialog(null)}
           onInstallPlugin={target => void installPlugin(targetDialog.repo, target)}
           onInstallSkill={target => void installSkill(targetDialog.repo, target)}
           onInstallApplication={target => void installApplication(targetDialog.repo, target)}
+          onInstallPreset={target => void installPreset(targetDialog.repo, target)}
+          onInstallAll={() => void installAll(targetDialog.repo, targetDialog.analysis)}
           onTrialPlugin={onTrialPlugin}
           onAdaptPlugin={onAdaptPlugin}
         />
@@ -839,14 +936,18 @@ function CatalogTargetDialog({
   installedRepositories,
   installedSkillNames,
   installedApplicationRepositories,
+  installedPresetNames,
   pluginTrials,
   busy,
+  installingAll,
   aiActive,
   aiSubject,
   onClose,
   onInstallPlugin,
   onInstallSkill,
   onInstallApplication,
+  onInstallPreset,
+  onInstallAll,
   onTrialPlugin,
   onAdaptPlugin,
 }: {
@@ -856,21 +957,33 @@ function CatalogTargetDialog({
   installedRepositories: Set<string>
   installedSkillNames: Set<string>
   installedApplicationRepositories: Set<string>
+  installedPresetNames: Set<string>
   pluginTrials: Record<string, PluginTrialResult>
   busy: boolean
+  installingAll: boolean
   aiActive: boolean
   aiSubject: string | null
   onClose: () => void
   onInstallPlugin: (target: PluginInstallTarget) => void
   onInstallSkill: (target: SkillInstallTarget) => void
   onInstallApplication: (target: ApplicationInstallTarget) => void
+  onInstallPreset: (target: PresetInstallTarget) => void
+  onInstallAll: () => void
   onTrialPlugin: (packageName: string, profileName: string) => void
   onAdaptPlugin: (packageName: string, profileName: string) => void
 }) {
   const plugins = pluginTargets(analysis)
   const skills = skillTargets(analysis)
   const applications = applicationTargets(analysis)
+  const presets = presetTargets(analysis)
   const repoInstalled = installedRepositories.has(repo.fullName.toLowerCase())
+  const isPluginInstalled = (target: PluginInstallTarget) =>
+    profile.plugins.some(plugin => plugin.packageName === target.packageName)
+    || (plugins.length === 1 && repoInstalled)
+  const uninstalledCount = plugins.filter(target => !isPluginInstalled(target)).length
+    + skills.filter(target => !installedSkillNames.has(target.name)).length
+    + presets.filter(target => !installedPresetNames.has(target.name)).length
+  const allInstalled = uninstalledCount === 0
   const applicationInstalled = installedApplicationRepositories.has(repo.fullName.toLowerCase())
 
   return (
@@ -881,7 +994,7 @@ function CatalogTargetDialog({
           <button type="button" className="icon-button" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17} /></button>
         </header>
         <div className="modal-content">
-          <p className="target-dialog-summary">{repo.fullName} 的 Plugin、Skill 与应用加载项会分别安装；不会自动安装全部内容。</p>
+          <p className="target-dialog-summary">{repo.fullName} 的 Plugin、Skill、应用加载项与 Agent 预设会分别安装；应用加载项需要单独确认。</p>
 
           {(plugins.length > 0 || analysis.pluginAnalysis?.installability === 'dynamic') && (
             <section className="catalog-target-section">
@@ -890,8 +1003,7 @@ function CatalogTargetDialog({
                 ? <div className="catalog-target-unavailable"><CircleAlert size={15} />这是动态会话 Plugin，当前不能作为持久 Bundle 安装。</div>
                 : <div className="plugin-target-list">
                     {plugins.map(target => {
-                      const installed = profile.plugins.some(plugin => plugin.packageName === target.packageName)
-                        || (plugins.length === 1 && repoInstalled)
+                      const installed = isPluginInstalled(target)
                       const trial = pluginTrials[`${target.profileName}:${target.packageName}`]
                       return (
                         <div className="plugin-target-row" key={`plugin:${target.id}`}>
@@ -965,8 +1077,42 @@ function CatalogTargetDialog({
               </div>
             </section>
           )}
+
+          {presets.length > 0 && (
+            <section className="catalog-target-section">
+              <h3><Bot size={15} />Agent 预设</h3>
+              <div className="plugin-target-list">
+                {presets.map(target => {
+                  const installed = installedPresetNames.has(target.name)
+                  return (
+                    <div className="plugin-target-row" key={`preset:${target.id}`}>
+                      <div className="plugin-target-icon preset-icon"><Bot size={17} /></div>
+                      <div className="plugin-target-copy">
+                        <strong>{target.name}</strong>
+                        <span>{target.description}</span>
+                        <small>复制到 DSH 预设目录 · {target.sourcePath}@{target.revision.slice(0, 12)}</small>
+                      </div>
+                      <button type="button" className="install-button" disabled={busy} onClick={() => onInstallPreset(target)}>{installed ? <RefreshCw size={15} /> : <Download size={15} />}{installed ? '更新' : '安装'}</button>
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
+          )}
         </div>
-        <footer><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>取消</button></footer>
+        <footer>
+          <button
+            type="button"
+            className="primary-command"
+            disabled={busy || allInstalled}
+            onClick={onInstallAll}
+            title="按顺序安装全部未安装的组件（不会重复安装已装的）"
+          >
+            {installingAll ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}
+            {allInstalled ? '已全部安装' : `一键安装全部（${uninstalledCount}）`}
+          </button>
+          <button type="button" className="secondary-button" disabled={busy} onClick={onClose}>取消</button>
+        </footer>
       </section>
     </div>
   )

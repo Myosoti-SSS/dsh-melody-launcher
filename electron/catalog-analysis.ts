@@ -25,6 +25,7 @@ const KIND_LABELS: Record<CatalogRepositoryAnalysis['kind'], string> = {
   plugin: 'Plugin',
   skill: 'Skill',
   application: '应用加载项',
+  preset: 'Agent 预设',
   hybrid: '混合资源',
   dsh: 'DSH 本体',
   invalid: '无效资源',
@@ -159,6 +160,7 @@ export function classifyCatalogRepository(
       pluginAnalysis: null,
       skillAnalysis: null,
       applicationAnalysis: null,
+      presetAnalysis: null,
       warnings: [],
     }
   }
@@ -215,6 +217,7 @@ export function classifyCatalogRepository(
     pluginAnalysis,
     skillAnalysis,
     applicationAnalysis,
+    presetAnalysis: null,
     warnings,
   }
 }

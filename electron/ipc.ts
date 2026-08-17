@@ -2,7 +2,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC, IPC_EVENTS } from '../src/constants'
-import type { ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
+import type { ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, PresetInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
 import type { ApplicationAddonManager } from './application-addons'
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
@@ -10,6 +10,7 @@ import { listCustomApiProviders, removeCustomApiProvider, saveCustomApiProvider 
 import { searchCatalogRepositories, type DiscoverySort } from './discovery'
 import { importCatalogFromUrl } from './github-import'
 import type { Installer } from './installer'
+import type { LauncherUpdater } from './launcher-update'
 import type { AiInstaller } from './ai-install'
 import { assertMeaningfulPackName } from './pack-manifest'
 import { MAX_RAW_ARCHIVE_BYTES } from './pack-scan'
@@ -37,6 +38,7 @@ export interface IpcDependencies {
   settings: SettingsStore
   runtime: RuntimeController
   installer: Installer
+  launcherUpdater: LauncherUpdater
   pluginTrial: PluginTrialManager
   aiInstaller: AiInstaller
   packManager: PackManager
@@ -47,7 +49,7 @@ export interface IpcDependencies {
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, runtime, installer, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons } = deps
+  const { settings, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons } = deps
   const linkedComponents = createLinkedComponentController({
     readSettings: () => settings.read(),
     readProfile,
@@ -60,6 +62,9 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => settings.save(next))
   ipcMain.handle(IPC.dshDetect, () => installer.detectDsh())
   ipcMain.handle(IPC.dshUpdateCheck, () => installer.checkDshUpdate())
+  ipcMain.handle(IPC.launcherUpdateCheck, () => launcherUpdater.check())
+  ipcMain.handle(IPC.launcherUpdateDownload, () => launcherUpdater.download())
+  ipcMain.handle(IPC.launcherUpdateApply, () => launcherUpdater.apply())
 
   ipcMain.handle(IPC.credentialStatus, async () => {
     const current = await settings.read()
@@ -134,12 +139,13 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.catalogDiscover, async (_event, payload: { query: string; sort: DiscoverySort; page: number }) => {
     const sort: DiscoverySort = payload.sort === 'updated' ? 'updated' : 'stars'
     const page = Math.max(1, Math.floor(Number(payload.page) || 1))
-    const [found, dshInstallation, installedRepositories, installedSkills, installedApplications] = await Promise.all([
+    const [found, dshInstallation, installedRepositories, installedSkills, installedApplications, installedPresets] = await Promise.all([
       searchCatalogRepositories(payload.query ?? '', sort, page, githubAuth.fetch),
       installer.detectDsh(),
       installer.listInstalledRepositories(),
       installer.readInstalledSkills(),
       applicationAddons.list(),
+      installer.readInstalledPresets(),
     ])
     return {
       ...found,
@@ -147,6 +153,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       installedRepositories,
       installedSkills,
       installedApplications,
+      installedPresets,
     }
   })
   ipcMain.handle(IPC.catalogAnalyze, async (event, payload: { fullName: string; defaultBranch: string }) => {
@@ -180,6 +187,8 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       repository: request.repository,
       defaultBranch: request.defaultBranch,
       targetId: request.targetId,
+      // release 源插件：meta-repo 分析得到的 tgz 直链，覆盖重分析得到的 github 源。
+      tarballUrl: typeof request.tarballUrl === 'string' ? request.tarballUrl : undefined,
     })
   })
   ipcMain.handle(IPC.pluginsUninstall, async (_event, payload: string | { packageName: string; profileName?: string }) => {
@@ -237,6 +246,23 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.applicationsUninstall, async (_event, id: string) => {
     if (typeof id !== 'string') throw new Error('应用加载项标识无效。')
     return applicationAddons.uninstall(id)
+  })
+
+  ipcMain.handle(IPC.presetsInstall, async (_event, request: PresetInstallRequest) => {
+    if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    if (!request || typeof request !== 'object') throw new Error('请求格式无效。')
+    if (!isSafeRepositoryName(request.repository)) throw new Error('GitHub 仓库名称无效。')
+    if (typeof request.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(request.name)) {
+      throw new Error('预设名称无效。')
+    }
+    return installer.installPreset(request)
+  })
+  ipcMain.handle(IPC.presetsReadInstalled, () => installer.readInstalledPresets())
+  ipcMain.handle(IPC.presetsToggle, async (_event, payload: { name: string; enabled: boolean }) => {
+    if (!payload || typeof payload.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.name)) {
+      throw new Error('预设名称无效。')
+    }
+    return installer.togglePreset(payload.name, Boolean(payload.enabled))
   })
 
   ipcMain.handle(IPC.aiStatus, () => aiInstaller.status())

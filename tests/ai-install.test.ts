@@ -150,6 +150,25 @@ describe('buildInstallPrompt', () => {
     expect(prompt).toContain('每次 PowerShell 命令都必须等待启动器审批')
     expect(prompt).toContain('不要使用后台任务')
   })
+
+  it('meta-repo：列出已预取子模块与跳过原因，引导 AI 检查子模块目录', () => {
+    const prompt = buildInstallPrompt({
+      ...base,
+      analysis: analysis('application', '聚合仓库'),
+      repositoryPath: '/home/tester/.dsh/.ai-install-sources/session-1/repository',
+      submodules: [
+        { path: 'injector', repository: 'yjh051108/dsh-super-injector', revision: 'c'.repeat(40) },
+        { path: 'mode-boost', repository: 'yjh051108/dsh-mode-boost', revision: 'main' },
+      ],
+      skippedSubmodules: [{ path: 'preset', reason: '非 GitHub 子模块，未预取' }],
+    })
+    expect(prompt).toContain('聚合仓库')
+    expect(prompt).toContain('injector/')
+    expect(prompt).toContain('yjh051108/dsh-super-injector')
+    expect(prompt).toContain('yjh051108/dsh-mode-boost')
+    expect(prompt).toContain('非 GitHub 子模块，未预取')
+    expect(prompt).toContain('请勿尝试联网下载')
+  })
 })
 
 describe('AI 故障修复提示词', () => {

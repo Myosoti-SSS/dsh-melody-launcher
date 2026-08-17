@@ -12,6 +12,7 @@ import { readDeepSeekApiKey } from './credentials'
 import { findInstalledDsh } from './dsh-install'
 import { buildPluginCommandArgs, createInstaller, validateLocalPluginDirectory, type Installer } from './installer'
 import { registerIpcHandlers } from './ipc'
+import { createLauncherUpdater, type LauncherUpdater } from './launcher-update'
 import { createGitHubAuthService, type GitHubAuthService } from './github-auth'
 import {
   ensureNodeRuntime,
@@ -56,6 +57,7 @@ interface Services {
   pluginTrial: PluginTrialManager
   aiInstaller: AiInstaller
   packManager: PackManager
+  launcherUpdater: LauncherUpdater
   githubAuth: GitHubAuthService
   applicationAddons: ApplicationAddonManager
 }
@@ -282,6 +284,13 @@ function createServices(): Services {
     isInstallerBusy: () => installer.isBusy(),
   })
 
+  const launcherUpdater = createLauncherUpdater({
+    getVersion: () => app.getVersion(),
+    userDataPath: userData,
+    githubFetch: githubAuth.fetch,
+    emitProgress: progress => events.launcherUpdateProgress(progress),
+  })
+
   // 启动自愈：上次 AI 会话若在凭据锁期间崩溃（进程被杀、finally 未跑），
   // .credentials.yaml 会滞留在锁目录，这里把它还原回 dshHome。
   void settings
@@ -289,7 +298,7 @@ function createServices(): Services {
     .then(current => healCredentialsLock(current.dshHome, path.join(userData, CREDENTIALS_LOCK_DIRNAME)))
     .catch(() => { /* 设置未就绪可忽略，锁会在下次 AI 会话前置处理 */ })
 
-  return { settings, runtime, installer, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons }
+  return { settings, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons }
 }
 
 function openMainWindow(): void {

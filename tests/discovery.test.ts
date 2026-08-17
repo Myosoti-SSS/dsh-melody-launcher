@@ -9,6 +9,7 @@ import {
   searchCatalogRepositories,
   type GitHubRepositoryItem,
 } from '../electron/discovery'
+import { FEATURED_REPOSITORIES, prependFeatured } from '../electron/featured'
 
 const item: GitHubRepositoryItem = {
   id: 42,
@@ -114,6 +115,7 @@ describe('unified catalog search', () => {
     ))
 
     expect(result.repositories.map(repo => repo.fullName)).toEqual([
+      'yjh051108/dsh-routing-suite',
       'deepseek-ai/deepseek-harness',
       'demo/hybrid',
       'demo/plugin',
@@ -139,7 +141,10 @@ describe('unified catalog search', () => {
       new Response('failed', { status: 500 }),
       searchResponse([skill], 1),
     ))
-    expect(result.repositories).toHaveLength(1)
+    // 内置 featured 条目恒在顶部，所以除 skill 源结果外还多一条内置行。
+    expect(result.repositories).toHaveLength(2)
+    expect(result.repositories.some(repo => repo.fullName === 'someone/dsh-example')).toBe(true)
+    expect(result.repositories[0].featured).toBe(true)
     expect(result.topicTotals).toEqual({ plugin: 0, skill: 1, application: 0 })
     expect(result.warnings[0]).toMatch(/Plugin 来源检索失败/)
   })
@@ -157,8 +162,8 @@ describe('unified catalog search', () => {
       searchResponse([application], 1, 6),
     ))
 
-    expect(result.repositories).toHaveLength(1)
-    expect(result.repositories[0].candidateTypes).toEqual(['application', 'plugin', 'skill'])
+    expect(result.repositories).toHaveLength(2)
+    expect(result.repositories.find(repo => repo.fullName === 'demo/desktop-host')?.candidateTypes).toEqual(['application', 'plugin', 'skill'])
     expect(result.topicTotals).toEqual({ plugin: 1, skill: 1, application: 1 })
     expect(result.rateRemaining).toBe(6)
   })
@@ -169,6 +174,33 @@ describe('unified catalog search', () => {
       new Response('limited', { status: 403 }),
       new Response('unavailable', { status: 502 }),
     ))).rejects.toThrow(/Plugin 来源检索失败.*Skill 来源检索失败.*应用加载项来源检索失败/)
+  })
+})
+
+describe('featured 内置条目', () => {
+  it('prependFeatured 把内置条目前插到结果顶部', () => {
+    const row = mapCatalogRepository({ ...item, id: 2, full_name: 'demo/plugin' }, ['plugin'])
+    const result = prependFeatured([row])
+    expect(result[0].fullName).toBe(FEATURED_REPOSITORIES[0].fullName)
+    expect(result[0].featured).toBe(true)
+    expect(result[1].fullName).toBe('demo/plugin')
+  })
+
+  it('prependFeatured 与结果里同名仓库去重（忽略大小写）', () => {
+    const featuredName = FEATURED_REPOSITORIES[0].fullName
+    const duplicated = mapCatalogRepository({ ...item, id: 2, full_name: featuredName.toUpperCase() }, ['plugin'])
+    expect(prependFeatured([duplicated])).toHaveLength(FEATURED_REPOSITORIES.length)
+  })
+
+  it('检索结果在顶部固定返回内置条目', async () => {
+    const plugin = { ...item, id: 2, full_name: 'demo/plugin' }
+    const result = await searchCatalogRepositories('', 'stars', 1, searchFetch(
+      searchResponse([plugin], 1),
+      searchResponse([], 0),
+    ))
+    expect(result.repositories[0].fullName).toBe('yjh051108/dsh-routing-suite')
+    expect(result.repositories[0].featured).toBe(true)
+    expect(result.repositories[1].fullName).toBe('demo/plugin')
   })
 })
 
