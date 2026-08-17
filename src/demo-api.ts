@@ -1088,6 +1088,26 @@ export const demoApi: LauncherApi = {
     demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
     return updated
   },
+  addPackSkill: async (packId, skillName) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const skills = pack.skills?.some(skill => skill.name === skillName)
+      ? pack.skills
+      : [...(pack.skills ?? []), { name: skillName, format: 'bundle' as const, enabled: true }]
+    const updated: PackStatus = { ...pack, skills, updatedAt: new Date().toISOString() }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  addPackApplication: async (packId, addonId) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const applications = pack.applications?.some(addon => addon.id === addonId)
+      ? pack.applications
+      : [...(pack.applications ?? []), { id: addonId, name: addonId, enabled: true }]
+    const updated: PackStatus = { ...pack, applications, updatedAt: new Date().toISOString() }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
   togglePackItem: async (packId, packageName, enabled) => {
     const pack = demoPacks.find(item => item.id === packId)
     if (!pack) throw new Error(`未找到整合包：${packId}`)
@@ -1110,6 +1130,28 @@ export const demoApi: LauncherApi = {
     demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
     return updated
   },
+  togglePackSkill: async (packId, skillName, enabled) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const updated: PackStatus = {
+      ...pack,
+      skills: pack.skills?.map(skill => (skill.name === skillName ? { ...skill, enabled } : skill)),
+      updatedAt: new Date().toISOString(),
+    }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  togglePackApplication: async (packId, addonId, enabled) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const updated: PackStatus = {
+      ...pack,
+      applications: pack.applications?.map(addon => (addon.id === addonId ? { ...addon, enabled } : addon)),
+      updatedAt: new Date().toISOString(),
+    }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
   removePackItem: async (packId, packageName) => {
     const pack = demoPacks.find(item => item.id === packId)
     if (!pack) throw new Error(`未找到整合包：${packId}`)
@@ -1126,6 +1168,22 @@ export const demoApi: LauncherApi = {
     if (!pack) throw new Error(`未找到整合包：${packId}`)
     const presets = pack.presets?.filter(preset => preset.name !== presetName)
     const updated: PackStatus = { ...pack, presets: presets?.length ? presets : undefined, updatedAt: new Date().toISOString() }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  removePackSkill: async (packId, skillName) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const skills = pack.skills?.filter(skill => skill.name !== skillName)
+    const updated: PackStatus = { ...pack, skills: skills?.length ? skills : undefined, updatedAt: new Date().toISOString() }
+    demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
+    return updated
+  },
+  removePackApplication: async (packId, addonId) => {
+    const pack = demoPacks.find(item => item.id === packId)
+    if (!pack) throw new Error(`未找到整合包：${packId}`)
+    const applications = pack.applications?.filter(addon => addon.id !== addonId)
+    const updated: PackStatus = { ...pack, applications: applications?.length ? applications : undefined, updatedAt: new Date().toISOString() }
     demoPacks = demoPacks.map(item => (item.id === packId ? updated : item))
     return updated
   },

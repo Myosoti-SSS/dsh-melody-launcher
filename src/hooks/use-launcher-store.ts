@@ -527,6 +527,24 @@ export function useLauncherStore() {
     return next !== undefined
   }, [api, applyPackUpdate, run])
 
+  const addPackSkill = useCallback(async (packId: string, skillName: string): Promise<boolean> => {
+    const next = await run(`pack-add-skill:${packId}:${skillName}`, async () => {
+      const updated = await api.addPackSkill(packId, skillName)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: `${skillName} 已加入整合包。` })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
+  const addPackApplication = useCallback(async (packId: string, addonId: string): Promise<boolean> => {
+    const next = await run(`pack-add-application:${packId}:${addonId}`, async () => {
+      const updated = await api.addPackApplication(packId, addonId)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: `应用加载项已加入整合包。` })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
   const togglePackPreset = useCallback(async (packId: string, presetName: string, enabled: boolean): Promise<boolean> => {
     const next = await run(`pack-toggle-preset:${packId}:${presetName}`, async () => {
       const updated = await api.togglePackPreset(packId, presetName, enabled)
@@ -536,12 +554,48 @@ export function useLauncherStore() {
     return next !== undefined
   }, [api, applyPackUpdate, run])
 
+  const togglePackSkill = useCallback(async (packId: string, skillName: string, enabled: boolean): Promise<boolean> => {
+    const next = await run(`pack-toggle-skill:${packId}:${skillName}`, async () => {
+      const updated = await api.togglePackSkill(packId, skillName, enabled)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: enabled ? 'Skill 已启用。' : 'Skill 已停用。' })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
+  const togglePackApplication = useCallback(async (packId: string, addonId: string, enabled: boolean): Promise<boolean> => {
+    const next = await run(`pack-toggle-application:${packId}:${addonId}`, async () => {
+      const updated = await api.togglePackApplication(packId, addonId, enabled)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: enabled ? '应用加载项已启用。' : '应用加载项已停用。' })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
   const removePackPreset = useCallback(async (packId: string, presetName: string): Promise<boolean> => {
     const next = await run(`pack-remove-preset:${packId}:${presetName}`, async () => {
       const updated = await api.removePackPreset(packId, presetName)
       applyPackUpdate(updated)
       return updated
     }, { success: `${presetName} 已从整合包移除。` })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
+  const removePackSkill = useCallback(async (packId: string, skillName: string): Promise<boolean> => {
+    const next = await run(`pack-remove-skill:${packId}:${skillName}`, async () => {
+      const updated = await api.removePackSkill(packId, skillName)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: `${skillName} 已从整合包移除。` })
+    return next !== undefined
+  }, [api, applyPackUpdate, run])
+
+  const removePackApplication = useCallback(async (packId: string, addonId: string): Promise<boolean> => {
+    const next = await run(`pack-remove-application:${packId}:${addonId}`, async () => {
+      const updated = await api.removePackApplication(packId, addonId)
+      applyPackUpdate(updated)
+      return updated
+    }, { success: `应用加载项已从整合包移除。` })
     return next !== undefined
   }, [api, applyPackUpdate, run])
 
@@ -633,10 +687,16 @@ export function useLauncherStore() {
     exportPack,
     addPackPlugin,
     addPackPreset,
+    addPackSkill,
+    addPackApplication,
     togglePackItem,
     togglePackPreset,
+    togglePackSkill,
+    togglePackApplication,
     removePackItem,
     removePackPreset,
+    removePackSkill,
+    removePackApplication,
   }
 }
 

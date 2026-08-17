@@ -154,13 +154,20 @@ export function usePackInstall(onSettled: () => void, showToast: (toast: ToastSt
   }, [api, appendLog, finish])
 
   /** 自建整合包：直接进入安装流程。 */
-  const startCreate = useCallback(async (name: string, description: string, packageNames: string[], presetNames: string[] = []): Promise<boolean> => {
+  const startCreate = useCallback(async (
+    name: string,
+    description: string,
+    packageNames: string[],
+    presetNames: string[] = [],
+    skillNames: string[] = [],
+    applicationIds: string[] = [],
+  ): Promise<boolean> => {
     resetTask()
     setPhase('installing')
-    setItemProgress({ current: null, done: 0, total: packageNames.length + presetNames.length })
+    setItemProgress({ current: null, done: 0, total: packageNames.length + presetNames.length + skillNames.length + applicationIds.length })
     appendLog('status', `开始创建整合包「${name}」…`)
     try {
-      const next = await api.createPack({ name, description, packageNames, presetNames })
+      const next = await api.createPack({ name, description, packageNames, presetNames, skillNames, applicationIds })
       adoptResult(next)
       return true
     } catch (err) {

@@ -33,9 +33,11 @@ export interface PackZipInspection {
   manifest: PackManifest
   hasBodies: boolean
   bodyPackageNames: string[]
+  presetBodyNames: string[]
 }
 
 const PLUGIN_BODIES_PREFIX = 'plugin-bodies/'
+const PRESET_BODIES_PREFIX = 'preset-bodies/'
 
 /** 标准包清单读取上限（清单本身很小，给一个安全余量即可）。 */
 const MAX_MANIFEST_BYTES = 1 * 1024 * 1024
@@ -195,6 +197,7 @@ export function inspectPackZip(buffer: Uint8Array, limits: PackZipLimits = DEFAU
   const knownNames = new Set(manifest.plugins.map(plugin => plugin.packageName))
 
   const bodyPackageNames = new Set<string>()
+  const presetBodyNames = new Set<string>()
   for (const entry of entries) {
     if (entry.isDirectory) continue
     const safe = safeArchivePath(entry.entryName)
@@ -204,11 +207,17 @@ export function inspectPackZip(buffer: Uint8Array, limits: PackZipLimits = DEFAU
       const decoded = decodeBodyEntry(rel, knownNames)
       if (decoded) bodyPackageNames.add(decoded.pkg)
     }
+    if (rel.startsWith(PRESET_BODIES_PREFIX)) {
+      const rest = rel.slice(PRESET_BODIES_PREFIX.length)
+      const name = rest.split('/')[0]
+      if (name && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) presetBodyNames.add(name)
+    }
   }
   return {
     manifest,
     hasBodies: bodyPackageNames.size > 0,
     bodyPackageNames: [...bodyPackageNames],
+    presetBodyNames: [...presetBodyNames],
   }
 }
 
@@ -541,6 +550,7 @@ export async function inspectPackZipFromPath(
     const knownNames = new Set(manifest.plugins.map(plugin => plugin.packageName))
 
     const bodyPackageNames = new Set<string>()
+    const presetBodyNames = new Set<string>()
     for (const entry of handle.entries) {
       if (entry.isDirectory) continue
       const safe = safeArchivePath(entry.entryName)
@@ -550,11 +560,17 @@ export async function inspectPackZipFromPath(
         const decoded = decodeBodyEntry(rel, knownNames)
         if (decoded) bodyPackageNames.add(decoded.pkg)
       }
+      if (rel.startsWith(PRESET_BODIES_PREFIX)) {
+        const rest = rel.slice(PRESET_BODIES_PREFIX.length)
+        const name = rest.split('/')[0]
+        if (name && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) presetBodyNames.add(name)
+      }
     }
     return {
       manifest,
       hasBodies: bodyPackageNames.size > 0,
       bodyPackageNames: [...bodyPackageNames],
+      presetBodyNames: [...presetBodyNames],
     }
   } finally {
     await handle.close()
@@ -595,11 +611,46 @@ export async function extractPackBodiesFromPath(
   }
 }
 
+/** 文件路径版解出 preset-bodies/<name>/… 到 workDir/<name>/。 */
+export async function extractPresetBodiesFromPath(
+  filePath: string,
+  workDir: string,
+  limits: PackZipLimits = DEFAULT_PACK_ZIP_LIMITS,
+): Promise<Map<string, string>> {
+  const handle = await openStandardPackZipFromPath(filePath, limits)
+  try {
+    const resolvedWorkDir = path.resolve(workDir)
+    await mkdir(resolvedWorkDir, { recursive: true })
+    const result = new Map<string, string>()
+    const budget = { extracted: 0 }
+    for (const entry of handle.entries) {
+      if (entry.isDirectory) continue
+      const safe = safeArchivePath(entry.entryName)
+      if (!safe) throw new Error('整合包包含不安全路径。')
+      const rel = relForEntry(safe, handle.stripRoot)
+      if (!rel.startsWith(PRESET_BODIES_PREFIX)) continue
+      const rest = rel.slice(PRESET_BODIES_PREFIX.length)
+      const [name, ...restParts] = rest.split('/')
+      if (!name || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || restParts.length === 0) continue
+      const presetDirectory = path.join(resolvedWorkDir, name)
+      assertInside(resolvedWorkDir, presetDirectory)
+      const target = path.join(presetDirectory, ...restParts)
+      assertInside(resolvedWorkDir, target)
+      await handle.writeEntryToFile(entry, target, { budget, maxTotalBytes: limits.maxUnpackedBytes })
+      result.set(name, presetDirectory)
+    }
+    return result
+  } finally {
+    await handle.close()
+  }
+}
+
 /** 用 yazl 流式把整合包写入文件（大包导出不占内存）。 */
 export async function buildPackZipToFile(
   manifest: PackManifest,
   bodyDirs: Map<string, string>,
   outputPath: string,
+  presetDirs: Map<string, string> = new Map(),
 ): Promise<void> {
   const zip = new yazl.ZipFile()
   zip.addBuffer(Buffer.from(serializePackManifest(manifest), 'utf8'), PACK_MANIFEST_FILENAME)
@@ -621,6 +672,34 @@ export async function buildPackZipToFile(
           stats = statSync(childPath)
         } catch (error) {
           throw new Error(`无法读取插件本体文件：${childPath}。`)
+        }
+        const childRel = current.rel ? `${current.rel}/${childName}` : childName
+        if (stats.isDirectory()) {
+          stack.push({ dir: childPath, rel: childRel })
+        } else if (stats.isFile()) {
+          zip.addFile(childPath, `${base}/${childRel}`)
+        }
+      }
+    }
+  }
+  for (const [presetName, directory] of presetDirs) {
+    const base = `${PRESET_BODIES_PREFIX}${presetName}`
+    const stack: Array<{ dir: string; rel: string }> = [{ dir: directory, rel: '' }]
+    while (stack.length > 0) {
+      const current = stack.pop()!
+      let childNames: string[] = []
+      try {
+        childNames = readdirSync(current.dir)
+      } catch (error) {
+        throw new Error(`无法读取预设本体目录：${current.dir}。`)
+      }
+      for (const childName of childNames) {
+        const childPath = path.join(current.dir, childName)
+        let stats
+        try {
+          stats = statSync(childPath)
+        } catch (error) {
+          throw new Error(`无法读取预设本体文件：${childPath}。`)
         }
         const childRel = current.rel ? `${current.rel}/${childName}` : childName
         if (stats.isDirectory()) {

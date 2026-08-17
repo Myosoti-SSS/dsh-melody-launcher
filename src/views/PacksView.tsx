@@ -11,7 +11,7 @@ import {
 import { useMemo, useState } from 'react'
 import { PageHeading } from '../components/PageHeading'
 import { formatRelativeTime } from '../lib/format'
-import type { InstalledPreset, ManagedPlugin, PackStatus, ProfileState } from '../types'
+import type { InstalledApplicationAddon, InstalledPreset, InstalledSkill, ManagedPlugin, PackStatus, ProfileState } from '../types'
 
 /**
  * 整合包管理页：列表、启停、导出、删除，右侧 inline 详情面板管理包内插件。
@@ -33,12 +33,22 @@ export interface PacksViewProps {
   onRemove: (packId: string) => void
   onAddPlugin: (packId: string, packageName: string) => void
   onAddPreset: (packId: string, presetName: string) => void
+  onAddSkill: (packId: string, skillName: string) => void
+  onAddApplication: (packId: string, addonId: string) => void
   onToggleItem: (packId: string, packageName: string, enabled: boolean) => void
   onTogglePreset: (packId: string, presetName: string, enabled: boolean) => void
+  onToggleSkill: (packId: string, skillName: string, enabled: boolean) => void
+  onToggleApplication: (packId: string, addonId: string, enabled: boolean) => void
   onRemoveItem: (packId: string, packageName: string) => void
   onRemovePreset: (packId: string, presetName: string) => void
+  onRemoveSkill: (packId: string, skillName: string) => void
+  onRemoveApplication: (packId: string, addonId: string) => void
   /** 当前已安装且带来源记录的 Agent 预设，供添加到包内。 */
   installedPresets: InstalledPreset[]
+  /** 当前已安装且带来源记录的 Skill，供添加到包内。 */
+  installedSkills: InstalledSkill[]
+  /** 当前已安装的 Application Addon，供添加到包内。 */
+  installedApplications: InstalledApplicationAddon[]
 }
 
 const SOURCE_LABEL: Record<PackStatus['source'], string> = {
@@ -67,11 +77,19 @@ export function PacksView({
   onRemove,
   onAddPlugin,
   onAddPreset,
+  onAddSkill,
+  onAddApplication,
   onToggleItem,
   onTogglePreset,
+  onToggleSkill,
+  onToggleApplication,
   onRemoveItem,
   onRemovePreset,
+  onRemoveSkill,
+  onRemoveApplication,
   installedPresets,
+  installedSkills,
+  installedApplications,
 }: PacksViewProps) {
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null)
   const [confirmingRemoval, setConfirmingRemoval] = useState<PackStatus | null>(null)
@@ -150,6 +168,18 @@ export function PacksView({
             }}
             onTogglePreset={(presetName, enabled) => onTogglePreset(selectedPack!.id, presetName, enabled)}
             onRemovePreset={presetName => onRemovePreset(selectedPack!.id, presetName)}
+            installedSkills={installedSkills}
+            onAddSkills={skillNames => {
+              for (const skillName of skillNames) onAddSkill(selectedPack!.id, skillName)
+            }}
+            onToggleSkill={(skillName, enabled) => onToggleSkill(selectedPack!.id, skillName, enabled)}
+            onRemoveSkill={skillName => onRemoveSkill(selectedPack!.id, skillName)}
+            installedApplications={installedApplications}
+            onAddApplications={addonIds => {
+              for (const addonId of addonIds) onAddApplication(selectedPack!.id, addonId)
+            }}
+            onToggleApplication={(addonId, enabled) => onToggleApplication(selectedPack!.id, addonId, enabled)}
+            onRemoveApplication={addonId => onRemoveApplication(selectedPack!.id, addonId)}
           />
         </div>
       )}
@@ -241,7 +271,7 @@ function PackRow({ pack, selected, busy, onSelect, onActivate, onDeactivate, onE
   )
 }
 
-function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlugins, installedPresets, onAddPresets, onTogglePreset, onRemovePreset }: {
+function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlugins, installedPresets, onAddPresets, onTogglePreset, onRemovePreset, installedSkills, onAddSkills, onToggleSkill, onRemoveSkill, installedApplications, onAddApplications, onToggleApplication, onRemoveApplication }: {
   pack: PackStatus | null
   profile: ProfileState
   busy: string | null
@@ -252,9 +282,19 @@ function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlu
   onAddPresets: (presetNames: string[]) => void
   onTogglePreset: (presetName: string, enabled: boolean) => void
   onRemovePreset: (presetName: string) => void
+  installedSkills: InstalledSkill[]
+  onAddSkills: (skillNames: string[]) => void
+  onToggleSkill: (skillName: string, enabled: boolean) => void
+  onRemoveSkill: (skillName: string) => void
+  installedApplications: InstalledApplicationAddon[]
+  onAddApplications: (addonIds: string[]) => void
+  onToggleApplication: (addonId: string, enabled: boolean) => void
+  onRemoveApplication: (addonId: string) => void
 }) {
   const [addingOpen, setAddingOpen] = useState(false)
   const [addingPresetsOpen, setAddingPresetsOpen] = useState(false)
+  const [addingSkillsOpen, setAddingSkillsOpen] = useState(false)
+  const [addingApplicationsOpen, setAddingApplicationsOpen] = useState(false)
 
   if (!pack) {
     return <aside className="pack-details empty">选择一个整合包查看详情</aside>
@@ -264,6 +304,13 @@ function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlu
   const presetCandidates = installedPresets.filter(preset =>
     !pack.presets?.some(item => item.name === preset.name)
     && Boolean(preset.repository && preset.sourcePath && preset.revision)
+  )
+  const skillCandidates = installedSkills.filter(skill =>
+    !pack.skills?.some(item => item.name === skill.name)
+    && Boolean(skill.repository && skill.sourcePath && skill.revision)
+  )
+  const applicationCandidates = installedApplications.filter(addon =>
+    !pack.applications?.some(item => item.id === addon.id)
   )
 
   return (
@@ -393,6 +440,106 @@ function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlu
         )}
       </div>
 
+      <div className="pack-details-plugins">
+        <div className="pack-details-plugins-head">
+          <span>包含技能（{pack.skills?.length ?? 0}）</span>
+          <button
+            type="button"
+            className="install-button"
+            disabled={busy !== null || skillCandidates.length === 0}
+            onClick={() => setAddingSkillsOpen(true)}
+            title={skillCandidates.length === 0 ? '没有可添加的 Skill（需先安装并留有来源记录）' : '从已安装 Skill 中选择加入'}
+          >
+            <Plus size={14} />添加技能
+          </button>
+        </div>
+        {(pack.skills?.length ?? 0) === 0 ? (
+          <div className="pack-details-empty">整合包里还没有 Skill。</div>
+        ) : (
+          <div className="pack-detail-items">
+            {pack.skills!.map(item => {
+              const toggling = busy === `pack-toggle-skill:${pack.id}:${item.name}`
+              const removing = busy === `pack-remove-skill:${pack.id}:${item.name}`
+              return (
+                <div className={`pack-detail-item ${item.enabled ? '' : 'disabled'}`} key={item.name}>
+                  <code>{item.name}</code>
+                  <label className="switch" title={item.enabled ? '停用该 Skill' : '启用该 Skill'}>
+                    <input
+                      type="checkbox"
+                      checked={item.enabled}
+                      disabled={busy !== null}
+                      onChange={event => onToggleSkill(item.name, event.target.checked)}
+                      aria-label={`${item.enabled ? '停用' : '启用'} Skill ${item.name}`}
+                    />
+                    <span>{toggling && <LoaderCircle className="spin" size={11} />}</span>
+                  </label>
+                  <button
+                    type="button"
+                    className="pack-detail-remove"
+                    disabled={busy !== null}
+                    onClick={() => onRemoveSkill(item.name)}
+                    title="从整合包移除 Skill"
+                    aria-label={`从整合包移除 Skill ${item.name}`}
+                  >
+                    {removing ? <LoaderCircle className="spin" size={13} /> : <Trash2 size={13} />}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="pack-details-plugins">
+        <div className="pack-details-plugins-head">
+          <span>包含应用（{pack.applications?.length ?? 0}）</span>
+          <button
+            type="button"
+            className="install-button"
+            disabled={busy !== null || applicationCandidates.length === 0}
+            onClick={() => setAddingApplicationsOpen(true)}
+            title={applicationCandidates.length === 0 ? '没有可添加的应用加载项' : '从已安装应用加载项中选择加入'}
+          >
+            <Plus size={14} />添加应用
+          </button>
+        </div>
+        {(pack.applications?.length ?? 0) === 0 ? (
+          <div className="pack-details-empty">整合包里还没有 Application Addon。</div>
+        ) : (
+          <div className="pack-detail-items">
+            {pack.applications!.map(item => {
+              const toggling = busy === `pack-toggle-application:${pack.id}:${item.id}`
+              const removing = busy === `pack-remove-application:${pack.id}:${item.id}`
+              return (
+                <div className={`pack-detail-item ${item.enabled ? '' : 'disabled'}`} key={item.id}>
+                  <code>{item.name}</code>
+                  <label className="switch" title={item.enabled ? '停用该应用' : '启用该应用'}>
+                    <input
+                      type="checkbox"
+                      checked={item.enabled}
+                      disabled={busy !== null}
+                      onChange={event => onToggleApplication(item.id, event.target.checked)}
+                      aria-label={`${item.enabled ? '停用' : '启用'} 应用 ${item.name}`}
+                    />
+                    <span>{toggling && <LoaderCircle className="spin" size={11} />}</span>
+                  </label>
+                  <button
+                    type="button"
+                    className="pack-detail-remove"
+                    disabled={busy !== null}
+                    onClick={() => onRemoveApplication(item.id)}
+                    title="从整合包移除应用"
+                    aria-label={`从整合包移除应用 ${item.name}`}
+                  >
+                    {removing ? <LoaderCircle className="spin" size={13} /> : <Trash2 size={13} />}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
       {addingOpen && (
         <AddPluginsDialog
           pack={pack}
@@ -414,6 +561,30 @@ function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlu
           onConfirm={presetNames => {
             onAddPresets(presetNames)
             setAddingPresetsOpen(false)
+          }}
+        />
+      )}
+      {addingSkillsOpen && (
+        <AddSkillsDialog
+          pack={pack}
+          candidates={skillCandidates}
+          busy={busy !== null}
+          onCancel={() => setAddingSkillsOpen(false)}
+          onConfirm={skillNames => {
+            onAddSkills(skillNames)
+            setAddingSkillsOpen(false)
+          }}
+        />
+      )}
+      {addingApplicationsOpen && (
+        <AddApplicationsDialog
+          pack={pack}
+          candidates={applicationCandidates}
+          busy={busy !== null}
+          onCancel={() => setAddingApplicationsOpen(false)}
+          onConfirm={addonIds => {
+            onAddApplications(addonIds)
+            setAddingApplicationsOpen(false)
           }}
         />
       )}
@@ -519,6 +690,122 @@ function AddPresetsDialog({ pack, candidates, busy, onCancel, onConfirm }: {
                     <span className="pack-checklist-copy">
                       <strong>{preset.name}</strong>
                       <small>{preset.repository ?? '本地预设'}</small>
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          )}
+        </div>
+        <footer>
+          <button type="button" className="secondary-button" onClick={onCancel} disabled={busy}>取消</button>
+          <button type="button" className="primary-command" disabled={busy || selected.size === 0} onClick={() => onConfirm(Array.from(selected))}>
+            <Plus size={16} />添加 {selected.size > 0 ? `（${selected.size}）` : ''}
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function AddSkillsDialog({ pack, candidates, busy, onCancel, onConfirm }: {
+  pack: PackStatus
+  candidates: InstalledSkill[]
+  busy: boolean
+  onCancel: () => void
+  onConfirm: (skillNames: string[]) => void
+}) {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+
+  const toggle = (skillName: string) => {
+    setSelected(current => {
+      const next = new Set(current)
+      if (next.has(skillName)) next.delete(skillName)
+      else next.add(skillName)
+      return next
+    })
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target && !busy) onCancel() }}>
+      <section className="modal add-plugin-dialog" role="dialog" aria-modal="true" aria-labelledby="add-skill-title">
+        <header>
+          <div><Plus size={18} /><h2 id="add-skill-title">添加 Skill 到「{pack.name}」</h2></div>
+          <button type="button" className="icon-button" onClick={onCancel} disabled={busy} aria-label="关闭"><X size={17} /></button>
+        </header>
+        <div className="modal-content">
+          <p className="add-plugin-summary">从当前环境已安装且有来源记录的 Skill 中勾选。</p>
+          {candidates.length === 0 ? (
+            <div className="pack-checklist-empty">当前没有可添加的 Skill。</div>
+          ) : (
+            <div className="add-plugin-list">
+              {candidates.map(skill => {
+                const checked = selected.has(skill.name)
+                return (
+                  <label className={`pack-checklist-item ${checked ? 'checked' : ''}`} key={skill.name}>
+                    <input type="checkbox" checked={checked} onChange={() => toggle(skill.name)} aria-label={`${checked ? '取消' : '选择'} Skill ${skill.name}`} />
+                    <span className="pack-item-glyph">{skill.name.slice(0, 2).toUpperCase()}</span>
+                    <span className="pack-checklist-copy">
+                      <strong>{skill.name}</strong>
+                      <small>{skill.repository ?? '本地 Skill'}</small>
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          )}
+        </div>
+        <footer>
+          <button type="button" className="secondary-button" onClick={onCancel} disabled={busy}>取消</button>
+          <button type="button" className="primary-command" disabled={busy || selected.size === 0} onClick={() => onConfirm(Array.from(selected))}>
+            <Plus size={16} />添加 {selected.size > 0 ? `（${selected.size}）` : ''}
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function AddApplicationsDialog({ pack, candidates, busy, onCancel, onConfirm }: {
+  pack: PackStatus
+  candidates: InstalledApplicationAddon[]
+  busy: boolean
+  onCancel: () => void
+  onConfirm: (addonIds: string[]) => void
+}) {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+
+  const toggle = (addonId: string) => {
+    setSelected(current => {
+      const next = new Set(current)
+      if (next.has(addonId)) next.delete(addonId)
+      else next.add(addonId)
+      return next
+    })
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target && !busy) onCancel() }}>
+      <section className="modal add-plugin-dialog" role="dialog" aria-modal="true" aria-labelledby="add-application-title">
+        <header>
+          <div><Plus size={18} /><h2 id="add-application-title">添加应用到「{pack.name}」</h2></div>
+          <button type="button" className="icon-button" onClick={onCancel} disabled={busy} aria-label="关闭"><X size={17} /></button>
+        </header>
+        <div className="modal-content">
+          <p className="add-plugin-summary">从当前环境已安装的 Application Addon 中勾选。</p>
+          {candidates.length === 0 ? (
+            <div className="pack-checklist-empty">当前没有可添加的应用加载项。</div>
+          ) : (
+            <div className="add-plugin-list">
+              {candidates.map(addon => {
+                const checked = selected.has(addon.id)
+                return (
+                  <label className={`pack-checklist-item ${checked ? 'checked' : ''}`} key={addon.id}>
+                    <input type="checkbox" checked={checked} onChange={() => toggle(addon.id)} aria-label={`${checked ? '取消' : '选择'} 应用 ${addon.name}`} />
+                    <span className="pack-item-glyph">{addon.name.slice(0, 2).toUpperCase()}</span>
+                    <span className="pack-checklist-copy">
+                      <strong>{addon.name}</strong>
+                      <small>{addon.repository}</small>
                     </span>
                   </label>
                 )
