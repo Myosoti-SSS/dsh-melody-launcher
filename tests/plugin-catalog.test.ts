@@ -85,6 +85,43 @@ describe('repository plugin analysis', () => {
     })
   })
 
+  it('uses the official Release tgz for a private source-only github plugin', async () => {
+    const repository = 'demo/super-injector'
+    const manifest = {
+      name: '@demo/super-injector',
+      version: '0.3.3',
+      private: true,
+      dsh: { bundle: { patch: './cordis.patch.yml' }, client: { platform: 'web' } },
+    }
+    const analysis = await analyzeRepository(repository, 'main', 'web', mockFetch({
+      [commitUrl(repository)]: json({ sha: commit }),
+      [rawUrl(repository, 'package.json')]: json(manifest),
+      [treeUrl(repository)]: json({ tree: [
+        { path: 'package.json', type: 'blob' },
+        { path: 'cordis.patch.yml', type: 'blob' },
+      ] }),
+      ['https://registry.npmjs.org/%40demo%2Fsuper-injector/latest']: json({}, 404),
+      ['https://api.github.com/repos/demo/super-injector/releases?per_page=10']: json([
+        {
+          tag_name: 'v0.3.3',
+          draft: false,
+          prerelease: false,
+          assets: [
+            { name: 'demo-super-injector-0.3.3.tgz', browser_download_url: 'https://example.com/demo-super-injector-0.3.3.tgz' },
+          ],
+        },
+      ]),
+    }))
+
+    expect(analysis.installability).toBe('ready')
+    expect(analysis.targets[0]).toMatchObject({
+      packageName: '@demo/super-injector',
+      source: 'release',
+      tarballUrl: 'https://example.com/demo-super-injector-0.3.3.tgz',
+      version: '0.3.3',
+    })
+  })
+
   it('deduplicates package names and ignores scaffold placeholders', async () => {
     const repository = 'demo/plugin-collection'
     const skinManifest = {
