@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "repository": "asakumizy/dsh-local-skills",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-17T08:58:18Z",
+  "analyzedAt": "2026-08-18T02:38:11.151Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "asakumizy/dsh-local-skills",
+    "defaultBranch": "main",
+    "kind": "hybrid",
+    "componentKinds": [
+      "plugin",
+      "skill"
+    ],
+    "summary": "确认包含 1 个 Plugin、2 个 Skill。",
+    "pluginAnalysis": {
+      "repository": "asakumizy/dsh-local-skills",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "检测到可安装的 dsh-local-skills。",
+      "targets": [
+        {
+          "id": "dsh-local-skills:.",
+          "packageName": "dsh-local-skills",
+          "version": "1.0.0",
+          "source": "github",
+          "profileName": "web",
+          "platform": "web",
+          "subdirectory": null,
+          "commit": "038d6059fb36ca5d5e1e8456befb8d928c7b958e",
+          "requiresBuild": false,
+          "buildScripts": [],
+          "nodeRange": null
+        }
+      ]
+    },
+    "skillAnalysis": {
+      "repository": "asakumizy/dsh-local-skills",
+      "defaultBranch": "main",
+      "installability": "choice",
+      "summary": "确认包含 2 个有效 DSH Skills。",
+      "targets": [
+        {
+          "id": "code-review:skills/code-review/SKILL.md",
+          "name": "code-review",
+          "description": "对代码改动进行正确性、风格与安全检查",
+          "sourcePath": "skills/code-review/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "git-commit:skills/git-commit/SKILL.md",
+          "name": "git-commit",
+          "description": "根据当前改动生成规范、信息完整的提交信息",
+          "sourcePath": "skills/git-commit/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        }
+      ]
+    },
+    "applicationAnalysis": {
+      "repository": "asakumizy/dsh-local-skills",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
