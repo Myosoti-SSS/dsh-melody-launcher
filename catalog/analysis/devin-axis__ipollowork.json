@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "repository": "Devin-AXIS/iPolloWork",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-18T02:20:32Z",
+  "analyzedAt": "2026-08-18T02:39:43.847Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "Devin-AXIS/iPolloWork",
+    "defaultBranch": "main",
+    "kind": "plugin",
+    "componentKinds": [
+      "plugin"
+    ],
+    "summary": "检测到 3 个可安装组件，请选择需要的组件。",
+    "pluginAnalysis": {
+      "repository": "Devin-AXIS/iPolloWork",
+      "defaultBranch": "main",
+      "installability": "choice",
+      "summary": "检测到 3 个可安装组件，请选择需要的组件。",
+      "targets": [
+        {
+          "id": "deepseek-idesign:external-plugins/deepseek-harness/design-studio",
+          "packageName": "deepseek-idesign",
+          "version": "0.2.2",
+          "source": "npm",
+          "profileName": "web",
+          "platform": "web",
+          "subdirectory": "external-plugins/deepseek-harness/design-studio",
+          "commit": "5cdf02c700024e4689e1d0f5b512d0923866cbaa",
+          "requiresBuild": false,
+          "buildScripts": [],
+          "nodeRange": null
+        },
+        {
+          "id": "deepseek-ippt:external-plugins/deepseek-harness/ppt-studio",
+          "packageName": "deepseek-ippt",
+          "version": "0.1.2",
+          "source": "npm",
+          "profileName": "web",
+          "platform": "web",
+          "subdirectory": "external-plugins/deepseek-harness/ppt-studio",
+          "commit": "5cdf02c700024e4689e1d0f5b512d0923866cbaa",
+          "requiresBuild": false,
+          "buildScripts": [],
+          "nodeRange": null
+        },
+        {
+          "id": "deepseek-ivideo:external-plugins/deepseek-harness/video-studio",
+          "packageName": "deepseek-ivideo",
+          "version": "0.1.0",
+          "source": "npm",
+          "profileName": "web",
+          "platform": "web",
+          "subdirectory": "external-plugins/deepseek-harness/video-studio",
+          "commit": "5cdf02c700024e4689e1d0f5b512d0923866cbaa",
+          "requiresBuild": false,
+          "buildScripts": [],
+          "nodeRange": ">=22"
+        }
+      ]
+    },
+    "skillAnalysis": null,
+    "applicationAnalysis": {
+      "repository": "Devin-AXIS/iPolloWork",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": [
+      "Skill 检测失败：net::ERR_HTTP2_PROTOCOL_ERROR"
+    ]
+  }
+}
