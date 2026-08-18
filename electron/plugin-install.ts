@@ -28,6 +28,11 @@ export async function approveIgnoredGitHubBuilds(
   return approveBuildKeys(workspacePath, matchingKeys)
 }
 
+/** 批准 pnpm 报告的全部被忽略构建脚本（等价于 `pnpm approve-builds`）。 */
+export async function approveAllIgnoredBuilds(workspacePath: string, output: string): Promise<string[]> {
+  return approveBuildKeys(workspacePath, ignoredBuildKeys(output))
+}
+
 export async function approveBuildKeys(workspacePath: string, buildKeys: string[]): Promise<string[]> {
   return setBuildKeys(workspacePath, buildKeys, true)
 }
