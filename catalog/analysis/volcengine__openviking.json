@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 1,
+  "repository": "volcengine/OpenViking",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-18T03:21:27Z",
+  "analyzedAt": "2026-08-18T03:25:40.608Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "volcengine/OpenViking",
+    "defaultBranch": "main",
+    "kind": "hybrid",
+    "componentKinds": [
+      "plugin",
+      "skill"
+    ],
+    "summary": "确认包含 1 个 Plugin、16 个 Skill。",
+    "pluginAnalysis": {
+      "repository": "volcengine/OpenViking",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "检测到可安装的 @openviking/dsh-memory-plugin。",
+      "targets": [
+        {
+          "id": "@openviking/dsh-memory-plugin:examples/dsh-memory-plugin",
+          "packageName": "@openviking/dsh-memory-plugin",
+          "version": "0.1.0",
+          "source": "archive-subdirectory",
+          "profileName": "web",
+          "platform": "unknown",
+          "subdirectory": "examples/dsh-memory-plugin",
+          "commit": "492235de86178e5e15597809c1e5429bbaa216ca",
+          "requiresBuild": false,
+          "buildScripts": [],
+          "nodeRange": "^22.19.0 || >=24"
+        }
+      ]
+    },
+    "skillAnalysis": {
+      "repository": "volcengine/OpenViking",
+      "defaultBranch": "main",
+      "installability": "choice",
+      "summary": "确认包含 16 个有效 DSH Skills。",
+      "targets": [
+        {
+          "id": "cron:bot/workspace/skills/cron/SKILL.md",
+          "name": "cron",
+          "description": "Schedule reminders and recurring tasks.",
+          "sourcePath": "bot/workspace/skills/cron/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "github:bot/workspace/skills/github/SKILL.md",
+          "name": "github",
+          "description": "Interact with GitHub using the `gh` CLI. Use `gh issue`, `gh pr`, `gh run`, and `gh api` for issues, PRs, CI runs, and advanced queries.",
+          "sourcePath": "bot/workspace/skills/github/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "github-proxy:bot/workspace/skills/github-proxy/SKILL.md",
+          "name": "github-proxy",
+          "description": "GitHub 国内访问加速 skill，使用 githubproxy.cc 代理加速 GitHub 仓库克隆、文件下载、Raw 文件访问等操作。使用场景：(1) 需要 git clone GitHub 仓库时加速，(2) 下载 GitHub Release 文件、Raw 文件、Archive 压缩包时加速，(3) 任何需要访问 GitHub 资源但速度慢的场景",
+          "sourcePath": "bot/workspace/skills/github-proxy/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "install-openviking-memory:examples/openclaw-plugin/skills/install-openviking-memory/SKILL.md",
+          "name": "install-openviking-memory",
+          "description": "Install and configure the OpenViking long-term memory plugin for OpenClaw via natural conversation. Once installed, the plugin automatically captures important facts from chats and recalls relevant context before each reply (auto-capture + auto-recall, cross-session). Covers prerequisites check, plugin install through OpenClaw's plugin manager first, with ov-install only as a backup path, wizard-based configuration, slot activation, gateway restart, verification, plus multi-tenant root-key support, multi-instance, and uninstall. Trigger when the user says any of: \"install OpenViking\", \"set up memory\", \"configure memory plugin\", \"add long-term memory\", \"connect to OpenViking server\", \"RAG\", \"semantic memory\", \"帮我装 OpenViking\", \"配置记忆插件\", \"安装记忆功能\", \"接入 OpenViking\", \"我有一台 OpenViking 服务器\". The user does NOT need to know any CLI commands — the agent runs everything and only asks for a few values. This skill assumes the OpenViking server is already running. If the server is not ready, the skill tells the user to contact their admin or set it up via the OpenViking docs — it does NOT install the server.\n",
+          "sourcePath": "examples/openclaw-plugin/skills/install-openviking-memory/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "opencode:bot/workspace/skills/opencode/SKILL.md",
+          "name": "opencode",
+          "description": "Monitor and manage your OpenCode tasks using helper scripts.",
+          "sourcePath": "bot/workspace/skills/opencode/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "openviking-context-database:examples/openclaw-plugin/skills/openviking-context-database/SKILL.md",
+          "name": "openviking-context-database",
+          "description": "Use OpenViking from OpenClaw through @openviking/openclaw-plugin: long-term memory, session archives, resource and Agent Skill import, semantic recall, recall trace debugging, and externalized tool-result recovery. Prefer this skill when the user wants to use, query, debug, or operate OpenViking context from an OpenClaw agent. For first-time plugin installation, use the install-openviking-memory skill instead.\n",
+          "sourcePath": "examples/openclaw-plugin/skills/openviking-context-database/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "openviking-memory:agent-plugins/skills/openviking-memory/SKILL.md",
+          "name": "openviking-memory",
+          "description": "Recall and persist long-term memory through the OpenViking MCP tools. Use at the start of any substantive task (coding, configuration, debugging, multi-step or tool-based work) to retrieve relevant prior knowledge with find/search/read, and during or after work to persist durable facts, preferences, decisions, and lessons with remember/write. Do not use for casual chat or simple factual questions the model can answer directly.",
+          "sourcePath": "agent-plugins/skills/openviking-memory/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "ov-add-paper:examples/skills/ov-add-paper/SKILL.md",
+          "name": "ov-add-paper",
+          "description": "Load when the user asks to add, import, compile, or ingest a research paper/PDF into OpenViking, especially when they mention ov-add-paper, ARA, claims, evidence, figures, tables, or paper-to-OV knowledge resources.",
+          "sourcePath": "examples/skills/ov-add-paper/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "ov-experience-memory:examples/skills/ov-experience-memory/SKILL.md",
+          "name": "ov-experience-memory",
+          "description": "Retrieve and apply OpenViking Experience memories through the Agent runtime's generic OpenViking search and read tools. Use before or during executable, multi-step, or tool-based work such as coding, file or data changes, configuration, deployment, workflow execution, and failure recovery when prior operational guidance could improve reliability. Do not use for casual chat or simple factual questions.",
+          "sourcePath": "examples/skills/ov-experience-memory/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "ov-resources:examples/skills/ov-resources/SKILL.md",
+          "name": "ov-resources",
+          "description": "Load when an agent needs to add, manage, browse, search, modify, or remove resources in OpenViking. Trigger on explicit user requests about resource management or context search, when the user mentions `ov add-resource`, `ov task watch`, `ov export`, `ov import`, `ov backup`, `ov restore`, `ov ls`, `ov tree`, `ov read`, `ov write`, `ov mkdir`, `ov rm`, `ov mv`, `ov find`, `ov search`, `ov grep`, `ov glob`, or when an agent needs to inspect, search, or organize the `viking://resources/` namespace.",
+          "sourcePath": "examples/skills/ov-resources/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "ov-server-operate:examples/skills/ov-server-operate/SKILL.md",
+          "name": "ov-server-operate",
+          "description": "Operate and maintain OpenViking server - configure, install, start, stop, and cleanup the server. Use when need to setup or manage OpenViking service deployment.",
+          "sourcePath": "examples/skills/ov-server-operate/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "ov-skills:examples/skills/ov-skills/SKILL.md",
+          "name": "ov-skills",
+          "description": "Load when an agent needs to manage, install, update, remove, or validate OpenViking skills via the `ov skills` CLI. Trigger on explicit user requests about skill management, when the user mentions `ov skills`, `install skill`, `update skill`, `delete skill`, `validate skill`, or when an agent needs to discover what skills are available on the OpenViking server.",
+          "sourcePath": "examples/skills/ov-skills/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "skill-creator:bot/workspace/skills/skill-creator/SKILL.md",
+          "name": "skill-creator",
+          "description": "Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.",
+          "sourcePath": "bot/workspace/skills/skill-creator/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "summarize:bot/workspace/skills/summarize/SKILL.md",
+          "name": "summarize",
+          "description": "Summarize or extract text/transcripts from URLs, podcasts, and local files (great fallback for “transcribe this YouTube/video”).",
+          "sourcePath": "bot/workspace/skills/summarize/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "tmux:bot/workspace/skills/tmux/SKILL.md",
+          "name": "tmux",
+          "description": "Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.",
+          "sourcePath": "bot/workspace/skills/tmux/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "weather:bot/workspace/skills/weather/SKILL.md",
+          "name": "weather",
+          "description": "Get current weather and forecasts (no API key required).",
+          "sourcePath": "bot/workspace/skills/weather/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        }
+      ]
+    },
+    "applicationAnalysis": {
+      "repository": "volcengine/OpenViking",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}

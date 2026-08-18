@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "repository": "TohsakaRIN521/dsh-academic-skill",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-15T18:38:57Z",
+  "analyzedAt": "2026-08-18T03:24:33.651Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "TohsakaRIN521/dsh-academic-skill",
+    "defaultBranch": "main",
+    "kind": "skill",
+    "componentKinds": [
+      "skill"
+    ],
+    "summary": "确认包含 2 个有效 DSH Skills。",
+    "pluginAnalysis": {
+      "repository": "TohsakaRIN521/dsh-academic-skill",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到同时包含 package.json、dsh.bundle.patch 和对应补丁文件的插件组件。",
+      "targets": []
+    },
+    "skillAnalysis": {
+      "repository": "TohsakaRIN521/dsh-academic-skill",
+      "defaultBranch": "main",
+      "installability": "choice",
+      "summary": "确认包含 2 个有效 DSH Skills。",
+      "targets": [
+        {
+          "id": "academic-paper-completion:academic-paper-completion/SKILL.md",
+          "name": "academic-paper-completion",
+          "description": "为已完成主体（理论推导与数值分析）的论文初稿补全缺失章节：摘要、引言、正文支撑段落、结论、致谢与参考文献。流程：拆解初稿关键理论/公式/结论 → 检索 arXiv 近一年相关论文（前 40 篇）→ 联网确认期刊并按分区分类、由用户选择 3/5/10 篇 → 下载 TeX 源码 → 将相似理论/方法段落改写并正确引用后整合进初稿。同时支持：对论文存量参考文献逐条真实性核验（期刊/卷/页码/年份/作者联网比对），参考文献格式批量转换（Crossref 按 DOI 补全文章标题、链接改为只包期刊信息、去除卷号加粗），以及论文 tex 安全修改（备份→精确替换→读回验证→临时目录编译验证）。触发场景：「完善论文、补全论文、补写摘要/引言/结论、填充参考文献、核对/检查参考文献、修改论文tex、参考文献格式/排版、补全参考文献标题」等请求，且论文主体已写完；不适用于修改推理过程、修改最终结论或从零撰写论文。",
+          "sourcePath": "academic-paper-completion/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "skill-optimizer:skill-optimizer/SKILL.md",
+          "name": "skill-optimizer",
+          "description": "从对话、复盘与历史任务中识别重复的工作/重复的问题，标准化为可复用脚本或 skill：确定性重复操作（重复 ≥2 次）→ 脚本并入合适 skill；反复踩坑的重复问题 → 提炼「终止条件」式规则；优先迭代已有 skill（~/.dsh/skills/ 与项目 .agents/skills/），避免重复造轮子；遵循 skill-creator 规范（frontmatter 仅 name/description）。触发场景：「优化这个skill、把重复流程做成skill、这个工作太重复了能不能自动化、把复盘教训固化成skill、分析对话中的重复工作」；不处理一次性任务；未获用户明确许可不自动写代码/落地文件（默认只输出方案）。",
+          "sourcePath": "skill-optimizer/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        }
+      ]
+    },
+    "applicationAnalysis": {
+      "repository": "TohsakaRIN521/dsh-academic-skill",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
