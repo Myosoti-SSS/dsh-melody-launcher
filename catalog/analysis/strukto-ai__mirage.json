@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "repository": "strukto-ai/mirage",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-18T02:16:52Z",
+  "analyzedAt": "2026-08-18T02:39:57.129Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "strukto-ai/mirage",
+    "defaultBranch": "main",
+    "kind": "plugin",
+    "componentKinds": [
+      "plugin"
+    ],
+    "summary": "检测到可安装的 @struktoai/mirage-dsh。",
+    "pluginAnalysis": {
+      "repository": "strukto-ai/mirage",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "检测到可安装的 @struktoai/mirage-dsh。",
+      "targets": [
+        {
+          "id": "@struktoai/mirage-dsh:typescript/packages/dsh",
+          "packageName": "@struktoai/mirage-dsh",
+          "version": "0.0.1",
+          "source": "npm",
+          "profileName": "web",
+          "platform": "unknown",
+          "subdirectory": "typescript/packages/dsh",
+          "commit": "bc0adbd24870d2c71cb966dcd7980b46e56fedb0",
+          "requiresBuild": false,
+          "buildScripts": [],
+          "nodeRange": ">=20.10.0"
+        }
+      ]
+    },
+    "skillAnalysis": null,
+    "applicationAnalysis": {
+      "repository": "strukto-ai/mirage",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": [
+      "Skill 检测失败：net::ERR_HTTP2_PROTOCOL_ERROR"
+    ]
+  }
+}
