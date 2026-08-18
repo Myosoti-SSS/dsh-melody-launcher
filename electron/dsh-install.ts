@@ -1,4 +1,4 @@
-import { access, readFile, realpath } from 'node:fs/promises'
+import { access, readdir, readFile, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { DSH_PACKAGE_NAME, DSH_REPOSITORY } from '../src/constants'
 import type { DshInstallationStatus, InstallProgress } from '../src/types'
@@ -27,10 +27,23 @@ function isDshExecutableName(filePath: string): boolean {
   return /^(?:dsh|dsh\.cmd|dsh\.exe)$/i.test(path.basename(filePath))
 }
 
-function manifestCandidates(executable: string, resolvedExecutable: string): string[] {
+async function pnpmGlobalManifestCandidates(binDirectory: string): Promise<string[]> {
+  // pnpm global shims live in PNPM_HOME, while the package itself lives under
+  // PNPM_HOME/global/<store-version>/node_modules. A .cmd shim cannot be
+  // resolved to that package with realpath, so inspect the known layout.
+  const globalRoot = path.join(binDirectory, 'global')
+  const entries = await readdir(globalRoot, { withFileTypes: true }).catch(() => [])
+  return entries
+    .filter(entry => entry.isDirectory())
+    .map(entry => path.join(globalRoot, entry.name, 'node_modules', ...DSH_PACKAGE_NAME.split('/'), 'package.json'))
+}
+
+async function manifestCandidates(executable: string, resolvedExecutable: string): Promise<string[]> {
   const candidates = new Set<string>()
+  const binDirectories = new Set<string>()
   for (const candidateExecutable of [executable, resolvedExecutable]) {
     const binDirectory = path.dirname(candidateExecutable)
+    binDirectories.add(binDirectory)
     candidates.add(path.join(binDirectory, 'node_modules', ...DSH_PACKAGE_NAME.split('/'), 'package.json'))
     if (path.basename(binDirectory).toLowerCase() === '.bin') {
       candidates.add(path.join(binDirectory, '..', ...DSH_PACKAGE_NAME.split('/'), 'package.json'))
@@ -43,6 +56,8 @@ function manifestCandidates(executable: string, resolvedExecutable: string): str
       current = parent
     }
   }
+  const pnpmCandidates = await Promise.all([...binDirectories].map(pnpmGlobalManifestCandidates))
+  pnpmCandidates.flat().forEach(candidate => candidates.add(candidate))
   return [...candidates]
 }
 
@@ -54,7 +69,7 @@ async function inspectDshExecutable(
   try {
     await access(executable)
     const resolvedExecutable = await realpath(executable).catch(() => executable)
-    for (const manifestPath of manifestCandidates(executable, resolvedExecutable)) {
+    for (const manifestPath of await manifestCandidates(executable, resolvedExecutable)) {
       try {
         const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { name?: unknown; version?: unknown }
         if (manifest.name !== DSH_PACKAGE_NAME || typeof manifest.version !== 'string' || !manifest.version.trim()) continue
@@ -75,13 +90,25 @@ function systemDshCandidates(configuredExecutable: string | undefined, environme
 
   const pathKey = Object.keys(environment).find(key => key.toLowerCase() === 'path')
   const pathEntries = (pathKey ? environment[pathKey] : '')?.split(path.delimiter).filter(Boolean) ?? []
+  const pnpmHomes = process.platform === 'win32'
+    ? [
+        environment.PNPM_HOME ?? '',
+        environment.LOCALAPPDATA ? path.join(environment.LOCALAPPDATA, 'pnpm') : '',
+      ]
+    : [
+        environment.PNPM_HOME ?? '',
+        environment.XDG_DATA_HOME ? path.join(environment.XDG_DATA_HOME, 'pnpm') : '',
+        environment.HOME ? path.join(environment.HOME, '.local', 'share', 'pnpm') : '',
+        environment.HOME ? path.join(environment.HOME, 'Library', 'pnpm') : '',
+      ]
   const extraEntries = process.platform === 'win32'
     ? [
         environment.APPDATA ? path.join(environment.APPDATA, 'npm') : '',
         environment.npm_config_prefix ?? '',
         path.join(environment.ProgramFiles ?? 'C:\\Program Files', 'nodejs'),
+        ...pnpmHomes,
       ]
-    : [environment.npm_config_prefix ? path.join(environment.npm_config_prefix, 'bin') : '']
+    : [environment.npm_config_prefix ? path.join(environment.npm_config_prefix, 'bin') : '', ...pnpmHomes]
   const executableNames = process.platform === 'win32' ? ['dsh.cmd', 'dsh.exe', 'dsh'] : ['dsh']
   for (const entry of [...pathEntries, ...extraEntries]) {
     const normalized = entry.trim().replace(/^"|"$/g, '')
