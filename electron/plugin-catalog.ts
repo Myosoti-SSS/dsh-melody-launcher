@@ -34,6 +34,46 @@ const GITHUB_HEADERS = {
   'X-GitHub-Api-Version': '2022-11-28',
 }
 
+const RELEASE_LOOKUP_LIMIT = 10
+
+/**
+ * 查找仓库官方 Release tgz。
+ *
+ * 源码型插件（如 dsh-super-injector）的 `lib/` 不在 GitHub 源码树里，
+ * 直接 `dsh plugin add <源码目录>` 会装出缺少入口的坏包。Release tgz
+ * 是官方构建产物，应优先于 github 源安装。
+ */
+async function resolveReleaseTarball(
+  repository: string,
+  fetchImpl: typeof fetch,
+): Promise<{ tarballUrl: string; version: string } | null> {
+  const repositoryPath = repository.split('/').map(encodeURIComponent).join('/')
+  const response = await requestWithRetry(
+    `https://api.github.com/repos/${repositoryPath}/releases?per_page=${RELEASE_LOOKUP_LIMIT}`,
+    { headers: GITHUB_HEADERS },
+    fetchImpl,
+  )
+  if (!response.ok) return null
+  const releases: unknown = await response.json().catch(() => null)
+  if (!Array.isArray(releases)) return null
+  for (const release of releases) {
+    if (!release || typeof release !== 'object') continue
+    const record = release as { draft?: unknown; prerelease?: unknown; tag_name?: unknown; assets?: unknown }
+    if (record.draft === true || record.prerelease === true) continue
+    if (!Array.isArray(record.assets)) continue
+    const tgz = record.assets.find((asset): asset is { browser_download_url: string } => {
+      if (!asset || typeof asset !== 'object') return false
+      const url = (asset as { browser_download_url?: unknown }).browser_download_url
+      return typeof url === 'string' && /\.(tgz|tar\.gz)$/i.test(url)
+    })
+    if (!tgz) continue
+    const version = typeof record.tag_name === 'string' ? record.tag_name.replace(/^v/i, '') : ''
+    if (!version) continue
+    return { tarballUrl: tgz.browser_download_url, version }
+  }
+  return null
+}
+
 async function requestWithRetry(url: string, init: RequestInit, fetchImpl: typeof fetch): Promise<Response> {
   let lastError: unknown
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -345,15 +385,31 @@ export async function analyzeRepository(
 
   const installTargets = uniqueTargets(targets)
 
-  if (installTargets.length > 0) {
+  // 源码型 github 插件优先使用官方 Release tgz，避免装出缺少 lib/ 的坏包。
+  let resolvedTargets = installTargets
+  if (installTargets.some(target => target.source === 'github')) {
+    const release = await resolveReleaseTarball(repository, fetchImpl).catch(() => null)
+    if (release) {
+      resolvedTargets = installTargets.map(target => target.source === 'github'
+        ? {
+            ...target,
+            source: 'release' as const,
+            tarballUrl: release.tarballUrl,
+            version: release.version,
+          }
+        : target)
+    }
+  }
+
+  if (resolvedTargets.length > 0) {
     return {
       repository,
       defaultBranch,
-      installability: installTargets.length === 1 ? 'ready' : 'choice',
-      summary: installTargets.length === 1
-        ? `检测到可安装的 ${installTargets[0].packageName}。`
-        : `检测到 ${installTargets.length} 个可安装组件，请选择需要的组件。`,
-      targets: installTargets,
+      installability: resolvedTargets.length === 1 ? 'ready' : 'choice',
+      summary: resolvedTargets.length === 1
+        ? `检测到可安装的 ${resolvedTargets[0].packageName}。`
+        : `检测到 ${resolvedTargets.length} 个可安装组件，请选择需要的组件。`,
+      targets: resolvedTargets,
     }
   }
 
