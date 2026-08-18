@@ -277,7 +277,7 @@ export function createLauncherUpdater(options: LauncherUpdaterOptions): Launcher
       throw new Error('没有已下载的启动器更新。')
     }
     const target = pending as PendingUpdate
-    const execPath = (options.getExecPath ?? (() => process.execPath))()
+    const execPath = (options.getExecPath ?? (() => process.env.PORTABLE_EXECUTABLE_FILE || process.execPath))()
     const execBase = path.basename(execPath)
     const tempPath = path.join(updateRoot, target.asset.name)
     const scriptPath = path.join(updateRoot, `apply-${process.pid}.cmd`)
