@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "repository": "liustack/modlens",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-18T02:34:40Z",
+  "analyzedAt": "2026-08-18T02:39:01.638Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "liustack/modlens",
+    "defaultBranch": "main",
+    "kind": "hybrid",
+    "componentKinds": [
+      "plugin",
+      "skill"
+    ],
+    "summary": "确认包含 1 个 Plugin、1 个 Skill。",
+    "pluginAnalysis": {
+      "repository": "liustack/modlens",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "检测到可安装的 @liustack/modlens。",
+      "targets": [
+        {
+          "id": "@liustack/modlens:.",
+          "packageName": "@liustack/modlens",
+          "version": "3.18.3",
+          "source": "npm",
+          "profileName": "web",
+          "platform": "web",
+          "subdirectory": null,
+          "commit": "3d2469a519da858672be606c7731249295f1afe0",
+          "requiresBuild": false,
+          "buildScripts": [],
+          "nodeRange": ">=22.19"
+        }
+      ]
+    },
+    "skillAnalysis": {
+      "repository": "liustack/modlens",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "确认是 DSH Skill：modlens",
+      "targets": [
+        {
+          "id": "modlens:skills/modlens/SKILL.md",
+          "name": "modlens",
+          "description": "Plug-in vision for text-only models. Hard rule: when a file path or URL with an image extension (.png, .jpg, .jpeg, .webp, .gif, .heic, .heif) appears anywhere in the conversation (typed by the user, injected as a `[Image: source: <path>]` line, or inside a tag) and you cannot see that image's content, run this skill on it before any other approach: no self-built OCR, no PIL, no tesseract. Also triggers on pasted-image placeholders such as `[Image #1]` and `[Unsupported Image]`. If you can actually see the image, do not use this skill. When unsure, run `modlens guard` before the first read of a session: a deny verdict means the active model has native vision and must read the image itself. Runs the modlens CLI to convert the image into structured JSON evidence: every word transcribed, layout regions, semantics, visual clues. Also use when the user asks how to install, configure, or switch modlens providers (Gemini API key, OpenAI-compatible endpoints, Claude API or Claude Code CLI).",
+          "sourcePath": "skills/modlens/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        }
+      ]
+    },
+    "applicationAnalysis": {
+      "repository": "liustack/modlens",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
