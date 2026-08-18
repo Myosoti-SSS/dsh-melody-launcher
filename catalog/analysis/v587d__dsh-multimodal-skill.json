@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "repository": "v587d/dsh-multimodal-skill",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-14T10:36:50Z",
+  "analyzedAt": "2026-08-18T02:38:52.663Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "v587d/dsh-multimodal-skill",
+    "defaultBranch": "main",
+    "kind": "skill",
+    "componentKinds": [
+      "skill"
+    ],
+    "summary": "确认是 DSH Skill：dsh-multimodal-skill",
+    "pluginAnalysis": {
+      "repository": "v587d/dsh-multimodal-skill",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到同时包含 package.json、dsh.bundle.patch 和对应补丁文件的插件组件。",
+      "targets": []
+    },
+    "skillAnalysis": {
+      "repository": "v587d/dsh-multimodal-skill",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "确认是 DSH Skill：dsh-multimodal-skill",
+      "targets": [
+        {
+          "id": "dsh-multimodal-skill:SKILL.md",
+          "name": "dsh-multimodal-skill",
+          "description": "通过三方多模态 API 为纯文本 LLM 提供图像理解与文档理解能力（OCR、表格、公式、 版面解析、PDF/扫描件→Markdown、截图/照片/图表问答）。使用场景：用户粘贴或给出 图片/PDF 路径时解读内容、从文档提取文字与表格、对截图提问、发票/论文/票据解析。 触发词：图片理解、OCR、文档解析、截图内容、PDF 提取、表格识别、公式识别、票据识别、 扫描件、image、vision。实现为 Python 标准库 CLI（urllib/json/base64），零三方依赖。",
+          "sourcePath": "SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        }
+      ]
+    },
+    "applicationAnalysis": {
+      "repository": "v587d/dsh-multimodal-skill",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
