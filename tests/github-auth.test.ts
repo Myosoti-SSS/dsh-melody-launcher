@@ -132,6 +132,47 @@ describe('GitHub account service', () => {
     })
     await expect(unavailable.loginWithToken('github_pat_plaintext_1234567890')).rejects.toThrow(/安全凭据存储/)
   })
+
+  it('reads and changes repository stars through the authenticated GitHub API', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    let starred = false
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input)
+      const method = init?.method ?? 'GET'
+      calls.push({ url, method })
+      if (url === 'https://api.github.com/user') return userResponse('star-user')
+      if (url.endsWith('/user/starred/demo/repository')) {
+        if (method === 'GET') return new Response(starred ? null : '', { status: starred ? 204 : 404 })
+        starred = method === 'PUT'
+        return new Response(null, { status: 204 })
+      }
+      if (url.includes('/search/issues?')) {
+        return new Response(JSON.stringify({ items: [{
+          number: 7,
+          title: 'catalog: batch update',
+          html_url: 'https://github.com/rirko/dsh-melody-launcher/pull/7',
+          state: 'open',
+          draft: false,
+          user: { login: 'star-user' },
+          created_at: '2026-08-18T00:00:00Z',
+          updated_at: '2026-08-18T01:00:00Z',
+          pull_request: { merged_at: null },
+        }] }), { status: 200 })
+      }
+      return new Response('', { status: 404 })
+    }) as typeof fetch
+    const service = createGitHubAuthService({ filePath: path.join(temporaryRoot, 'github-auth.bin'), cipher, fetchImpl })
+    await service.loginWithToken('github_pat_star_test_token_1234567890')
+    await expect(service.getStarStatus('demo/repository')).resolves.toBe(false)
+    await expect(service.setStar('demo/repository', true)).resolves.toBe(true)
+    await expect(service.setStar('demo/repository', false)).resolves.toBe(false)
+    await expect(service.listRecentPullRequests()).resolves.toMatchObject([{ number: 7, author: 'star-user' }])
+    expect(calls.filter(call => call.url.endsWith('/user/starred/demo/repository'))).toEqual([
+      { url: 'https://api.github.com/user/starred/demo/repository', method: 'GET' },
+      { url: 'https://api.github.com/user/starred/demo/repository', method: 'PUT' },
+      { url: 'https://api.github.com/user/starred/demo/repository', method: 'DELETE' },
+    ])
+  })
 })
 
 describe('GitHub request host filter', () => {

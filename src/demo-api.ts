@@ -13,6 +13,7 @@ import type {
   DshInstallationStatus,
   DshUpdateStatus,
   GitHubAuthStatus,
+  GitHubPullRequestSummary,
   InstallProgress,
   InstalledPreset,
   InstalledSkill,
@@ -40,6 +41,7 @@ let demoSettings: AppSettings = {
   dshInstallPath: 'C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\dsh-runtime',
   dshHome: 'C:\\Users\\demo\\.dsh',
   profileName: 'web',
+  activePackId: 'pack-web-basic',
   workspace: 'C:\\Users\\demo\\Projects',
   launchExecutable: 'C:\\Program Files\\nodejs\\npx.cmd',
   launchArgs: ['--yes', '@deepseek-ai/dsh', 'web'],
@@ -171,6 +173,7 @@ let demoGitHubAuth: GitHubAuthStatus = {
   oauthAvailable: true,
   rateLimit: null,
 }
+const demoStarredRepositories = new Set<string>()
 let demoDshInstallation: DshInstallationStatus = { installed: false, version: null, executable: null, source: null }
 const demoRemoteDshVersion = '0.1.0-rc.7'
 /** demo：置 true 可模拟「发现启动器新版本」，验证自更新 UI 与进度条。 */
@@ -651,6 +654,26 @@ export const demoApi: LauncherApi = {
     }
     return demoGitHubAuth
   },
+  listGitHubPullRequests: async (): Promise<GitHubPullRequestSummary[]> => demoGitHubAuth.authenticated ? [{
+    number: 42,
+    title: 'catalog: batch update',
+    url: 'https://github.com/rirko/dsh-melody-launcher/pull/42',
+    state: 'open',
+    draft: false,
+    author: demoGitHubAuth.login ?? 'demo-user',
+    createdAt: '2026-08-17T08:00:00Z',
+    updatedAt: '2026-08-18T08:00:00Z',
+    mergedAt: null,
+    headBranch: 'plugin-update',
+    baseBranch: 'main',
+  }] : [],
+  getGitHubStarStatus: async repository => demoStarredRepositories.has(repository.toLowerCase()),
+  setGitHubStar: async (repository, starred) => {
+    const key = repository.toLowerCase()
+    if (starred) demoStarredRepositories.add(key)
+    else demoStarredRepositories.delete(key)
+    return starred
+  },
   chooseDirectory: async kind => kind === 'dshInstallPath'
     ? 'D:\\DeepSeek Harness'
     : kind === 'dshHome'
@@ -1050,12 +1073,12 @@ export const demoApi: LauncherApi = {
     const pack = demoPacks.find(item => item.id === packId)
     if (!pack) throw new Error(`未找到整合包：${packId}`)
     demoPacks = demoPacks.map(item => ({ ...item, enabled: item.id === packId }))
-    demoSettings = { ...demoSettings, profileName: packId }
+    demoSettings = { ...demoSettings, activePackId: packId }
     return demoSettings
   },
   deactivatePack: async () => {
     demoPacks = demoPacks.map(item => ({ ...item, enabled: false }))
-    demoSettings = { ...demoSettings, profileName: 'web' }
+    demoSettings = { ...demoSettings, activePackId: null }
     return demoSettings
   },
   removePack: async packId => {

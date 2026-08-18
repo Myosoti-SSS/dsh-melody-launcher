@@ -258,6 +258,29 @@ describe('validateLocalPluginDirectory', () => {
   })
 })
 
+describe('installNpmPackage', () => {
+  it('installs a manifest-only npm entry into the shared Profile without GitHub analysis', async () => {
+    vi.mocked(readProfile).mockImplementation(async (_dshHome, profileName) => profileState(profileName, 'demo-plugin'))
+    const { installer, calls } = createTestInstaller()
+    const result = await installer.installNpmPackage({ packageName: 'demo-plugin', version: '1.2.3' }, 'web')
+    expect(calls.find(call => call.args.includes('add'))?.args).toEqual([
+      '--yes', '@deepseek-ai/dsh', 'plugin', '--profile', 'web', 'add', 'demo-plugin@1.2.3',
+    ])
+    expect(analyzeRepository).not.toHaveBeenCalled()
+    expect(recordPluginInstall).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      repository: 'npm:demo-plugin', packageName: 'demo-plugin', profileName: 'web', source: 'npm', version: '1.2.3',
+    }))
+    expect(result.installedProfileName).toBe('web')
+  })
+
+  it('rejects unsafe package names and versions before invoking DSH', async () => {
+    const { installer, calls } = createTestInstaller()
+    await expect(installer.installNpmPackage({ packageName: 'bad package' })).rejects.toThrow(/包名/)
+    await expect(installer.installNpmPackage({ packageName: 'demo-plugin', version: '1.0.0 latest' })).rejects.toThrow(/版本/)
+    expect(calls).toHaveLength(0)
+  })
+})
+
 describe('installPluginTarget with local-directory source', () => {
   it('installs from the local directory into the resolved profile without downloading', async () => {
     const localDirectory = await mkdtemp(path.join(temporaryDirectory, 'local-plugin-'))

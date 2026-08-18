@@ -268,6 +268,7 @@ function PreviewRow({ item, checked, onToggle }: {
             ? <span className="pack-item-state ok">可安装</span>
             : <span className="pack-item-state bad">不可用</span>}
           {item.kind === 'skill' && <span className="pack-item-kind">技能</span>}
+          {item.enabled === false && <span className="pack-item-inactive">安装后关闭</span>}
           {item.kind === 'preset' && <span className="pack-item-kind">预设</span>}
           {item.offline && <span className="pack-item-offline">离线本体</span>}
         </span>
@@ -399,6 +400,7 @@ const packDialogStyle = `
 .pack-item-state.bad { color: var(--danger); background: var(--danger-soft); }
 .pack-item-offline { padding: 1px 7px; border-radius: 999px; color: var(--blue); background: var(--blue-soft); font-size: 10px; font-weight: 650; }
 .pack-item-kind { padding: 1px 7px; border-radius: 999px; color: var(--amber); background: var(--amber-soft); font-size: 10px; font-weight: 650; }
+.pack-item-inactive { padding: 1px 7px; border-radius: 999px; color: var(--muted); background: var(--surface-strong); font-size: 10px; font-weight: 650; }
 .pack-item-reason { color: var(--muted); font-size: 10px; text-align: right; overflow-wrap: anywhere; }
 
 .pack-installing-note { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }

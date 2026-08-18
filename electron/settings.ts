@@ -33,6 +33,7 @@ export function defaultSettings(input: DefaultSettingsInput): AppSettings {
     dshInstallPath: input.dshInstallPath ?? joinForPlatform(platform, input.homeDirectory, '.dsh-runtime'),
     dshHome: input.dshHomeFromEnvironment || joinForPlatform(platform, input.homeDirectory, '.dsh'),
     profileName: DEFAULT_PROFILE_NAME,
+    activePackId: null,
     workspace: input.documentsDirectory,
     launchExecutable: input.systemNpx ?? (platform === 'win32' ? 'npx.cmd' : 'npx'),
     launchArgs: ['--yes', DSH_PACKAGE_NAME, 'web'],
@@ -88,6 +89,7 @@ export function validateSettings(input: AppSettings): AppSettings {
     dshInstallPath: input.dshInstallPath,
     dshHome: input.dshHome,
     profileName: input.profileName,
+    activePackId: typeof input.activePackId === 'string' && isSafeProfileName(input.activePackId) ? input.activePackId : null,
     workspace: input.workspace,
     launchExecutable: input.launchExecutable.trim(),
     launchArgs: input.launchArgs,
@@ -105,6 +107,7 @@ export function mergeStoredSettings(defaults: AppSettings, stored: Partial<AppSe
   return {
     ...defaults,
     ...stored,
+    activePackId: typeof stored.activePackId === 'string' && isSafeProfileName(stored.activePackId) ? stored.activePackId : null,
     dshInstallPath: typeof stored.dshInstallPath === 'string' && path.isAbsolute(stored.dshInstallPath)
       ? stored.dshInstallPath
       : defaults.dshInstallPath,
@@ -165,6 +168,7 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
     async save(input: AppSettings): Promise<AppSettings> {
       const current = cache ?? input
       let next = validateSettings(input)
+      if (current.profileName !== next.profileName) next = { ...next, activePackId: null }
       // 用户改动了 DSH 本体安装目录，而启动命令仍指向旧目录里的可执行文件时，跟随切过去。
       const installPathChanged = !samePath(current.dshInstallPath, next.dshInstallPath)
       const usedPreviousManagedExecutable = samePath(next.launchExecutable, managedDshExecutable(current.dshInstallPath))

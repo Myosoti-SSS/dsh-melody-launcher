@@ -26,6 +26,7 @@ const PACK_VERSION_RE = /^\d+\.\d+\.\d+/
 const PACK_COMMIT_RE = /^[0-9a-f]{7,40}$/i
 const PACK_DESCRIPTION_MAX = 500
 const PACK_PROFILE_PREFIX = 'pack-'
+const PACK_BUILD_KEY_RE = /^(?:@[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+|[A-Za-z0-9._-]+)@[0-9A-Za-z][0-9A-Za-z._+-]{0,127}$/
 
 /** 合法的分支名：非空、1-160 位、不含 ..，仅允许 URL 安全字符。 */
 function safeBranch(value: string): boolean {
@@ -225,6 +226,21 @@ function parsePackPlugin(item: unknown, index: number): PackPluginEntry {
       throw new Error(`plugins[${index}] 的 version 格式非法。`)
     }
     entry.version = raw.version
+  }
+  if (raw.enabled !== undefined) {
+    if (typeof raw.enabled !== 'boolean') throw new Error(`plugins[${index}] 的 enabled 必须是布尔值。`)
+    entry.enabled = raw.enabled
+  }
+  for (const field of ['allowBuilds', 'denyBuilds'] as const) {
+    const value = raw[field]
+    if (value === undefined) continue
+    if (!Array.isArray(value) || value.length > 64 || value.some(key => typeof key !== 'string' || !PACK_BUILD_KEY_RE.test(key))) {
+      throw new Error(`plugins[${index}] 的 ${field} 只能包含精确 npm 包版本，且不能使用通配符。`)
+    }
+    entry[field] = [...new Set(value as string[])]
+  }
+  if (entry.allowBuilds?.some(key => entry.denyBuilds?.includes(key))) {
+    throw new Error(`plugins[${index}] 的同一构建键不能同时允许和禁止。`)
   }
   if (!entry.source) {
     // 缺省 source：有 repository 视为 github，否则 npm。

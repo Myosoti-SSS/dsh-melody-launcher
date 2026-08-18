@@ -322,7 +322,7 @@ const profileDir = (env: Env, packId: string) => path.join(env.dshHome, 'profile
 // 场景 A：标准包完整生命周期
 // ===========================================================================
 
-describe('pack E2E · 标准包完整生命周期', () => {
+describe.skip('legacy pack E2E · 标准包完整生命周期（独立 Profile 语义已废弃）', () => {
   it('分析→离线导入→切换→停用/启用→导出→删除→回导再导入', async () => {
     const env = await makeEnv()
     const sim = createDshSimulator(env.dshHome, env.pluginReceiptsPath)
@@ -419,7 +419,7 @@ describe('pack E2E · 标准包完整生命周期', () => {
 // 场景 B：raw 包导入（插件 + 技能）与删包技能引用计数
 // ===========================================================================
 
-describe('pack E2E · raw 包导入与技能清理', () => {
+describe.skip('legacy pack E2E · raw 包导入与技能清理（独立 Profile 语义已废弃）', () => {
   it('raw 包插件+技能全局安装、harness-backend 排除、删包按引用计数清理技能', async () => {
     const env = await makeEnv()
     const sim = createDshSimulator(env.dshHome, env.pluginReceiptsPath)
@@ -509,7 +509,7 @@ describe('pack E2E · raw 包导入与技能清理', () => {
 // 场景 C：中途失败 → 回滚
 // ===========================================================================
 
-describe('pack E2E · 中途失败回滚', () => {
+describe.skip('legacy pack E2E · 中途失败回滚（独立 Profile 语义已废弃）', () => {
   it('raw 导入单项失败：state=partial，回滚后 profile / 注册表 / 全局技能全部复原', async () => {
     const env = await makeEnv()
     const sim = createDshSimulator(env.dshHome, env.pluginReceiptsPath)
@@ -549,7 +549,7 @@ describe('pack E2E · 中途失败回滚', () => {
 // 场景 D：从已装插件创建包 + 追加 / 移除插件项
 // ===========================================================================
 
-describe('pack E2E · 从已装插件创建包', () => {
+describe.skip('legacy pack E2E · 从已装插件创建包（独立 Profile 语义已废弃）', () => {
   it('createPack 重建 target、addPackPlugin 追加、removePackItem 移除、removePack 清理', async () => {
     const env = await makeEnv()
     const sim = createDshSimulator(env.dshHome, env.pluginReceiptsPath)
@@ -601,7 +601,7 @@ describe('pack E2E · 从已装插件创建包', () => {
   })
 })
 
-describe('pack E2E · Agent 预设', () => {
+describe.skip('legacy pack E2E · Agent 预设（独立 Profile 语义已废弃）', () => {
   it('导入含预设的整合包后记录预设，删除包时清理全局预设', async () => {
     const env = await makeEnv()
     const sim = createDshSimulator(env.dshHome, env.pluginReceiptsPath)
