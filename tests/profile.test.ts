@@ -11,6 +11,7 @@ import {
   reorderPlugins,
   togglePlugin,
 } from '../electron/profile'
+import { recordPluginInstall } from '../electron/plugin-receipts'
 
 let temporaryHome = ''
 const profileName = 'web'
@@ -92,6 +93,27 @@ describe('profile management', () => {
     expect(enabled.activeBundles.at(-1)).toBe('@demo/sidebar')
   })
 
+  it('uses the install receipt when a local file dependency has no repository field', async () => {
+    await seedProfile()
+    const receiptPath = path.join(temporaryHome, 'plugin-installs.json')
+    await recordPluginInstall(receiptPath, {
+      repository: 'demo/sidebar',
+      packageName: '@demo/sidebar',
+      profileName,
+      source: 'archive-subdirectory',
+      subdirectory: 'sidebar',
+      version: '2.0.0',
+      commit: 'abc123',
+      installedAt: new Date().toISOString(),
+    })
+
+    const state = await readProfile(temporaryHome, profileName, receiptPath)
+    expect(state.plugins.find(plugin => plugin.packageName === '@demo/sidebar')).toMatchObject({
+      repositoryFullName: 'demo/sidebar',
+      repository: 'https://github.com/demo/sidebar',
+    })
+  })
+
   it('persists an exact load order and protects core layers', async () => {
     await seedProfile()
     const reordered = await reorderPlugins(temporaryHome, profileName, [
@@ -122,6 +144,7 @@ describe('external input validation', () => {
   it('recognizes GitHub dependency and codeload repository specifiers', () => {
     expect(repositoryFullNameFromSpecifier('github:anywhere-labs/deepseek-harness-desktop')).toBe('anywhere-labs/deepseek-harness-desktop')
     expect(repositoryFullNameFromSpecifier('https://codeload.github.com/Small-tailqwq/dsh-deep-whale/tar.gz/abc123')).toBe('Small-tailqwq/dsh-deep-whale')
+    expect(repositoryFullNameFromSpecifier('git+https://github.com/demo/sidebar/tree/main/packages/plugin')).toBe('demo/sidebar')
     expect(repositoryFullNameFromSpecifier('1.2.0')).toBeUndefined()
   })
 })

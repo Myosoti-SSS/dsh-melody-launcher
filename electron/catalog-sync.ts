@@ -6,13 +6,14 @@ import { LAUNCHER_REPOSITORY } from '../src/constants'
 const GITHUB_API_ROOT = 'https://api.github.com'
 const CATALOG_BRANCH = 'main'
 const CATALOG_DIRECTORY = 'catalog/analysis'
-const RECORD_VERSION = 1
+// v2：聚合仓库不再让子模块分析覆盖根仓库的应用加载项，旧共享结果必须重新检测。
+const RECORD_VERSION = 2
 // Git ref names cannot contain spaces, so normalize the requested
 // "plugin update" branch to a valid GitHub branch name.
 const BATCH_BRANCH = 'plugin-update'
 
 interface CatalogRecord {
-  schemaVersion: 1
+  schemaVersion: 2
   repository: string
   defaultBranch: string
   repositoryUpdatedAt: string | null

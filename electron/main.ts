@@ -54,6 +54,7 @@ const events = createRendererEvents(createRendererChannel(getWindow))
 
 interface Services {
   settings: SettingsStore
+  pluginReceiptsPath: string
   runtime: RuntimeController
   installer: Installer
   pluginTrial: PluginTrialManager
@@ -279,9 +280,9 @@ function createServices(): Services {
     },
     installNpmPackage: (request, profileOverride) => installer.installNpmPackage(request, profileOverride),
     remove: (packageName, profileName) => installer.remove(packageName, profileName),
-    readProfile: (dshHome, profileName) => readProfile(dshHome, profileName),
-    togglePlugin: (dshHome, profileName, packageName, enabled) => togglePlugin(dshHome, profileName, packageName, enabled),
-    reorderPlugins: (dshHome, profileName, packageNames) => reorderPlugins(dshHome, profileName, packageNames),
+    readProfile: (dshHome, profileName) => readProfile(dshHome, profileName, pluginReceiptsPath),
+    togglePlugin: (dshHome, profileName, packageName, enabled) => togglePlugin(dshHome, profileName, packageName, enabled, pluginReceiptsPath),
+    reorderPlugins: (dshHome, profileName, packageNames) => reorderPlugins(dshHome, profileName, packageNames, pluginReceiptsPath),
     // raw 整合包导入的技能：从本地 staging 目录全局安装（bundle 目录或 flat 单文件）。
     installSkillLocal: (dshHome, skill) => installSkillFromDirectory(dshHome, skill.name, skill.format, skill.sourceDir),
     installSkill: request => installer.installSkill(request),
@@ -323,7 +324,7 @@ function createServices(): Services {
     .then(current => healCredentialsLock(current.dshHome, path.join(userData, CREDENTIALS_LOCK_DIRNAME)))
     .catch(() => { /* 设置未就绪可忽略，锁会在下次 AI 会话前置处理 */ })
 
-  return { settings, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons, catalogSync }
+  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons, catalogSync }
 }
 
 function openMainWindow(): void {

@@ -41,6 +41,7 @@ export function useAiInstall(onSettled: () => void, showToast: (toast: ToastStat
   const [pendingApproval, setPendingApproval] = useState<AiApprovalRequest | null>(null)
   const [hasSnapshot, setHasSnapshot] = useState(false)
   const [snapshotId, setSnapshotId] = useState<string | null>(null)
+  const [cancelling, setCancelling] = useState(false)
 
   /** 最新 phase，供 start 的收尾判断避开闭包里的过期值。 */
   const statusRef = useRef(status)
@@ -97,6 +98,7 @@ export function useAiInstall(onSettled: () => void, showToast: (toast: ToastStat
         case 'done':
         case 'cancelled':
         case 'error':
+          setCancelling(false)
           setPendingApproval(null)
           setStatus(current => ({ ...current, phase: event.kind, message: event.message }))
           appendLog(event.kind === 'error' ? 'error' : 'log', event.message)
@@ -115,6 +117,7 @@ export function useAiInstall(onSettled: () => void, showToast: (toast: ToastStat
     setPendingApproval(null)
     setSnapshotId(null)
     setHasSnapshot(false)
+    setCancelling(false)
     // 乐观打开对话框；真正的阶段变化由事件驱动。
     setStatus(optimistic)
     try {
@@ -168,8 +171,16 @@ export function useAiInstall(onSettled: () => void, showToast: (toast: ToastStat
   }, [api])
 
   const cancel = useCallback(() => {
-    void api.aiCancel()
-  }, [api])
+    if (cancelling) return
+    setCancelling(true)
+    setStatus(current => ({ ...current, message: '正在停止 AI 任务并清理运行环境…' }))
+    void api.aiCancel().catch(error => {
+      const message = error instanceof Error ? error.message : String(error)
+      setCancelling(false)
+      appendLog('error', `停止任务失败：${message}`)
+      showToast({ kind: 'error', message: `停止 AI 任务失败：${message}` })
+    })
+  }, [api, appendLog, cancelling, showToast])
 
   const rollback = useCallback(async () => {
     const result = await run('ai-rollback', () => api.aiRollback())
@@ -182,6 +193,7 @@ export function useAiInstall(onSettled: () => void, showToast: (toast: ToastStat
     setPendingApproval(null)
     setSnapshotId(null)
     setHasSnapshot(false)
+    setCancelling(false)
     setStatus(IDLE_STATUS)
   }, [])
 
@@ -194,6 +206,7 @@ export function useAiInstall(onSettled: () => void, showToast: (toast: ToastStat
     pendingApproval,
     hasSnapshot,
     snapshotId,
+    cancelling,
     busy,
     active,
     settled,

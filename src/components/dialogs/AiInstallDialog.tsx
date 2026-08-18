@@ -22,6 +22,7 @@ interface AiInstallDialogProps {
   pendingApproval: AiApprovalRequest | null
   hasSnapshot: boolean
   busy: boolean
+  cancelling: boolean
   onApprove: (requestId: string, allow: boolean) => void
   onCancel: () => void
   onRollback: () => void
@@ -41,7 +42,7 @@ function MarkdownLog({ text }: { text: string }) {
   return <div className="ai-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div>
 }
 
-export function AiInstallDialog({ status, logs, pendingApproval, hasSnapshot, busy, onApprove, onCancel, onRollback, onClose }: AiInstallDialogProps) {
+export function AiInstallDialog({ status, logs, pendingApproval, hasSnapshot, busy, cancelling, onApprove, onCancel, onRollback, onClose }: AiInstallDialogProps) {
   const active = status.phase === 'preparing' || status.phase === 'running'
   const settled = status.phase === 'done' || status.phase === 'cancelled' || status.phase === 'error'
   const logEndRef = useRef<HTMLDivElement>(null)
@@ -115,7 +116,10 @@ export function AiInstallDialog({ status, logs, pendingApproval, hasSnapshot, bu
         </div>
         <footer>
           {active && (
-            <button type="button" className="primary-command stop" onClick={onCancel}><OctagonX size={16} />停止</button>
+            <button type="button" className="primary-command stop" onClick={onCancel} disabled={cancelling}>
+              {cancelling ? <LoaderCircle className="spin" size={16} /> : <OctagonX size={16} />}
+              {cancelling ? '正在停止' : '停止'}
+            </button>
           )}
           {settled && (
             <>

@@ -143,6 +143,81 @@ function excludeReplacementHostedPlugins(
   }
 }
 
+function hasPluginComponents(analysis: RepositoryAnalysis | null | undefined): boolean {
+  return Boolean(analysis && ['ready', 'choice', 'dynamic'].includes(analysis.installability))
+}
+
+function hasSkillComponents(analysis: SkillRepositoryAnalysis | null | undefined): boolean {
+  return Boolean(analysis && ['ready', 'choice'].includes(analysis.installability))
+}
+
+function hasApplicationComponents(analysis: ApplicationRepositoryAnalysis | null | undefined): boolean {
+  return Boolean(analysis && ['ready', 'choice', 'unsupported'].includes(analysis.installability))
+}
+
+function hasPresetComponents(analysis: CatalogRepositoryAnalysis['presetAnalysis']): boolean {
+  return Boolean(analysis && analysis.installability === 'ready')
+}
+
+function catalogComponentKinds(analysis: Pick<CatalogRepositoryAnalysis,
+  'pluginAnalysis' | 'skillAnalysis' | 'applicationAnalysis' | 'presetAnalysis'>,
+): CatalogComponentKind[] {
+  const componentKinds: CatalogComponentKind[] = []
+  if (hasPluginComponents(analysis.pluginAnalysis)) componentKinds.push('plugin')
+  if (hasSkillComponents(analysis.skillAnalysis)) componentKinds.push('skill')
+  if (hasApplicationComponents(analysis.applicationAnalysis)) componentKinds.push('application')
+  if (hasPresetComponents(analysis.presetAnalysis)) componentKinds.push('preset')
+  return componentKinds
+}
+
+function catalogKind(componentKinds: CatalogComponentKind[]): CatalogRepositoryAnalysis['kind'] {
+  return componentKinds.length > 1 ? 'hybrid' : componentKinds[0] ?? 'invalid'
+}
+
+/**
+ * 聚合仓库既可以有子模块组件，也可以在根目录声明自己的应用加载项。
+ * 子模块展开只补充组件，绝不能覆盖根仓库已经验证过的启动入口。
+ */
+export function mergeMetaRepositoryAnalysis(
+  root: CatalogRepositoryAnalysis,
+  meta: CatalogRepositoryAnalysis,
+): CatalogRepositoryAnalysis {
+  // 纯 meta-repo 没有根目录组件时保持原对象，避免把无关的常规检测结果混入子模块结果。
+  if (catalogComponentKinds(root).length === 0) return meta
+
+  const pluginAnalysis = hasPluginComponents(meta.pluginAnalysis) ? meta.pluginAnalysis : root.pluginAnalysis
+  const skillAnalysis = hasSkillComponents(meta.skillAnalysis) ? meta.skillAnalysis : root.skillAnalysis
+  const applicationAnalysis = hasApplicationComponents(root.applicationAnalysis)
+    ? root.applicationAnalysis
+    : meta.applicationAnalysis
+  const presetAnalysis = hasPresetComponents(meta.presetAnalysis) ? meta.presetAnalysis : root.presetAnalysis
+  const componentKinds = catalogComponentKinds({
+    pluginAnalysis,
+    skillAnalysis,
+    applicationAnalysis,
+    presetAnalysis,
+  })
+  const kind = catalogKind(componentKinds)
+  const componentSummary = componentKinds.map(component => {
+    if (component === 'plugin') return `${pluginAnalysis?.targets.length ?? 0} 个 Plugin`
+    if (component === 'skill') return `${skillAnalysis?.targets.length ?? 0} 个 Skill`
+    if (component === 'application') return `${applicationAnalysis?.targets.length ?? 0} 个应用加载项`
+    return `${presetAnalysis?.targets.length ?? 0} 个 Agent 预设`
+  })
+
+  return {
+    ...root,
+    kind,
+    componentKinds,
+    summary: `聚合仓库（meta-repo）：根仓库和子模块共检测到 ${componentSummary.join('、')}。`,
+    pluginAnalysis,
+    skillAnalysis,
+    applicationAnalysis,
+    presetAnalysis,
+    warnings: [...new Set([...root.warnings, ...meta.warnings])],
+  }
+}
+
 export function classifyCatalogRepository(
   fullName: string,
   defaultBranch: string,
@@ -176,24 +251,16 @@ export function classifyCatalogRepository(
   if (skillResult.status === 'rejected') warnings.push(failureMessage('Skill', skillResult.reason))
   if (applicationResult.status === 'rejected') warnings.push(failureMessage('应用加载项', applicationResult.reason))
 
-  const isPlugin = pluginAnalysis != null
-    && ['ready', 'choice', 'dynamic'].includes(pluginAnalysis.installability)
-  const isSkill = skillAnalysis != null
-    && ['ready', 'choice'].includes(skillAnalysis.installability)
-  const isApplication = applicationAnalysis != null
-    && ['ready', 'choice', 'unsupported'].includes(applicationAnalysis.installability)
+  const isPlugin = hasPluginComponents(pluginAnalysis)
+  const isSkill = hasSkillComponents(skillAnalysis)
+  const isApplication = hasApplicationComponents(applicationAnalysis)
 
   if (!isPlugin && !isSkill && !isApplication && warnings.length > 0) {
     throw new Error(`仓库类型检测未完成：${warnings.join('；')}`)
   }
 
-  const componentKinds: CatalogComponentKind[] = []
-  if (isPlugin) componentKinds.push('plugin')
-  if (isSkill) componentKinds.push('skill')
-  if (isApplication) componentKinds.push('application')
-  const kind = componentKinds.length > 1
-    ? 'hybrid'
-    : componentKinds[0] ?? 'invalid'
+  const componentKinds = catalogComponentKinds({ pluginAnalysis, skillAnalysis, applicationAnalysis, presetAnalysis: null })
+  const kind = catalogKind(componentKinds)
   const summary = kind === 'hybrid'
     ? `确认包含 ${componentKinds.map(component => component === 'plugin'
       ? `${pluginAnalysis?.targets.length ?? 0} 个 Plugin`

@@ -118,11 +118,11 @@ export function PacksView({
         description="把插件列表、启用状态和加载顺序保存成可复用清单。启用整合包会在当前 Profile 中切换开关与顺序。"
         actions={(
           <>
-            <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy !== null}>
+            <button type="button" className="secondary-button" onClick={onRefresh} disabled={refreshing}>
               {refreshing ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}刷新
             </button>
-            <button type="button" className="secondary-button accent" onClick={onCreate}><PackagePlus size={17} />创建整合包</button>
-            <button type="button" className="primary-command" onClick={onImport}><Download size={17} />导入整合包</button>
+            <button type="button" className="secondary-button accent" onClick={onCreate} disabled={busy !== null}><PackagePlus size={17} />创建整合包</button>
+            <button type="button" className="primary-command" onClick={onImport} disabled={busy !== null}><Download size={17} />导入整合包</button>
           </>
         )}
       />
@@ -134,7 +134,7 @@ export function PacksView({
       </div>
 
       {packs.length === 0 ? (
-        <EmptyPacks onCreate={onCreate} onImport={onImport} />
+        <EmptyPacks onCreate={onCreate} onImport={onImport} disabled={busy !== null} />
       ) : (
         <div className="packs-layout">
           <section className="packs-list-panel" aria-label="整合包列表">
@@ -202,15 +202,15 @@ export function PacksView({
   )
 }
 
-function EmptyPacks({ onCreate, onImport }: { onCreate: () => void; onImport: () => void }) {
+function EmptyPacks({ onCreate, onImport, disabled }: { onCreate: () => void; onImport: () => void; disabled: boolean }) {
   return (
     <div className="empty-state">
       <div className="empty-icon"><Package size={28} /></div>
       <h2>还没有整合包</h2>
       <p>整合包只保存插件清单、启用状态和加载顺序；插件统一安装在当前 Profile，可从这里或左侧菜单快速切换。</p>
       <div className="empty-state-actions">
-        <button type="button" className="primary-command" onClick={onCreate}><PackagePlus size={17} />创建整合包</button>
-        <button type="button" className="secondary-button accent" onClick={onImport}><Download size={17} />导入整合包</button>
+      <button type="button" className="primary-command" onClick={onCreate} disabled={disabled}><PackagePlus size={17} />创建整合包</button>
+      <button type="button" className="secondary-button accent" onClick={onImport} disabled={disabled}><Download size={17} />导入整合包</button>
       </div>
     </div>
   )

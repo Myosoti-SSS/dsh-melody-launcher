@@ -21,6 +21,12 @@ export function reorderProfilePlugins(profile: ProfileState, packageNames: strin
   }
 }
 
+/** 按界面中的完整列表位置，恢复当前已激活插件的实际加载顺序。 */
+export function activeOrderFromDisplay(displayOrder: string[], activePackageNames: string[]): string[] {
+  const active = new Set(activePackageNames)
+  return displayOrder.filter(packageName => active.has(packageName))
+}
+
 /** 在有序列表里把某一项朝一个方向挪一格，越界时返回 null。 */
 export function movePackage(packageNames: string[], packageName: string, direction: -1 | 1): string[] | null {
   const names = [...packageNames]

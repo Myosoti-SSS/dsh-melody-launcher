@@ -1,6 +1,7 @@
 import type { CatalogRepositoryAnalysis } from '../types'
 
-const STORAGE_KEY = 'dsh-launcher.catalog-analysis.v5'
+// v6：聚合仓库会合并根目录的应用加载项与子模块组件；淘汰旧的覆盖式分类缓存。
+const STORAGE_KEY = 'dsh-launcher.catalog-analysis.v6'
 const memoryCache = new Map<string, CatalogCacheEntry>()
 
 export interface CatalogCacheEntry {

@@ -32,9 +32,9 @@ function analysis(repository = 'demo/example'): CatalogRepositoryAnalysis {
   }
 }
 
-function remoteRecord(repositoryUpdatedAt: string): string {
+function remoteRecord(repositoryUpdatedAt: string, schemaVersion = 2): string {
   return Buffer.from(JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion,
     repository: 'demo/example',
     defaultBranch: 'main',
     repositoryUpdatedAt,
@@ -85,6 +85,25 @@ describe('GitHub shared catalog analysis', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
+  it('rescans a prior catalog schema rather than reusing an analysis that can lose root application entries', async () => {
+    const fetchImpl = vi.fn(async () => json({ content: remoteRecord('2026-08-18T00:00:00.000Z', 1) })) as unknown as typeof fetch
+    const analyzeLocal = vi.fn(async () => analysis())
+    const service = createCatalogSyncService({
+      fetchImpl,
+      getAuthStatus: async () => ({ authenticated: false, login: null }),
+    })
+
+    const result = await service.resolve(
+      'demo/example',
+      'main',
+      '2026-08-17T00:00:00.000Z',
+      analyzeLocal,
+    )
+
+    expect(analyzeLocal).toHaveBeenCalledOnce()
+    expect(result.sync).toMatchObject({ source: 'local', state: 'not-authenticated' })
+  })
+
   it('submits a missing record through the user fork and opens a pull request', async () => {
     let uploaded: Record<string, unknown> | null = null
     const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -132,7 +151,7 @@ describe('GitHub shared catalog analysis', () => {
     })
     const record = JSON.parse(Buffer.from(String(uploadedBody.content), 'base64').toString('utf8'))
     expect(record).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       repository: 'demo/example',
       repositoryUpdatedAt: '2026-08-18T00:00:00.000Z',
       submittedBy: 'contributor',
