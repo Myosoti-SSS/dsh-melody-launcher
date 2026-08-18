@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "repository": "addxing/function-testing",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-14T09:16:02Z",
+  "analyzedAt": "2026-08-18T02:38:05.880Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "addxing/function-testing",
+    "defaultBranch": "main",
+    "kind": "hybrid",
+    "componentKinds": [
+      "plugin",
+      "skill"
+    ],
+    "summary": "确认包含 1 个 Plugin、1 个 Skill。",
+    "pluginAnalysis": {
+      "repository": "addxing/function-testing",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "检测到可安装的 dsh-skill-function-testing。",
+      "targets": [
+        {
+          "id": "dsh-skill-function-testing:.",
+          "packageName": "dsh-skill-function-testing",
+          "version": "0.1.0",
+          "source": "github",
+          "profileName": "web",
+          "platform": "unknown",
+          "subdirectory": null,
+          "commit": "e8de81a2bcd0a7058fed8fae2955d1cfda660112",
+          "requiresBuild": false,
+          "buildScripts": [],
+          "nodeRange": null
+        }
+      ]
+    },
+    "skillAnalysis": {
+      "repository": "addxing/function-testing",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "确认是 DSH Skill：function-testing",
+      "targets": [
+        {
+          "id": "function-testing:SKILL.md",
+          "name": "function-testing",
+          "description": "根据需求文档（PRD）、Git 提交记录或用户故事生成功能测试用例，输出 Excel 报告。",
+          "sourcePath": "SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        }
+      ]
+    },
+    "applicationAnalysis": {
+      "repository": "addxing/function-testing",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
