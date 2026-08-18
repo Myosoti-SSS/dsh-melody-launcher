@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "repository": "xiaobright/dsh-anchored-standard",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-18T02:30:11Z",
+  "analyzedAt": "2026-08-18T02:38:39.072Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "xiaobright/dsh-anchored-standard",
+    "defaultBranch": "main",
+    "kind": "invalid",
+    "componentKinds": [],
+    "summary": "没有找到符合 DSH 规范的 Plugin、Skill 或应用加载项。",
+    "pluginAnalysis": {
+      "repository": "xiaobright/dsh-anchored-standard",
+      "defaultBranch": "main",
+      "installability": "application",
+      "summary": "这是完整应用或源码工作区，仓库根目录没有可安装的 DSH Bundle。",
+      "targets": []
+    },
+    "skillAnalysis": {
+      "repository": "xiaobright/dsh-anchored-standard",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到符合 DSH 规范的 SKILL.md 或单文件 Skill。",
+      "targets": []
+    },
+    "applicationAnalysis": {
+      "repository": "xiaobright/dsh-anchored-standard",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
