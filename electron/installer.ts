@@ -695,15 +695,18 @@ export function createInstaller(options: InstallerOptions): Installer {
           specifier = `github:${fullName}#${target.commit}`
         } else if (target.source === 'release') {
           // 源码 pin 不一定带构建产物，Release tgz 是官方安装包：下载后 `dsh plugin add file:<tgz>`。
+          // tgz 会作为 file: 依赖写入 Profile package.json，必须放在持久目录且不能删除，
+          // 否则后续 pnpm 操作会因找不到临时文件而失败（ENOENT）。
           if (!target.tarballUrl) throw new Error('Release 插件缺少下载地址。')
-          const tgzPath = path.join(options.pluginSourceRoot, `.release-${process.pid}-${Date.now()}.tgz`)
+          const safePackageName = target.packageName.replace(/[^a-z0-9._-]+/gi, '-')
+          const tgzName = `${safePackageName}-${target.version ?? target.commit}.tgz`
+          const tgzPath = path.join(options.pluginSourceRoot, tgzName)
           await mkdir(options.pluginSourceRoot, { recursive: true })
           emit({ repository: fullName, kind: 'plugin', phase: 'downloading', percent: 30, message: '正在下载 Release 安装包' })
           const asset = options.githubFetch
             ? await downloadReleaseAsset(target.tarballUrl, MAX_RELEASE_BYTES, undefined, options.githubFetch)
             : await downloadReleaseAsset(target.tarballUrl, MAX_RELEASE_BYTES)
-          await writeFile(tgzPath, asset, { flag: 'wx' })
-          temporaryArtifacts.push(tgzPath)
+          await writeFile(tgzPath, asset)
           specifier = `file:${tgzPath}`
         } else if (target.source === 'local-directory') {
           specifier = `file:${validateLocalPluginDirectory(target.localDirectory)}`

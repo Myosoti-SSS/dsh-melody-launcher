@@ -137,6 +137,25 @@ Return to the launch page and click **"Start DSH"**. Once the service is ready, 
 
 ---
 
+## Install via npm
+
+If you already have Node.js installed, you can run the launcher directly from npm:
+
+```powershell
+# Run directly without installing
+npx dsh-melody-launcher
+
+# Or install globally and run
+npm install -g dsh-melody-launcher
+dsh-melody-launcher
+```
+
+> [!NOTE]
+> This installs the Electron runtime through npm; the first launch may download the Electron binary.
+> Currently Windows only.
+
+---
+
 ## User Guide
 
 The launcher has three main views:

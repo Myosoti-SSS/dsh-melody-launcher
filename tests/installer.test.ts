@@ -563,7 +563,7 @@ describe('installPluginTarget release 源（meta-repo tgz 直链）', () => {
     }
   }
 
-  it('请求带 tarballUrl 时下载官方 tgz 并用 `add file:<tgz>` 安装，装完删除临时包', async () => {
+  it('请求带 tarballUrl 时下载官方 tgz 并用 `add file:<tgz>` 安装，tgz 持久保留', async () => {
     vi.mocked(analyzeRepository).mockResolvedValue({
       repository: 'yjh051108/dsh-super-injector',
       defaultBranch: 'main',
@@ -593,8 +593,8 @@ describe('installPluginTarget release 源（meta-repo tgz 直链）', () => {
     expect(fileSpecifier!.endsWith('.tgz')).toBe(true)
     const tgzPath = fileSpecifier!.slice('file:'.length)
     expect(tgzPath.startsWith(path.join(temporaryDirectory, 'plugin-source'))).toBe(true)
-    // 临时 tgz 装完即删（finally 清理）。
-    await expect(access(tgzPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    // tgz 是 file: 依赖的持久来源，装完后必须保留，否则后续 pnpm 操作会 ENOENT。
+    await expect(access(tgzPath)).resolves.toBeUndefined()
     expect(recordPluginInstall).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ packageName: 'demo-plugin', source: 'release' }),
