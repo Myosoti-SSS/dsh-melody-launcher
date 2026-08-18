@@ -29,6 +29,15 @@ export async function approveIgnoredGitHubBuilds(
 }
 
 export async function approveBuildKeys(workspacePath: string, buildKeys: string[]): Promise<string[]> {
+  return setBuildKeys(workspacePath, buildKeys, true)
+}
+
+/** 将清单明确声明不需要的可选原生构建记录为 false，避免 pnpm 每次重复阻塞。 */
+export async function denyBuildKeys(workspacePath: string, buildKeys: string[]): Promise<string[]> {
+  return setBuildKeys(workspacePath, buildKeys, false)
+}
+
+async function setBuildKeys(workspacePath: string, buildKeys: string[], allowed: boolean): Promise<string[]> {
   const matchingKeys = [...new Set(buildKeys)].filter(key => BUILD_KEY_VALID_PATTERN.test(key))
   if (matchingKeys.length === 0 || matchingKeys.length > 64) return []
 
@@ -44,9 +53,9 @@ export async function approveBuildKeys(workspacePath: string, buildKeys: string[
   const allowBuilds = currentAllowBuilds && typeof currentAllowBuilds === 'object' && !Array.isArray(currentAllowBuilds)
     ? currentAllowBuilds as Record<string, unknown>
     : {}
-  const changed = matchingKeys.filter(key => allowBuilds[key] !== true)
+  const changed = matchingKeys.filter(key => allowBuilds[key] !== allowed)
   if (changed.length === 0) return []
-  for (const key of changed) allowBuilds[key] = true
+  for (const key of changed) allowBuilds[key] = allowed
   workspace.allowBuilds = allowBuilds
 
   const temporaryPath = `${workspacePath}.dsh-launcher.tmp`

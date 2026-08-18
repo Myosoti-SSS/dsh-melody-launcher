@@ -3,7 +3,9 @@ import path from 'node:path'
 import type {
   GitHubAuthStatus,
   GitHubDeviceAuthorization,
+  GitHubPullRequestSummary,
 } from '../src/types'
+import { LAUNCHER_REPOSITORY } from '../src/constants'
 
 const GITHUB_API_ROOT = 'https://api.github.com'
 const DEVICE_CODE_ENDPOINT = 'https://github.com/login/device/code'
@@ -61,6 +63,20 @@ interface PendingDeviceAuthorization {
   cancelled: boolean
 }
 
+interface GitHubIssueSearchItem {
+  number?: unknown
+  title?: unknown
+  html_url?: unknown
+  state?: unknown
+  draft?: unknown
+  user?: { login?: unknown }
+  created_at?: unknown
+  updated_at?: unknown
+  pull_request?: { merged_at?: unknown }
+  head?: { ref?: unknown }
+  base?: { ref?: unknown }
+}
+
 export interface GitHubTokenCipher {
   isAvailable(): boolean
   encrypt(value: string): Buffer
@@ -83,6 +99,9 @@ export interface GitHubAuthService {
   completeDeviceLogin(): Promise<GitHubAuthStatus>
   cancelDeviceLogin(): void
   logout(): Promise<GitHubAuthStatus>
+  listRecentPullRequests(): Promise<GitHubPullRequestSummary[]>
+  getStarStatus(repository: string): Promise<boolean>
+  setStar(repository: string, starred: boolean): Promise<boolean>
   fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>
 }
 
@@ -273,6 +292,18 @@ export function createGitHubAuthService(options: GitHubAuthOptions): GitHubAuthS
     return response
   }
 
+  const requireSession = async (): Promise<GitHubStoredSession> => {
+    const current = await load()
+    if (!current) throw new Error('请先登录 GitHub。')
+    return current
+  }
+
+  const parseRepository = (value: string): { owner: string; repo: string } => {
+    const match = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/.exec(value.trim())
+    if (!match) throw new Error('GitHub 仓库名称无效。')
+    return { owner: match[1], repo: match[2] }
+  }
+
   return {
     async getStatus() {
       const current = await load()
@@ -374,6 +405,68 @@ export function createGitHubAuthService(options: GitHubAuthOptions): GitHubAuthS
     async logout() {
       await clear()
       return unauthenticatedStatus(oauthAvailable)
+    },
+
+    async listRecentPullRequests() {
+      const current = await requireSession()
+      const query = new URLSearchParams({
+        q: `repo:${LAUNCHER_REPOSITORY} is:pr author:${current.login}`,
+        sort: 'updated',
+        order: 'desc',
+        per_page: '30',
+      })
+      const response = await authorizedFetch(`${GITHUB_API_ROOT}/search/issues?${query.toString()}`, {
+        headers: { Accept: 'application/vnd.github+json' },
+      })
+      const body = await response.json().catch(() => null) as { items?: GitHubIssueSearchItem[] } | null
+      if (!response.ok) throw new Error(`读取 Melody 提交失败（HTTP ${response.status}）。`)
+      return (body?.items ?? []).flatMap((item): GitHubPullRequestSummary[] => {
+        const number = Number(item.number)
+        const title = optionalString(item.title)
+        const url = optionalString(item.html_url)
+        const author = optionalString(item.user?.login)
+        const createdAt = optionalString(item.created_at)
+        const updatedAt = optionalString(item.updated_at)
+        if (!Number.isSafeInteger(number) || !title || !url || !author || !createdAt || !updatedAt) return []
+        return [{
+          number,
+          title,
+          url,
+          state: item.state === 'open' ? 'open' : 'closed',
+          draft: item.draft === true,
+          author,
+          createdAt,
+          updatedAt,
+          mergedAt: optionalString(item.pull_request?.merged_at),
+          headBranch: optionalString(item.head?.ref) ?? '',
+          baseBranch: optionalString(item.base?.ref) ?? '',
+        }]
+      })
+    },
+
+    async getStarStatus(repository) {
+      const { owner, repo } = parseRepository(repository)
+      await requireSession()
+      const response = await authorizedFetch(`${GITHUB_API_ROOT}/user/starred/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {
+        headers: { Accept: 'application/vnd.github+json' },
+      })
+      if (response.status === 204) return true
+      if (response.status === 404) return false
+      throw new Error(`读取仓库星标状态失败（HTTP ${response.status}）。`)
+    },
+
+    async setStar(repository, starred) {
+      const { owner, repo } = parseRepository(repository)
+      await requireSession()
+      const response = await authorizedFetch(`${GITHUB_API_ROOT}/user/starred/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {
+        method: starred ? 'PUT' : 'DELETE',
+        headers: { Accept: 'application/vnd.github+json' },
+        ...(starred ? { body: '' } : {}),
+      })
+      if (!response.ok && response.status !== 204) {
+        throw new Error(`${starred ? '添加' : '取消'}仓库星标失败（HTTP ${response.status}）。`)
+      }
+      return starred
     },
 
     fetch: authorizedFetch,

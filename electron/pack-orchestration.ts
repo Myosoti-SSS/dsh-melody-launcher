@@ -3,7 +3,8 @@
  *
  * 功能定位：串行批量安装执行器 + 结果汇总 + 启动前置守卫。对齐「每包 = 独立
  * profile、单项失败继续」的语义：DSH profile 切换、插件安装细节由调用方
- * （pack.ts / installer.ts）注入为每个 InstallableItem 的 `install` 闭包。
+ * （pack.ts / installer.ts）注入为每个 InstallableItem 的 `install` 闭包；
+ * 整合包本身只是一份清单，资源安装目标由调用方绑定到共享 Profile。
  *
  * 约定：
  *   - runSerialInstall 严格按数组顺序串行 await 每项；取消只在「项与项之间」

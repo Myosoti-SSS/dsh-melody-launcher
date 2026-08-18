@@ -225,10 +225,30 @@ export function DiscoverView({
   const [analysisProgress, setAnalysisProgress] = useState<Record<string, CatalogAnalysisProgress>>({})
   const [batchScan, setBatchScan] = useState<BatchScanState | null>(null)
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
+  const [starredRepositories, setStarredRepositories] = useState<Record<string, boolean>>({})
+  const [starringRepository, setStarringRepository] = useState<string | null>(null)
   const [targetDialog, setTargetDialog] = useState<{
     repo: CatalogRepositoryResult
     analysis: CatalogRepositoryAnalysis
   } | null>(null)
+
+  const toggleStar = async (repository: CatalogRepositoryResult) => {
+    if (starringRepository) return
+    setStarringRepository(repository.fullName)
+    try {
+      const key = repository.fullName.toLowerCase()
+      const current = starredRepositories[key] ?? await api.getGitHubStarStatus(repository.fullName)
+      const next = await api.setGitHubStar(repository.fullName, !current)
+      setStarredRepositories(previous => ({ ...previous, [key]: next }))
+      setRepositories(previous => previous.map(item => item.fullName.toLowerCase() === key
+        ? { ...item, stars: Math.max(0, item.stars + (next ? 1 : -1)) }
+        : item))
+    } catch (error) {
+      onError(errorText(error))
+    } finally {
+      setStarringRepository(null)
+    }
+  }
   const [importOpen, setImportOpen] = useState(false)
   const [importing, setImporting] = useState(false)
   /** 「一键安装全部」整轮进行中（覆盖组件间切换的 busy 空档）。 */
@@ -311,19 +331,10 @@ export function DiscoverView({
   const inspect = async (repo: CatalogRepositoryResult) => {
     if (repo.kind === 'dsh') return
     const cached = readCatalogAnalysisCache(repo.fullName, repo.defaultBranch)
-    if (cached) {
-      onAnalysis(repo.fullName, cached)
-      if (cached.kind === 'hybrid'
-        || pluginTargets(cached).length + skillTargets(cached).length + applicationTargets(cached).length + presetTargets(cached).length > 1) {
-        setTargetDialog({ repo, analysis: cached })
-      }
-      return
-    }
-
     resetAnalysisProgress(repo.fullName)
     setRepositoryChecking(repo.fullName, true)
     try {
-      const analysis = await api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch)
+      const analysis = await api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch, repo.updatedAt)
       writeCatalogAnalysisCache(repo.fullName, repo.defaultBranch, analysis)
       onAnalysis(repo.fullName, analysis)
       if (analysis.kind === 'hybrid'
@@ -331,7 +342,12 @@ export function DiscoverView({
         setTargetDialog({ repo, analysis })
       }
     } catch (error) {
-      onError(errorText(error))
+      if (cached) {
+        onAnalysis(repo.fullName, cached)
+        onError(`GitHub 共享目录和在线检测暂时不可用，已保留本地缓存：${errorText(error)}`)
+      } else {
+        onError(errorText(error))
+      }
     } finally {
       setRepositoryChecking(repo.fullName, false)
     }
@@ -341,21 +357,6 @@ export function DiscoverView({
     const candidates = repositories.filter(repo => repo.kind !== 'dsh')
     if (candidates.length === 0 || batchRunning) return
 
-    // 已缓存过的仓库直接使用缓存结果，不再请求 GitHub；只检查未缓存的仓库。
-    const uncached: CatalogRepositoryResult[] = []
-    for (const repo of candidates) {
-      const cached = readCatalogAnalysisCache(repo.fullName, repo.defaultBranch)
-      if (cached) {
-        onAnalysis(repo.fullName, cached)
-      } else {
-        uncached.push(repo)
-      }
-    }
-    if (uncached.length === 0) {
-      setBatchScan({ phase: 'complete', total: candidates.length, completed: candidates.length, available: 0, failed: 0 })
-      return
-    }
-
     const runId = batchRunRef.current + 1
     batchRunRef.current = runId
     let completed = 0
@@ -364,15 +365,30 @@ export function DiscoverView({
     setTargetDialog(null)
     setAnalysisProgress(current => {
       const next = { ...current }
-      for (const repo of uncached) delete next[repo.fullName]
+      for (const repo of candidates) delete next[repo.fullName]
       return next
     })
-    setCheckingRepositories(new Set(uncached.map(repo => repo.fullName)))
-    setBatchScan({ phase: 'running', total: uncached.length, completed, available, failed })
+    setCheckingRepositories(new Set(candidates.map(repo => repo.fullName)))
+    setBatchScan({ phase: 'running', total: candidates.length, completed, available, failed })
 
     await analyzeCatalogPageInParallel(
-      uncached,
-      repo => api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch),
+      candidates,
+      async repo => {
+        try {
+          return await api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch, repo.updatedAt)
+        } catch (error) {
+          const cached = readCatalogAnalysisCache(repo.fullName, repo.defaultBranch)
+          if (!cached) throw error
+          return {
+            ...cached,
+            sync: {
+              source: 'local',
+              state: 'unavailable',
+              message: 'GitHub 共享目录和在线检测不可用，已使用本地缓存。',
+            },
+          }
+        }
+      },
       (outcome, settledCount) => {
         if (batchRunRef.current !== runId) return
         completed = settledCount
@@ -385,7 +401,7 @@ export function DiscoverView({
           failed += 1
         }
         setRepositoryChecking(outcome.repository.fullName, false)
-        setBatchScan({ phase: 'running', total: uncached.length, completed, available, failed })
+        setBatchScan({ phase: 'running', total: candidates.length, completed, available, failed })
       },
     )
     if (batchRunRef.current !== runId) return
@@ -749,6 +765,14 @@ export function DiscoverView({
                   {analysis && <div className={`repository-analysis-note ${analysis.kind}`}>
                     {analysis.summary}
                     {analysis.warnings.map(warning => <span className="analysis-warning" key={warning}>{warning}</span>)}
+                    {analysis.sync && (
+                      <span className={`analysis-sync ${analysis.sync.state}`}>
+                        {analysis.sync.message}
+                        {analysis.sync.pullRequestUrl && (
+                          <button type="button" onClick={() => onOpenRepository(analysis.sync!.pullRequestUrl!)}>查看 PR</button>
+                        )}
+                      </span>
+                    )}
                   </div>}
                   <div className="topic-list">
                     {repo.candidateTypes.map(type => <span className="candidate-topic" key={type}>{type === 'plugin' ? 'dsh-plugin 候选' : type === 'skill' ? 'dsh-skill 候选' : 'dsh-app 候选'}</span>)}
@@ -758,7 +782,17 @@ export function DiscoverView({
               </div>
               <div className="language-cell"><i className={`language-dot lang-${(repo.language ?? 'other').toLowerCase()}`} />{repo.language ?? '其他'}</div>
               <div className="activity-cell">
-                <span><Star size={15} fill="currentColor" />{formatStars(repo.stars)}</span>
+                <button
+                  type="button"
+                  className={`repo-star-button ${starredRepositories[repo.fullName.toLowerCase()] ? 'starred' : ''}`}
+                  disabled={starringRepository === repo.fullName}
+                  title={starredRepositories[repo.fullName.toLowerCase()] ? '取消 GitHub 星标' : '添加 GitHub 星标'}
+                  aria-label={starredRepositories[repo.fullName.toLowerCase()] ? `取消 ${repo.fullName} 的 GitHub 星标` : `给 ${repo.fullName} 添加 GitHub 星标`}
+                  onClick={() => void toggleStar(repo)}
+                >
+                  {starringRepository === repo.fullName ? <LoaderCircle className="spin" size={15} /> : <Star size={15} fill={starredRepositories[repo.fullName.toLowerCase()] ? 'currentColor' : 'none'} />}
+                  {formatStars(repo.stars)}
+                </button>
                 <small>更新于 {formatRelativeTime(repo.updatedAt)}</small>
                 {repo.sizeKb != null && repo.sizeKb > 0 && <small>仓库大小 {formatBytes(repo.sizeKb * 1024)}</small>}
               </div>

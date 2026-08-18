@@ -15,7 +15,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { PackInstalledApplication, PackInstalledPlugin, PackInstalledPreset, PackInstalledSkill, PackSource, PackStatus } from '../src/types'
 
-/** 注册表里的一条整合包记录。id = pack-<safeName>，也是 DSH profile 名。 */
+/** 注册表里的一条整合包记录。id = pack-<safeName>，只对应本地清单，不是 DSH profile 名。 */
 export interface PackRecord {
   id: string
   name: string
@@ -102,17 +102,17 @@ export async function removePackRecord(registryPath: string, packId: string): Pr
 }
 
 /**
- * 把注册表记录映射为渲染层 `PackStatus`。`enabled` 表示该整合包是否就是
- * 当前激活的 DSH profile（profile 名与 pack id 相同）。
+ * 把注册表记录映射为渲染层 `PackStatus`。`enabled` 表示该整合包清单是否
+ * 是当前选中的清单；实际 DSH Profile 始终由设置中的 profileName 决定。
  */
-export function toPackStatus(record: PackRecord, currentProfile: string): PackStatus {
+export function toPackStatus(record: PackRecord, activePackId: string | null | undefined): PackStatus {
   return {
     id: record.id,
     name: record.name,
     description: record.description,
     version: record.version,
     source: record.source,
-    enabled: record.id === currentProfile,
+    enabled: record.id === activePackId,
     state: record.state,
     plugins: record.plugins,
     skills: record.skills,
