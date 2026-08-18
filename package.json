@@ -1,7 +1,7 @@
 {
-  "name": "dsh-melody-launcher",
-  "version": "0.2.3",
-  "private": false,
+  "name": "dsh-launcher",
+  "version": "0.2.4",
+  "private": true,
   "description": "A local desktop launcher and plugin organizer for DeepSeek Harness.",
   "keywords": [
     "dsh",
@@ -25,19 +25,8 @@
   ],
   "type": "module",
   "main": "dist-electron/main.js",
-  "bin": {
-    "dsh-melody-launcher": "./bin/dsh-melody-launcher.cjs"
-  },
-  "files": [
-    "dist/**/*",
-    "dist-electron/**/*",
-    "bin/**/*",
-    "README.md",
-    "README.en.md"
-  ],
   "scripts": {
     "dev": "vite",
-    "start": "electron .",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "preview": "vite preview --host 127.0.0.1",
@@ -45,7 +34,6 @@
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
-    "electron": "^43.4.0",
     "lucide-react": "^1.31.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -63,6 +51,7 @@
     "@types/yauzl": "^3.4.0",
     "@types/yazl": "^3.3.1",
     "@vitejs/plugin-react": "^6.0.5",
+    "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
     "jsdom": "^30.0.1",
     "typescript": "^7.0.2",
