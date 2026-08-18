@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 1,
+  "repository": "hackerFish/awesome-dsh-skills",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-17T17:44:31Z",
+  "analyzedAt": "2026-08-18T02:37:43.694Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "hackerFish/awesome-dsh-skills",
+    "defaultBranch": "main",
+    "kind": "skill",
+    "componentKinds": [
+      "skill"
+    ],
+    "summary": "确认包含 15 个有效 DSH Skills。",
+    "pluginAnalysis": {
+      "repository": "hackerFish/awesome-dsh-skills",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到同时包含 package.json、dsh.bundle.patch 和对应补丁文件的插件组件。",
+      "targets": []
+    },
+    "skillAnalysis": {
+      "repository": "hackerFish/awesome-dsh-skills",
+      "defaultBranch": "main",
+      "installability": "choice",
+      "summary": "确认包含 15 个有效 DSH Skills。",
+      "targets": [
+        {
+          "id": "dsh-changelog:skills/dsh-changelog/SKILL.md",
+          "name": "dsh-changelog",
+          "description": "维护版本变更记录时使用：遵循 Keep a Changelog 约定，与语义化版本联动。",
+          "sourcePath": "skills/dsh-changelog/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-chinese-docs:skills/dsh-chinese-docs/SKILL.md",
+          "name": "dsh-chinese-docs",
+          "description": "撰写中文技术文档时使用：术语、排版、代码块与引用规范。",
+          "sourcePath": "skills/dsh-chinese-docs/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-code-review:skills/dsh-code-review/SKILL.md",
+          "name": "dsh-code-review",
+          "description": "审查代码改动时使用：按六维清单检查，输出结构化审查报告。",
+          "sourcePath": "skills/dsh-code-review/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-debug-session:skills/dsh-debug-session/SKILL.md",
+          "name": "dsh-debug-session",
+          "description": "排查 DSH 启动失败、插件不生效或会话异常时使用：按序收集信息、二分定位、备份回滚。",
+          "sourcePath": "skills/dsh-debug-session/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-dependency-audit:skills/dsh-dependency-audit/SKILL.md",
+          "name": "dsh-dependency-audit",
+          "description": "升级或审查项目依赖时使用：审计安全告警、控制安装脚本风险、制定升级回滚预案。",
+          "sourcePath": "skills/dsh-dependency-audit/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-doc-sync:skills/dsh-doc-sync/SKILL.md",
+          "name": "dsh-doc-sync",
+          "description": "改动代码后使用：同步 README、CHANGELOG、版本号与示例，避免文档漂移。",
+          "sourcePath": "skills/dsh-doc-sync/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-git-commit:skills/dsh-git-commit/SKILL.md",
+          "name": "dsh-git-commit",
+          "description": "提交代码时使用：按约定式提交写 commit message，并在提交前做最小自检。",
+          "sourcePath": "skills/dsh-git-commit/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-office-artifacts:skills/dsh-office-artifacts/SKILL.md",
+          "name": "dsh-office-artifacts",
+          "description": "Create, repair, transform, or verify XLSX, DOCX, PPTX, and PDF deliverables with format-aware tools and reopen or render checks.",
+          "sourcePath": "skills/dsh-office-artifacts/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-plugin-dev:skills/dsh-plugin-dev/SKILL.md",
+          "name": "dsh-plugin-dev",
+          "description": "开发或调试 DeepSeek Harness 插件时使用：按已验证的结构编写 bundle、本地调试、发布与收录。",
+          "sourcePath": "skills/dsh-plugin-dev/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-pr-review:skills/dsh-pr-review/SKILL.md",
+          "name": "dsh-pr-review",
+          "description": "审查 pull request 时使用：单一目的检查、结构化反馈、对事不对人。",
+          "sourcePath": "skills/dsh-pr-review/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-refactor-safe:skills/dsh-refactor-safe/SKILL.md",
+          "name": "dsh-refactor-safe",
+          "description": "重构代码时使用：先立测试基线，小步原子提交，保持行为不变。",
+          "sourcePath": "skills/dsh-refactor-safe/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-skill-adapter:skills/dsh-skill-adapter/SKILL.md",
+          "name": "dsh-skill-adapter",
+          "description": "Convert a public portable SKILL.md into a DSH-compatible skill with verified discovery paths, tool mapping, provenance checks, and safe fallbacks.",
+          "sourcePath": "skills/dsh-skill-adapter/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-task-breakdown:skills/dsh-task-breakdown/SKILL.md",
+          "name": "dsh-task-breakdown",
+          "description": "接手复杂任务时使用：拆解为可验证的子任务、明确验收标准、防止范围蔓延。",
+          "sourcePath": "skills/dsh-task-breakdown/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-test-first:skills/dsh-test-first/SKILL.md",
+          "name": "dsh-test-first",
+          "description": "修复 bug 或实现新功能时使用：先写失败测试，再最小实现，最后重构。",
+          "sourcePath": "skills/dsh-test-first/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "dsh-webapp-testing:skills/dsh-webapp-testing/SKILL.md",
+          "name": "dsh-webapp-testing",
+          "description": "Verify a local web application's rendered browser behavior with console, network, server, and focused regression-test evidence.",
+          "sourcePath": "skills/dsh-webapp-testing/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        }
+      ]
+    },
+    "applicationAnalysis": {
+      "repository": "hackerFish/awesome-dsh-skills",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
