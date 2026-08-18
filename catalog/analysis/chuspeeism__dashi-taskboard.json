@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "repository": "chuspeeism/dashi-taskboard",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-18T02:22:26Z",
+  "analyzedAt": "2026-08-18T02:39:05.636Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "chuspeeism/dashi-taskboard",
+    "defaultBranch": "main",
+    "kind": "skill",
+    "componentKinds": [
+      "skill"
+    ],
+    "summary": "确认是 DSH Skill：manage-taskboard",
+    "pluginAnalysis": {
+      "repository": "chuspeeism/dashi-taskboard",
+      "defaultBranch": "main",
+      "installability": "application",
+      "summary": "这是完整应用或源码工作区，仓库根目录没有可安装的 DSH Bundle。",
+      "targets": []
+    },
+    "skillAnalysis": {
+      "repository": "chuspeeism/dashi-taskboard",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "确认是 DSH Skill：manage-taskboard",
+      "targets": [
+        {
+          "id": "manage-taskboard:skills/manage-taskboard/SKILL.md",
+          "name": "manage-taskboard",
+          "description": "Manage Codex Taskboard / e-taskboard work with taskctl. Use for taskboard issue IDs, status sync, comments, or taskctl cloud setup—not for unrelated product docs.",
+          "sourcePath": "skills/manage-taskboard/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        }
+      ]
+    },
+    "applicationAnalysis": {
+      "repository": "chuspeeism/dashi-taskboard",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
