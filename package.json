@@ -3,6 +3,26 @@
   "version": "0.2.1",
   "private": false,
   "description": "A local desktop launcher and plugin organizer for DeepSeek Harness.",
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "harness",
+    "launcher",
+    "electron",
+    "plugin",
+    "modpack"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rirko/dsh-melody-launcher.git"
+  },
+  "homepage": "https://github.com/rirko/dsh-melody-launcher#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "win32"
+  ],
   "type": "module",
   "main": "dist-electron/main.js",
   "bin": {

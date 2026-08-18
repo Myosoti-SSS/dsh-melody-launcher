@@ -137,6 +137,25 @@
 
 ---
 
+## 通过 npm 安装
+
+如果你已经安装了 Node.js，也可以通过 npm 直接运行启动器：
+
+```powershell
+# 直接运行，不需要先安装
+npx dsh-melody-launcher
+
+# 或全局安装后运行
+npm install -g dsh-melody-launcher
+dsh-melody-launcher
+```
+
+> [!NOTE]
+> 该方式会通过 npm 安装 Electron 运行时，首次启动可能需要下载 Electron 二进制。
+> 目前仅支持 Windows。
+
+---
+
 ## 使用指南
 
 启动器有三个主要视图：
