@@ -97,6 +97,53 @@ describe('managed DSH installation', () => {
     })
   })
 
+  it('detects a pnpm global DSH installation from PNPM_HOME without PATH', async () => {
+    const pnpmHome = path.join(runtimeRoot, 'pnpm-home')
+    const executable = path.join(pnpmHome, process.platform === 'win32' ? 'dsh.cmd' : 'dsh')
+    const packageDirectory = path.join(pnpmHome, 'global', '5', 'node_modules', '@deepseek-ai', 'dsh')
+    await mkdir(packageDirectory, { recursive: true })
+    await writeFile(executable, 'dsh', 'utf8')
+    await writeFile(path.join(packageDirectory, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '2.1.0' }), 'utf8')
+
+    await expect(findInstalledDsh({
+      managedRoot: path.join(runtimeRoot, 'missing-managed'),
+      environment: {
+        PATH: path.join(runtimeRoot, 'system32-only'),
+        PNPM_HOME: pnpmHome,
+        ProgramFiles: path.join(runtimeRoot, 'missing-program-files'),
+      },
+    })).resolves.toEqual({
+      installed: true,
+      version: '2.1.0',
+      executable,
+      source: 'system',
+    })
+  })
+
+  it.runIf(process.platform === 'win32')('detects the default Windows pnpm home without PATH', async () => {
+    const localAppData = path.join(runtimeRoot, 'local-appdata')
+    const pnpmHome = path.join(localAppData, 'pnpm')
+    const executable = path.join(pnpmHome, 'dsh.cmd')
+    const packageDirectory = path.join(pnpmHome, 'global', '5', 'node_modules', '@deepseek-ai', 'dsh')
+    await mkdir(packageDirectory, { recursive: true })
+    await writeFile(executable, 'dsh', 'utf8')
+    await writeFile(path.join(packageDirectory, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '2.2.0' }), 'utf8')
+
+    await expect(findInstalledDsh({
+      managedRoot: path.join(runtimeRoot, 'missing-managed'),
+      environment: {
+        PATH: path.join(runtimeRoot, 'system32-only'),
+        LOCALAPPDATA: localAppData,
+        ProgramFiles: path.join(runtimeRoot, 'missing-program-files'),
+      },
+    })).resolves.toEqual({
+      installed: true,
+      version: '2.2.0',
+      executable,
+      source: 'system',
+    })
+  })
+
   it('ignores unrelated executables named dsh', async () => {
     const systemRoot = path.join(runtimeRoot, 'unrelated-bin')
     const executable = path.join(systemRoot, process.platform === 'win32' ? 'dsh.cmd' : 'dsh')
