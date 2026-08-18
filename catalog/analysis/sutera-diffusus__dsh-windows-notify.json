@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "repository": "Sutera-Diffusus/dsh-windows-notify",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-16T16:56:39Z",
+  "analyzedAt": "2026-08-18T02:38:56.872Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "Sutera-Diffusus/dsh-windows-notify",
+    "defaultBranch": "main",
+    "kind": "plugin",
+    "componentKinds": [
+      "plugin"
+    ],
+    "summary": "检测到可安装的 dsh-windows-notify。",
+    "pluginAnalysis": {
+      "repository": "Sutera-Diffusus/dsh-windows-notify",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "检测到可安装的 dsh-windows-notify。",
+      "targets": [
+        {
+          "id": "dsh-windows-notify:.",
+          "packageName": "dsh-windows-notify",
+          "version": "1.1.1",
+          "source": "github",
+          "profileName": "web",
+          "platform": "web",
+          "subdirectory": null,
+          "commit": "42c3ae80e1beac7516e8678b3dd449c2f0f55e25",
+          "requiresBuild": false,
+          "buildScripts": [],
+          "nodeRange": null
+        }
+      ]
+    },
+    "skillAnalysis": {
+      "repository": "Sutera-Diffusus/dsh-windows-notify",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到符合 DSH 规范的 SKILL.md 或单文件 Skill。",
+      "targets": []
+    },
+    "applicationAnalysis": {
+      "repository": "Sutera-Diffusus/dsh-windows-notify",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
