@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "repository": "cjz-wr/agent-engineering-workflow",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-16T07:43:33Z",
+  "analyzedAt": "2026-08-18T02:38:34.302Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "cjz-wr/agent-engineering-workflow",
+    "defaultBranch": "main",
+    "kind": "skill",
+    "componentKinds": [
+      "skill"
+    ],
+    "summary": "确认包含 2 个有效 DSH Skills。",
+    "pluginAnalysis": {
+      "repository": "cjz-wr/agent-engineering-workflow",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到同时包含 package.json、dsh.bundle.patch 和对应补丁文件的插件组件。",
+      "targets": []
+    },
+    "skillAnalysis": {
+      "repository": "cjz-wr/agent-engineering-workflow",
+      "defaultBranch": "main",
+      "installability": "choice",
+      "summary": "确认包含 2 个有效 DSH Skills。",
+      "targets": [
+        {
+          "id": "feature-change-workflow:skills/feature-change-workflow/SKILL.md",
+          "name": "feature-change-workflow",
+          "description": "Modify an existing software project using the Feature Change Workflow. Use when implementing a feature, fixing a bug, refactoring code, changing behavior, or making an incremental modification to an existing codebase.\n",
+          "sourcePath": "skills/feature-change-workflow/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        },
+        {
+          "id": "project-bootstrap-workflow:skills/project-bootstrap-workflow/SKILL.md",
+          "name": "project-bootstrap-workflow",
+          "description": "Bootstrap a new software project from readme.md using the project's strict engineering workflow. Use when starting a greenfield project, scaffolding from requirements, initializing project documents, Git workflow, AGENTS.md, plan.md, tree.md, knowledge indexing, validation, or delivery.\n",
+          "sourcePath": "skills/project-bootstrap-workflow/SKILL.md",
+          "format": "bundle",
+          "revision": "main",
+          "modelInvocable": true,
+          "userInvocable": true
+        }
+      ]
+    },
+    "applicationAnalysis": {
+      "repository": "cjz-wr/agent-engineering-workflow",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
