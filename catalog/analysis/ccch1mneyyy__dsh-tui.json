@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "repository": "ccch1mneyyy/dsh-TUI",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-18T02:34:46Z",
+  "analyzedAt": "2026-08-18T02:39:52.818Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "ccch1mneyyy/dsh-TUI",
+    "defaultBranch": "main",
+    "kind": "plugin",
+    "componentKinds": [
+      "plugin"
+    ],
+    "summary": "检测到可安装的 @deepseek-harness-tui/dsh-tui。",
+    "pluginAnalysis": {
+      "repository": "ccch1mneyyy/dsh-TUI",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "检测到可安装的 @deepseek-harness-tui/dsh-tui。",
+      "targets": [
+        {
+          "id": "@deepseek-harness-tui/dsh-tui:.",
+          "packageName": "@deepseek-harness-tui/dsh-tui",
+          "version": "0.8.0",
+          "source": "npm",
+          "profileName": "cc-tui",
+          "platform": "terminal",
+          "subdirectory": null,
+          "commit": "836b7aae05cd93a46a4c704199ca111974599770",
+          "requiresBuild": false,
+          "buildScripts": [],
+          "nodeRange": "^22.19 || >=24"
+        }
+      ]
+    },
+    "skillAnalysis": null,
+    "applicationAnalysis": {
+      "repository": "ccch1mneyyy/dsh-TUI",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": [
+      "Skill 检测失败：net::ERR_HTTP2_PROTOCOL_ERROR"
+    ]
+  }
+}
