@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "repository": "omdsh-dev/DSH-better-sidebar",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-18T02:36:41Z",
+  "analyzedAt": "2026-08-18T02:38:48.715Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "omdsh-dev/DSH-better-sidebar",
+    "defaultBranch": "main",
+    "kind": "plugin",
+    "componentKinds": [
+      "plugin"
+    ],
+    "summary": "检测到可安装的 dsh-better-sidebar。",
+    "pluginAnalysis": {
+      "repository": "omdsh-dev/DSH-better-sidebar",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "检测到可安装的 dsh-better-sidebar。",
+      "targets": [
+        {
+          "id": "dsh-better-sidebar:.",
+          "packageName": "dsh-better-sidebar",
+          "version": "0.13.0",
+          "source": "npm",
+          "profileName": "web",
+          "platform": "web",
+          "subdirectory": null,
+          "commit": "5e416eccef277067a4e4b9d655044e8bc45b243c",
+          "requiresBuild": false,
+          "buildScripts": [],
+          "nodeRange": ">=20"
+        }
+      ]
+    },
+    "skillAnalysis": {
+      "repository": "omdsh-dev/DSH-better-sidebar",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到符合 DSH 规范的 SKILL.md 或单文件 Skill。",
+      "targets": []
+    },
+    "applicationAnalysis": {
+      "repository": "omdsh-dev/DSH-better-sidebar",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
