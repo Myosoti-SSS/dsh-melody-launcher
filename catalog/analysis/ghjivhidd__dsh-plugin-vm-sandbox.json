@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "repository": "GHJIVHIDD/dsh-plugin-vm-sandbox",
+  "defaultBranch": "main",
+  "repositoryUpdatedAt": "2026-08-18T02:20:31Z",
+  "analyzedAt": "2026-08-18T02:38:29.146Z",
+  "submittedBy": "rirko",
+  "analysis": {
+    "repository": "GHJIVHIDD/dsh-plugin-vm-sandbox",
+    "defaultBranch": "main",
+    "kind": "plugin",
+    "componentKinds": [
+      "plugin"
+    ],
+    "summary": "检测到可安装的 @deepseek-ai/dsh-plugin-vm-sandbox。",
+    "pluginAnalysis": {
+      "repository": "GHJIVHIDD/dsh-plugin-vm-sandbox",
+      "defaultBranch": "main",
+      "installability": "ready",
+      "summary": "检测到可安装的 @deepseek-ai/dsh-plugin-vm-sandbox。",
+      "targets": [
+        {
+          "id": "@deepseek-ai/dsh-plugin-vm-sandbox:.",
+          "packageName": "@deepseek-ai/dsh-plugin-vm-sandbox",
+          "version": "0.2.0",
+          "source": "github",
+          "profileName": "web",
+          "platform": "web",
+          "subdirectory": null,
+          "commit": "948732185f0a0564d16ef2b94874be5997a60381",
+          "requiresBuild": true,
+          "buildScripts": [
+            "prepare"
+          ],
+          "nodeRange": null
+        }
+      ]
+    },
+    "skillAnalysis": {
+      "repository": "GHJIVHIDD/dsh-plugin-vm-sandbox",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到符合 DSH 规范的 SKILL.md 或单文件 Skill。",
+      "targets": []
+    },
+    "applicationAnalysis": {
+      "repository": "GHJIVHIDD/dsh-plugin-vm-sandbox",
+      "defaultBranch": "main",
+      "installability": "invalid",
+      "summary": "没有找到 .dsh-launcher/addon.json，也没有检测到可验证的 DSH Electron 应用宿主。",
+      "targets": []
+    },
+    "presetAnalysis": null,
+    "warnings": []
+  }
+}
