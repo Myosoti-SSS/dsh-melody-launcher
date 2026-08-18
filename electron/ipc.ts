@@ -16,6 +16,7 @@ import { assertMeaningfulPackName } from './pack-manifest'
 import { MAX_RAW_ARCHIVE_BYTES } from './pack-scan'
 import type { PackManager } from './pack'
 import type { PluginTrialManager } from './plugin-trial'
+import type { CatalogSyncService } from './catalog-sync'
 import {
   isSafePackageName,
   isSafeProfileName,
@@ -44,12 +45,13 @@ export interface IpcDependencies {
   packManager: PackManager
   githubAuth: GitHubAuthService
   applicationAddons: ApplicationAddonManager
+  catalogSync: CatalogSyncService
   getWindow: () => BrowserWindow | null
   setWindowMode: (mode: WindowMode) => void
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons } = deps
+  const { settings, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons, catalogSync } = deps
   const linkedComponents = createLinkedComponentController({
     readSettings: () => settings.read(),
     readProfile,
@@ -106,6 +108,12 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.githubAuthDeviceComplete, () => githubAuth.completeDeviceLogin())
   ipcMain.handle(IPC.githubAuthDeviceCancel, () => githubAuth.cancelDeviceLogin())
   ipcMain.handle(IPC.githubAuthLogout, () => githubAuth.logout())
+  ipcMain.handle(IPC.githubPullRequests, () => githubAuth.listRecentPullRequests())
+  ipcMain.handle(IPC.githubStarStatus, (_event, repository: string) => githubAuth.getStarStatus(repository))
+  ipcMain.handle(IPC.githubStarSet, (_event, payload: { repository: string; starred: boolean }) => {
+    if (!payload || typeof payload.repository !== 'string') throw new Error('GitHub 仓库名称无效。')
+    return githubAuth.setStar(payload.repository, Boolean(payload.starred))
+  })
 
   ipcMain.handle(IPC.chooseDirectory, async (_event, kind: 'dshInstallPath' | 'dshHome' | 'workspace') => {
     const window = deps.getWindow()
@@ -156,11 +164,29 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       installedPresets,
     }
   })
-  ipcMain.handle(IPC.catalogAnalyze, async (event, payload: { fullName: string; defaultBranch: string }) => {
+  ipcMain.handle(IPC.catalogAnalyze, async (event, payload: { fullName: string; defaultBranch: string; repositoryUpdatedAt?: string }) => {
     if (!isSafeRepositoryName(payload.fullName)) throw new Error('GitHub 仓库名称无效。')
-    return installer.analyzeCatalogRepository(payload.fullName, payload.defaultBranch, progress => {
-      if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, progress)
-    })
+    if (payload.repositoryUpdatedAt !== undefined && !Number.isFinite(Date.parse(payload.repositoryUpdatedAt))) {
+      throw new Error('GitHub 仓库更新时间无效。')
+    }
+    return catalogSync.resolve(
+      payload.fullName,
+      payload.defaultBranch,
+      payload.repositoryUpdatedAt,
+      () => installer.analyzeCatalogRepository(payload.fullName, payload.defaultBranch, progress => {
+        if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, progress)
+      }, { bypassCache: true }),
+      message => {
+        if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, {
+          repository: payload.fullName,
+          phase: 'preparing',
+          message,
+          completed: 0,
+          total: 3,
+          checks: { plugin: 'pending', skill: 'pending', application: 'pending' },
+        })
+      },
+    )
   })
   // 从 GitHub 链接导入：解析 → 取元数据 → 复用现有分析（只读，无需整合包互斥）。
   ipcMain.handle(IPC.catalogImportUrl, async (event, payload: { url: string }) => {
@@ -170,9 +196,24 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     if (payload.url.length > 1000) throw new Error('GitHub 仓库链接过长。')
     return importCatalogFromUrl(
       payload.url,
-      (fullName, branch) => installer.analyzeCatalogRepository(fullName, branch, progress => {
-        if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, progress)
-      }),
+      (fullName, branch, repositoryUpdatedAt) => catalogSync.resolve(
+        fullName,
+        branch,
+        repositoryUpdatedAt,
+        () => installer.analyzeCatalogRepository(fullName, branch, progress => {
+          if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, progress)
+        }, { bypassCache: true }),
+        message => {
+          if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, {
+            repository: fullName,
+            phase: 'preparing',
+            message,
+            completed: 0,
+            total: 3,
+            checks: { plugin: 'pending', skill: 'pending', application: 'pending' },
+          })
+        },
+      ),
       githubAuth.fetch,
     )
   })
@@ -476,10 +517,11 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
 
   ipcMain.handle(IPC.runtimeState, () => runtime.state())
-  ipcMain.handle(IPC.runtimeStart, () => {
+  ipcMain.handle(IPC.runtimeStart, async () => {
     if (pluginTrial.isBusy()) throw new Error('请先等待插件试运行结束。')
     if (aiInstaller.isBusy()) throw new Error('请先等待 AI 任务结束。')
     if (applicationAddons.isBusy()) throw new Error('请先等待应用加载项操作结束。')
+    await catalogSync.flushPending()
     return runtime.start()
   })
   ipcMain.handle(IPC.runtimeStop, () => runtime.stop())

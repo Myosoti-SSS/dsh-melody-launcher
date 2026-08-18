@@ -1,10 +1,12 @@
-export type ViewName = 'plugins' | 'discover' | 'runtime' | 'packs'
+export type ViewName = 'plugins' | 'discover' | 'runtime' | 'packs' | 'github'
 export type WindowMode = 'launcher' | 'manager'
 
 export interface AppSettings {
   dshInstallPath: string
   dshHome: string
   profileName: string
+  /** 当前选中的整合包清单；不改变实际 DSH Profile。 */
+  activePackId?: string | null
   workspace: string
   launchExecutable: string
   launchArgs: string[]
@@ -61,6 +63,20 @@ export interface GitHubDeviceAuthorization {
   verificationUri: string
   expiresAt: string
   intervalSeconds: number
+}
+
+export interface GitHubPullRequestSummary {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed'
+  draft: boolean
+  author: string
+  createdAt: string
+  updatedAt: string
+  mergedAt: string | null
+  headBranch: string
+  baseBranch: string
 }
 
 export interface ManagedPlugin {
@@ -362,6 +378,17 @@ export interface CatalogRepositoryAnalysis {
   /** agent-preset 组件（meta-repo 子模块里的预设目录），非聚合仓库无此字段。 */
   presetAnalysis?: PresetRepositoryAnalysis | null
   warnings: string[]
+  /** 共享检测目录同步状态；仅运行时附加，不写入共享 JSON。 */
+  sync?: CatalogSyncInfo
+}
+
+export type CatalogSyncState = 'remote' | 'queued' | 'published' | 'not-authenticated' | 'unavailable' | 'stale-fallback'
+
+export interface CatalogSyncInfo {
+  source: 'github' | 'local'
+  state: CatalogSyncState
+  message: string
+  pullRequestUrl?: string
 }
 
 export type CatalogAnalysisCheck = 'plugin' | 'skill' | 'application'
@@ -505,6 +532,11 @@ export interface PackPluginEntry {
   subdirectory?: string
   commit?: string
   version?: string
+  /** 清单期望状态；缺省为启用。 */
+  enabled?: boolean
+  /** 清单声明的精确 pnpm 构建许可策略。 */
+  allowBuilds?: string[]
+  denyBuilds?: string[]
 }
 
 export interface PackPresetEntry {
@@ -556,6 +588,7 @@ export interface PackAnalysisItem {
   packageName: string
   available: boolean          // 能否安装
   offline: boolean            // 插件本体是否在 zip 内（离线装）
+  enabled?: boolean            // 清单期望状态；false 表示安装后保持关闭
   kind?: 'plugin' | 'skill' | 'preset' | 'application'   // 缺省为插件；技能/预设/应用项的 packageName 即名称
   reason?: string             // 不可装原因
 }
@@ -603,7 +636,7 @@ export interface PackStatus {
   description: string
   version: string
   source: PackSource
-  enabled: boolean            // 当前 profile 是否为它
+  enabled: boolean            // 当前选中的整合包清单
   state: 'complete' | 'partial' | 'failed'
   plugins: PackInstalledPlugin[]
   skills?: PackInstalledSkill[]
@@ -667,12 +700,15 @@ export interface LauncherApi {
   completeGitHubDeviceLogin(): Promise<GitHubAuthStatus>
   cancelGitHubDeviceLogin(): Promise<void>
   logoutGitHub(): Promise<GitHubAuthStatus>
+  listGitHubPullRequests(): Promise<GitHubPullRequestSummary[]>
+  getGitHubStarStatus(repository: string): Promise<boolean>
+  setGitHubStar(repository: string, starred: boolean): Promise<boolean>
   chooseDirectory(kind: 'dshInstallPath' | 'dshHome' | 'workspace'): Promise<string | null>
   readProfile(): Promise<ProfileState>
   togglePlugin(packageName: string, enabled: boolean, profileName?: string): Promise<LinkedComponentToggleResult>
   reorderPlugins(packageNames: string[]): Promise<ProfileState>
   discoverCatalog(query: string, sort: 'stars' | 'updated', page: number): Promise<CatalogDiscoveryResult>
-  analyzeCatalogRepository(fullName: string, defaultBranch: string): Promise<CatalogRepositoryAnalysis>
+  analyzeCatalogRepository(fullName: string, defaultBranch: string, repositoryUpdatedAt?: string): Promise<CatalogRepositoryAnalysis>
   importCatalogUrl(url: string): Promise<CatalogImportResult>
   installPlugin(request: string | PluginInstallRequest): Promise<RepositoryInstallResult>
   uninstallPlugin(packageName: string): Promise<ProfileState>

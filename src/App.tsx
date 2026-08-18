@@ -25,6 +25,7 @@ import { DiscoverView } from './views/DiscoverView'
 import { PacksView } from './views/PacksView'
 import { PluginsView } from './views/PluginsView'
 import { RuntimeView } from './views/RuntimeView'
+import { GitHubView } from './views/GitHubView'
 
 /**
  * 应用根。
@@ -151,6 +152,11 @@ function LauncherShell() {
               profile={profile}
               runtime={store.runtime}
               profileName={settings.profileName}
+              packs={store.packs}
+              activePackId={settings.activePackId}
+              onPackChange={packId => {
+                void (packId ? store.activatePack(packId) : store.deactivatePack())
+              }}
               onChange={navigation.setView}
             />
             <main className="workspace">
@@ -274,6 +280,14 @@ function LauncherShell() {
                   installedPresets={store.installedPresets}
                   installedSkills={store.installedSkills}
                   installedApplications={store.installedApplications}
+                />
+              )}
+              {navigation.view === 'github' && (
+                <GitHubView
+                  authStatus={store.githubAuthStatus}
+                  onLogin={() => setGitHubAccountOpen(true)}
+                  onOpen={url => void api.openExternal(url)}
+                  onError={message => store.showToast({ kind: 'error', message })}
                 />
               )}
             </main>

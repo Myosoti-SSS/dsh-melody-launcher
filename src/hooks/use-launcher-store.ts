@@ -98,7 +98,6 @@ export function useLauncherStore() {
       api.readProfile(),
       api.getRuntimeState(),
       api.getDeepSeekCredentialStatus(),
-      api.getGitHubAuthStatus(),
       api.detectDshInstallation(),
       api.readInstalledSkills(),
       api.readInstalledApplications(),
@@ -108,12 +107,11 @@ export function useLauncherStore() {
       api.readPluginTrials(),
       api.listCustomApiProviders().catch(() => [] as CustomApiProvider[]),
     ])
-      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextGitHubAuthStatus, nextDshInstallation, nextInstalledSkills, nextInstalledApplications, nextInstalledPresets, nextPacks, nextPackSnapshot, nextPluginTrials, nextCustomApiProviders]) => {
+      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextDshInstallation, nextInstalledSkills, nextInstalledApplications, nextInstalledPresets, nextPacks, nextPackSnapshot, nextPluginTrials, nextCustomApiProviders]) => {
         setSettings(nextSettings)
         setProfile(nextProfile)
         setRuntime(nextRuntime)
         setCredentialStatus(nextCredentialStatus)
-        setGitHubAuthStatus(nextGitHubAuthStatus)
         setDshInstallation(nextDshInstallation)
         setInstalledSkills(nextInstalledSkills)
         setInstalledApplications(nextInstalledApplications)
@@ -126,6 +124,11 @@ export function useLauncherStore() {
       })
       .catch(error => showToast({ kind: 'error', message: errorText(error) }))
       .finally(() => setLoading(false))
+
+    // GitHub 凭据状态独立加载；其它启动数据失败时也不能把已登录账号显示成未登录。
+    void api.getGitHubAuthStatus()
+      .then(next => { if (!disposed) setGitHubAuthStatus(next) })
+      .catch(() => { /* 凭据读取失败时保留默认未登录状态，不阻塞启动 */ })
 
     // 更新检查必须在后台进行，网络不可用时不能阻塞启动页。
     void api.checkDshUpdate()
@@ -479,7 +482,7 @@ export function useLauncherStore() {
       await refreshProfile()
       await refreshPacks()
       return settings
-    }, { success: '整合包已启用，当前 Profile 已切换。' })
+    }, { success: '整合包已启用，插件开关与顺序已应用。' })
     return next !== undefined
   }, [api, refreshPacks, refreshProfile, run])
 
@@ -490,7 +493,7 @@ export function useLauncherStore() {
       await refreshProfile()
       await refreshPacks()
       return settings
-    }, { success: '已停用整合包，恢复默认 Profile。' })
+    }, { success: '已停用整合包，已恢复切换前的插件状态。' })
     return next !== undefined
   }, [api, refreshPacks, refreshProfile, run])
 

@@ -115,7 +115,7 @@ export function PacksView({
       <PageHeading
         eyebrow="PACKS"
         title="整合包"
-        description="把一组插件组合成可复用的配置，可自建、从 zip/清单导入，也能导出分享给他人。启用即切换当前 Profile。"
+        description="把插件列表、启用状态和加载顺序保存成可复用清单。启用整合包会在当前 Profile 中切换开关与顺序。"
         actions={(
           <>
             <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy !== null}>
@@ -207,7 +207,7 @@ function EmptyPacks({ onCreate, onImport }: { onCreate: () => void; onImport: ()
     <div className="empty-state">
       <div className="empty-icon"><Package size={28} /></div>
       <h2>还没有整合包</h2>
-      <p>整合包把一组插件组合成可复用的配置，可以自建、从 zip/清单导入，也能导出分享。启用整合包会切换当前 Profile。</p>
+      <p>整合包只保存插件清单、启用状态和加载顺序；插件统一安装在当前 Profile，可从这里或左侧菜单快速切换。</p>
       <div className="empty-state-actions">
         <button type="button" className="primary-command" onClick={onCreate}><PackagePlus size={17} />创建整合包</button>
         <button type="button" className="secondary-button accent" onClick={onImport}><Download size={17} />导入整合包</button>

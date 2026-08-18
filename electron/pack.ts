@@ -7,9 +7,8 @@
 // Installer，测试注入 stub）。
 
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { DEFAULT_PROFILE_NAME } from '../src/constants'
 import type {
   AppSettings,
   ApplicationInstallRequest,
@@ -21,6 +20,7 @@ import type {
   PackCreateRequest,
   PackImportOptions,
   PackInstallResult,
+  PackManifest,
   PackInstalledApplication,
   PackInstalledPlugin,
   PackInstalledPreset,
@@ -36,7 +36,7 @@ import type {
   SkillInstallResult,
   SkillInstallTarget,
 } from '../src/types'
-import { assertMeaningfulPackName, buildManifestFromReceipts, packProfileName } from './pack-manifest'
+import { assertMeaningfulPackName, buildManifestFromReceipts, packProfileName, parsePackManifest } from './pack-manifest'
 import { extractPackBodiesFromPath, extractPresetBodiesFromPath, findManifestInArchiveFromPath, inspectPackZipFromPath } from './pack-zip'
 import { cleanPackNameHint, extractRawPluginBodiesFromPath, extractRawPresetSourcesFromPath, extractRawSkillSourcesFromPath, scanRawPackZipFromPath, type ExtractByteBudget } from './pack-scan'
 import { buildPackExportToFile } from './pack-export'
@@ -54,17 +54,19 @@ import {
   type InstallableItem,
 } from './pack-orchestration'
 import { readPluginReceipts, type PluginInstallReceipt } from './plugin-receipts'
-import { readPresetReceipts, removePresetReceipt, type PresetInstallReceipt } from './preset-receipts'
-import { readSkillReceipts, removeSkillReceipt, type SkillInstallReceipt } from './skill-receipts'
+import { readPresetReceipts, type PresetInstallReceipt } from './preset-receipts'
+import { readSkillReceipts, type SkillInstallReceipt } from './skill-receipts'
 import { createProfileSnapshot, restoreProfileSnapshot, type ProfileSnapshot } from './ai-install'
-import { isSafePackageName, isSafeProfileName } from './profile'
+import { isSafePackageName, isSafeProfileName, reorderPlugins } from './profile'
+import { readPackManifest, removePackManifest, writePackManifest } from './pack-manifest-store'
 
 /** 扩展 PluginInstallTarget：携带 GitHub 仓库名，供 github / npm 源重建安装目标。 */
-export type PackInstallTarget = PluginInstallTarget & { repository?: string }
+export type PackInstallTarget = PluginInstallTarget & { repository?: string; allowBuilds?: string[]; denyBuilds?: string[] }
 
 /** pack 管理器依赖的最小 installer 面（main.ts 组装真实 Installer，测试注入 stub）。 */
 export interface InstallInstaller {
   installPluginTarget(target: PackInstallTarget): Promise<unknown>
+  installNpmPackage?(request: { packageName: string; version?: string; repository?: string; approvedBuildKeys?: string[]; deniedBuildKeys?: string[] }, profileOverride?: string): Promise<unknown>
   /** raw 整合包导入的技能：从本地源目录/单文件全局安装到 dshHome/skills。 */
   installSkillLocal(dshHome: string, skill: { name: string; format: 'bundle' | 'flat'; sourceDir: string }): Promise<unknown>
   /** 从仓库安装一个 Skill（标准清单导入用）。 */
@@ -82,6 +84,7 @@ export interface InstallInstaller {
   remove(packageName: string, profileName?: string): Promise<unknown>
   readProfile(dshHome: string, profileName: string): Promise<ProfileState>
   togglePlugin(dshHome: string, profileName: string, packageName: string, enabled: boolean): Promise<ProfileState>
+  reorderPlugins?(dshHome: string, profileName: string, packageNames: string[]): Promise<ProfileState>
 }
 
 export interface PackManagerOptions {
@@ -89,6 +92,8 @@ export interface PackManagerOptions {
   saveSettings: (settings: AppSettings) => Promise<AppSettings>
   /** packs.json 注册表路径。 */
   registryPath: string
+  /** 本地整合包清单目录；每个包一个 YAML，不创建 DSH Profile。 */
+  manifestRoot?: string
   /** 快照落盘目录（对齐 ai-install）。 */
   snapshotRoot: string
   /** 插件安装凭据文件路径。 */
@@ -151,14 +156,148 @@ function assertSafePackId(packId: string): void {
 export function createPackManager(options: PackManagerOptions): PackManager {
   let active = false
   let snapshot: ProfileSnapshot | null = null
-  /** 当前任务是否「新建了一个此前不存在的 pack profile」：回滚时据此决定删 profile 目录 + 注册表记录。 */
+  /** 兼容旧快照字段；共享 Profile 模式下始终为 false。 */
   let profileWasNew = false
+  const manifestRoot = options.manifestRoot ?? path.join(path.dirname(options.registryPath), 'pack-manifests')
+  const baselinePath = path.join(manifestRoot, 'default-state.json')
+
+  type BaselineState = {
+    profileName: string
+    activeBundles: string[]
+    enabledPlugins: string[]
+    skills: string[]
+    presets: string[]
+    applications: string[]
+  }
 
   const getDshHome = async (): Promise<string> => options.dshHome || (await options.readSettings()).dshHome
 
-  /** 离线导入的插件本体目录：持久落在 pack profile 内，避免安装后 file: 引用悬空。 */
+  /** 离线导入的插件本体缓存，不与 DSH Profile 绑定。 */
   function packBodiesDir(dshHome: string, packId: string): string {
-    return path.join(dshHome, 'profiles', packId, '.pack-bodies')
+    // 离线本体缓存属于启动器，不属于任何 DSH Profile；清单仍是整合包的唯一配置。
+    return path.join(dshHome, '.dsh-launcher-pack-bodies', packId)
+  }
+
+  async function readBaseline(): Promise<BaselineState | null> {
+    try {
+      return JSON.parse(await readFile(baselinePath, 'utf8')) as BaselineState
+    } catch {
+      return null
+    }
+  }
+
+  async function saveBaseline(state: BaselineState): Promise<void> {
+    await mkdir(manifestRoot, { recursive: true })
+    await writeFile(baselinePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
+  }
+
+  async function clearBaseline(): Promise<void> {
+    await rm(baselinePath, { force: true }).catch(() => undefined)
+  }
+
+  async function currentBaseline(settings: AppSettings): Promise<BaselineState> {
+    const dshHome = await getDshHome()
+    const profile = await options.installer.readProfile(dshHome, settings.profileName)
+    const skills = (await readSkillReceipts(options.skillReceiptsPath)).map(item => item.name)
+    const presets = (await readPresetReceipts(options.presetReceiptsPath)).map(item => item.name)
+    const applications = (await options.applicationAddons.list()).filter(item => item.enabled).map(item => item.id)
+    return {
+      profileName: settings.profileName,
+      activeBundles: profile.activeBundles,
+      enabledPlugins: profile.plugins.filter(item => item.enabled).map(item => item.packageName),
+      skills,
+      presets,
+      applications,
+    }
+  }
+
+  async function applyPluginSet(profileName: string, desired: PackInstalledPlugin[], order: string[]): Promise<ProfileState> {
+    const dshHome = await getDshHome()
+    let profile = await options.installer.readProfile(dshHome, profileName)
+    const desiredSet = new Set(desired.filter(item => item.enabled).map(item => item.packageName))
+    for (const plugin of profile.plugins) {
+      if (plugin.builtin) continue
+      const shouldEnable = desiredSet.has(plugin.packageName)
+      if (plugin.enabled !== shouldEnable) {
+        profile = await options.installer.togglePlugin(dshHome, profileName, plugin.packageName, shouldEnable)
+      }
+    }
+    // 安装器可能在读取 profile 后补齐依赖，再读一次后只把清单中的插件排在前面，核心/依赖保持现有相对顺序。
+    profile = await options.installer.readProfile(dshHome, profileName)
+    const core = profile.activeBundles.filter(name => profile.plugins.find(item => item.packageName === name)?.builtin)
+    const requested = order.filter(name => profile.activeBundles.includes(name) && !core.includes(name))
+    const remaining = profile.activeBundles.filter(name => !core.includes(name) && !requested.includes(name))
+    const nextOrder = [...core, ...requested, ...remaining]
+    if (nextOrder.length === profile.activeBundles.length && nextOrder.some((name, index) => name !== profile.activeBundles[index])) {
+      profile = await reorderSharedProfile(profileName, nextOrder)
+    }
+    return profile
+  }
+
+  async function reorderSharedProfile(profileName: string, packageNames: string[]): Promise<ProfileState> {
+    const dshHome = await getDshHome()
+    const current = await options.installer.readProfile(dshHome, profileName)
+    if (packageNames.length !== current.activeBundles.length) return current
+    return options.installer.reorderPlugins
+      ? options.installer.reorderPlugins(dshHome, profileName, packageNames)
+      : reorderPlugins(dshHome, profileName, packageNames)
+  }
+
+  async function restoreBaseline(settings: AppSettings): Promise<void> {
+    const baseline = await readBaseline()
+    if (!baseline) {
+      await options.saveSettings({ ...settings, activePackId: null })
+      return
+    }
+    const dshHome = await getDshHome()
+    let profile = await options.installer.readProfile(dshHome, baseline.profileName)
+    const enabled = new Set(baseline.enabledPlugins)
+    for (const plugin of profile.plugins) {
+      if (plugin.builtin) continue
+      const shouldEnable = enabled.has(plugin.packageName)
+      if (plugin.enabled !== shouldEnable) profile = await options.installer.togglePlugin(dshHome, baseline.profileName, plugin.packageName, shouldEnable)
+    }
+    profile = await options.installer.readProfile(dshHome, baseline.profileName)
+    const order = baseline.activeBundles.filter(name => profile.activeBundles.includes(name))
+    const remaining = profile.activeBundles.filter(name => !order.includes(name))
+    const fullOrder = [...order, ...remaining]
+    if (fullOrder.length === profile.activeBundles.length && fullOrder.some((name, index) => name !== profile.activeBundles[index])) {
+      await reorderSharedProfile(baseline.profileName, fullOrder)
+    }
+    await clearBaseline()
+    await options.saveSettings({ ...settings, activePackId: null })
+  }
+
+  async function reapplyCurrentSelection(settings: AppSettings, fallback: ProfileState): Promise<void> {
+    if (settings.activePackId) {
+      const activeRecord = await findRecord(settings.activePackId).catch(() => null)
+      if (activeRecord) {
+        await applyPluginSet(settings.profileName, activeRecord.plugins, activeRecord.plugins.map(item => item.packageName))
+        return
+      }
+    }
+    const desired = fallback.plugins
+      .filter(item => !item.builtin)
+      .map(item => ({ packageName: item.packageName, enabled: item.enabled }))
+    await applyPluginSet(settings.profileName, desired, fallback.activeBundles)
+  }
+
+  async function writeRecordManifest(record: PackRecord, sourceManifest?: PackManifest): Promise<void> {
+    const existing = sourceManifest ?? await readPackManifest(manifestRoot, record.id)
+    const existingPlugins = new Map((existing?.plugins ?? []).map(item => [item.packageName, item]))
+    const plugins: PackPluginEntry[] = record.plugins.map(item => ({
+      ...existingPlugins.get(item.packageName),
+      packageName: item.packageName,
+      enabled: item.enabled,
+    }))
+    await writePackManifest(manifestRoot, record.id, {
+      name: record.name,
+      description: record.description || `DSH 整合包：${record.name}`,
+      version: record.version,
+      plugins,
+      ...(record.presets?.length ? { presets: record.presets.map(item => ({ name: item.name })) } : {}),
+      ...(record.skills?.length ? { skills: record.skills.map(item => ({ name: item.name, format: item.format })) } : {}),
+    })
   }
 
   /** 新任务开始：占住互斥位、丢弃上一个任务的快照与「是否新建 profile」标记。 */
@@ -172,30 +311,8 @@ export function createPackManager(options: PackManagerOptions): PackManager {
     options.emitOutput?.(level, text)
   }
 
-  /** receipt → 可安装 target。local 源缺本地路径无法重建，返回 null。 */
-  function receiptToTarget(receipt: PluginInstallReceipt, packId: string): PackInstallTarget | null {
-    if (receipt.source === 'local-directory') return null
-    const source: 'npm' | 'github' = receipt.source === 'npm' ? 'npm' : 'github'
-    const target: PackInstallTarget = {
-      id: receipt.packageName,
-      packageName: receipt.packageName,
-      version: receipt.version ?? '0.0.0',
-      source,
-      profileName: packId,
-      platform: 'unknown',
-      subdirectory: receipt.subdirectory,
-      commit: receipt.commit,
-      requiresBuild: false,
-      buildScripts: [],
-      nodeRange: null,
-    }
-    // github 与 npm 源都需要仓库名才能重建安装目标（npm 已发布包也由该仓库承载）。
-    target.repository = receipt.repository
-    return target
-  }
-
   /** manifest 插件条目 → 可安装 target。source 非 npm 且无 repository 时无法联网安装，返回 null。 */
-  function manifestEntryToTarget(entry: PackPluginEntry | undefined, packId: string): PackInstallTarget | null {
+  function manifestEntryToTarget(entry: PackPluginEntry | undefined, profileName: string): PackInstallTarget | null {
     if (!entry || !isSafePackageName(entry.packageName)) return null
     const source: 'npm' | 'github' = entry.source === 'npm' ? 'npm' : 'github'
     const target: PackInstallTarget = {
@@ -203,19 +320,35 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       packageName: entry.packageName,
       version: entry.version ?? null,
       source,
-      profileName: packId,
+      profileName,
       platform: 'unknown',
       subdirectory: entry.subdirectory ?? null,
       commit: entry.commit ?? '',
       requiresBuild: false,
       buildScripts: [],
       nodeRange: null,
+      allowBuilds: entry.allowBuilds,
+      denyBuilds: entry.denyBuilds,
     }
     if (source === 'github') {
       if (!entry.repository) return null
       target.repository = entry.repository
     }
     return target
+  }
+
+  async function installManifestPlugin(target: PackInstallTarget): Promise<void> {
+    if (target.source === 'npm' && options.installer.installNpmPackage) {
+      await options.installer.installNpmPackage({
+        packageName: target.packageName,
+        version: target.version ?? undefined,
+        repository: target.repository,
+        approvedBuildKeys: target.allowBuilds,
+        deniedBuildKeys: target.denyBuilds,
+      }, target.profileName)
+      return
+    }
+    await options.installer.installPluginTarget(target)
   }
 
   function guarded(): string | null {
@@ -242,7 +375,8 @@ export function createPackManager(options: PackManagerOptions): PackManager {
     async listPacks() {
       const settings = await options.readSettings()
       const records = await readPackRegistry(options.registryPath)
-      return records.map(record => toPackStatus(record, settings.profileName))
+      await Promise.all(records.map(record => writeRecordManifest(record).catch(() => undefined)))
+      return records.map(record => toPackStatus(record, settings.activePackId))
     },
 
     isBusy: () => active,
@@ -251,7 +385,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       const reason = guarded()
       if (reason) throw new Error(reason)
       beginTask()
-      profileWasNew = true
+      profileWasNew = false
       try {
         const packId = packProfileName(request.name)
         const existing = await readPackRegistry(options.registryPath)
@@ -265,8 +399,9 @@ export function createPackManager(options: PackManagerOptions): PackManager {
 
         const receipts = await readPluginReceipts(options.pluginReceiptsPath)
         const presetReceipts = await readPresetReceipts(options.presetReceiptsPath)
-        const items: InstallableItem[] = []
         const skippedFailures: { packageName: string; reason: string }[] = []
+        const currentProfile = await options.installer.readProfile(dshHome, profileName)
+        const installedPluginNames: string[] = []
         for (const packageName of request.packageNames) {
           if (!isSafePackageName(packageName)) {
             skippedFailures.push({ packageName, reason: '插件名称非法。' })
@@ -277,12 +412,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             skippedFailures.push({ packageName, reason: '无来源记录，无法重新安装' })
             continue
           }
-          const target = receiptToTarget(receipt, packId)
-          if (!target) {
-            skippedFailures.push({ packageName, reason: '本地目录来源的插件缺少来源路径，无法重新安装' })
-            continue
-          }
-          items.push({ packageName, install: async () => { await options.installer.installPluginTarget(target) } })
+          installedPluginNames.push(packageName)
         }
 
         // 预设是全局资源，创建自建包时它们已经安装；这里只把有来源记录的可导出预设纳入包。
@@ -333,16 +463,10 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           applicationAddonsForPack.push(addon)
         }
 
-        // 建 pack profile 目录，消除 DSH CLI 首次 add 的竞态。
-        await mkdir(path.join(dshHome, 'profiles', packId), { recursive: true })
-
         options.emitEvent({ kind: 'status', message: `正在创建整合包「${request.name}」…` })
-        snapshot = await createProfileSnapshot(dshHome, packId, options.snapshotRoot)
-        options.emitEvent({ kind: 'snapshot' })
-
-        const { installed: installedPlugins, failures } = await runSerialInstall(items, { emitEvent: options.emitEvent })
+        const installedPlugins = installedPluginNames
         const installed = [...installedPlugins, ...installedPresets, ...installedSkills, ...installedApplications]
-        const allFailures = [...skippedFailures, ...failures]
+        const allFailures = skippedFailures
         const result = buildInstallResult(packId, installed, allFailures)
 
         const record: PackRecord = {
@@ -354,13 +478,17 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           installedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           state: result.state,
-          plugins: toInstalledPlugins(installedPlugins),
+          plugins: installedPlugins.map(packageName => ({
+            packageName,
+            enabled: currentProfile.plugins.find(item => item.packageName === packageName)?.enabled ?? false,
+          })),
           ...(installedPresets.length > 0 ? { presets: installedPresets.map(name => ({ name, enabled: true })) } : {}),
           ...(installedSkills.length > 0 ? { skills: installedSkills.map(name => ({ name, format: skillReceiptsForPack.find(r => r.name === name)?.format ?? 'bundle', enabled: true })) } : {}),
           ...(installedApplications.length > 0 ? { applications: installedApplications.map(id => ({ id, name: applicationAddonsForPack.find(a => a.id === id)?.name ?? id, enabled: true })) } : {}),
           failures: result.failures.length > 0 ? result.failures : undefined,
         }
         await upsertPackRecord(options.registryPath, record)
+        await writeRecordManifest(record)
         const extraParts: string[] = []
         if (installedPresets.length > 0) extraParts.push(`${installedPresets.length} 个预设`)
         if (installedSkills.length > 0) extraParts.push(`${installedSkills.length} 个技能`)
@@ -378,6 +506,17 @@ export function createPackManager(options: PackManagerOptions): PackManager {
     },
 
     async analyzeImport(filePath) {
+      if (/\.ya?ml$/i.test(filePath)) {
+        const manifest = parsePackManifest(await readFile(filePath, 'utf8'))
+        return {
+          id: packProfileName(manifest.name),
+          name: manifest.name,
+          description: manifest.description,
+          version: manifest.version,
+          source: 'manifest' as const,
+          items: manifest.plugins.map(entry => ({ packageName: entry.packageName, available: Boolean(entry.repository || entry.source === 'npm'), offline: false, enabled: entry.enabled !== false })),
+        }
+      }
       const manifestText = await findManifestInArchiveFromPath(filePath)
       if (!manifestText) {
         // 非标准包：扫描包内的标准插件目录与技能，合成为我们格式的整合包。
@@ -414,7 +553,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         // 有 plugin-bodies：按 body 包名逐项列出（全部可离线安装）。
         for (const packageName of inspection.bodyPackageNames) {
           items.push(isSafePackageName(packageName)
-            ? { packageName, available: true, offline: true }
+            ? { packageName, available: true, offline: true, enabled: manifest.plugins.find(entry => entry.packageName === packageName)?.enabled !== false }
             : { packageName, available: false, offline: false, reason: '插件名称非法。' })
         }
       } else {
@@ -426,7 +565,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           }
           const available = entry.source === 'npm' || Boolean(entry.repository)
           items.push(available
-            ? { packageName: entry.packageName, available: true, offline: false }
+            ? { packageName: entry.packageName, available: true, offline: false, enabled: entry.enabled !== false }
             : { packageName: entry.packageName, available: false, offline: false, reason: '缺少来源仓库，无法联网安装' })
         }
       }
@@ -473,11 +612,54 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       const reason = guarded()
       if (reason) throw new Error(reason)
       beginTask()
-      profileWasNew = true
+      profileWasNew = false
       let skillStaging: string | null = null
       let presetStaging: string | null = null
       let presetBodiesDir: string | null = null
       try {
+        // 本地 YAML 是轻量清单格式：只安装清单引用的插件到共享 Profile，不创建包目录。
+        if (/\.ya?ml$/i.test(filePath)) {
+          const manifest = parsePackManifest(await readFile(filePath, 'utf8'))
+          const packId = packProfileName(importOptions?.name ?? manifest.name)
+          const existing = await readPackRegistry(options.registryPath)
+          if (existing.some(record => record.id === packId)) throw new Error('整合包已存在。')
+          const settings = await options.readSettings()
+          const dshHome = await getDshHome()
+          const profileBeforeInstall = await options.installer.readProfile(dshHome, settings.profileName)
+          const requested = items && items.length > 0 ? new Set(items) : null
+          const selected = manifest.plugins.filter(entry => !requested || requested.has(entry.packageName))
+          const installables: InstallableItem[] = selected.map(entry => {
+            const target = manifestEntryToTarget(entry, settings.profileName)
+            return {
+              packageName: entry.packageName,
+              offline: false,
+              install: async () => {
+                if (!target) throw new Error('清单中缺少该插件的来源，无法联网安装')
+                await installManifestPlugin(target)
+              },
+            }
+          })
+          options.emitEvent({ kind: 'status', message: `正在导入整合包清单「${manifest.name}」…` })
+          const { installed, failures } = await runSerialInstall(installables, { emitEvent: options.emitEvent })
+          await reapplyCurrentSelection(settings, profileBeforeInstall)
+          const result = buildInstallResult(packId, installed, failures)
+          const record: PackRecord = {
+            id: packId,
+            name: manifest.name,
+            description: manifest.description,
+            version: manifest.version,
+            source: 'manifest',
+            installedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            state: result.state,
+            plugins: installed.map(packageName => ({ packageName, enabled: manifest.plugins.find(entry => entry.packageName === packageName)?.enabled !== false })),
+            failures: result.failures.length > 0 ? result.failures : undefined,
+          }
+          await upsertPackRecord(options.registryPath, record)
+          await writeRecordManifest(record, manifest)
+          options.emitEvent({ kind: 'done', result })
+          return result
+        }
         // 不再整体读入内存：先探测清单，再按分支用文件路径流式解析。
         // 文件被并发删除/移动时（通过 IPC stat 门禁后）这里会抛错，
         // 也能走 catch → finally 复位 active，避免整合包子系统永久卡在「进行中」。
@@ -497,14 +679,16 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           if (existing.some(record => record.id === packId)) throw new Error('整合包已存在。')
 
           const dshHome = await getDshHome()
+          const settings = await options.readSettings()
+          const profileName = settings.profileName
+          const profileBeforeInstall = await options.installer.readProfile(dshHome, profileName)
           // items 缺省 = 全装；插件名、技能名、预设名各自独立过滤（理论上可能撞名）。
           const wantedPlugins = scan.plugins.filter(plugin => !items || items.includes(plugin.packageName))
           const wantedSkills = scan.skills.filter(skill => !items || items.includes(skill.name))
           const wantedPresets = scan.presets.filter(preset => !items || items.includes(preset.name))
 
-          await mkdir(path.join(dshHome, 'profiles', packId), { recursive: true })
           options.emitEvent({ kind: 'status', message: `正在扫描并导入非标准整合包「${packName}」…` })
-          snapshot = await createProfileSnapshot(dshHome, packId, options.snapshotRoot)
+          snapshot = await createProfileSnapshot(dshHome, profileName, options.snapshotRoot)
           options.emitEvent({ kind: 'snapshot' })
 
           const installables: InstallableItem[] = []
@@ -513,7 +697,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           // 防止被拆成多个候选各自「达标」而整体绕过（zip-bomb）。
           const extractBudget: ExtractByteBudget = { extracted: 0 }
 
-          // 插件本体解到 pack profile 持久目录（file: 引用不悬空，对齐标准离线导入）。
+          // 插件本体解到启动器的共享缓存（file: 引用不悬空，不创建整合包 Profile）。
           if (wantedPlugins.length > 0) {
             const bodiesDir = packBodiesDir(dshHome, packId)
             await rm(bodiesDir, { recursive: true, force: true }).catch(() => undefined)
@@ -529,7 +713,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
                 packageName: plugin.packageName,
                 version: plugin.version ?? null,
                 source: 'local-directory',
-                profileName: packId,
+                profileName,
                 platform: 'unknown',
                 subdirectory: null,
                 commit: '',
@@ -538,7 +722,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
                 nodeRange: null,
                 localDirectory: bodyDir,
               }
-              installables.push({ packageName: plugin.packageName, offline: true, install: async () => { await options.installer.installPluginTarget(target) } })
+              installables.push({ packageName: plugin.packageName, offline: true, install: async () => { await installManifestPlugin(target) } })
             }
           }
 
@@ -572,6 +756,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           }
 
           const { installed, failures } = await runSerialInstall(installables, { emitEvent: options.emitEvent })
+          await reapplyCurrentSelection(settings, profileBeforeInstall)
           const result = buildInstallResult(packId, installed, failures)
 
           const installedPluginNames = wantedPlugins
@@ -599,6 +784,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             failures: result.failures.length > 0 ? result.failures : undefined,
           }
           await upsertPackRecord(options.registryPath, record)
+          await writeRecordManifest(record)
           log('success', `非标准整合包「${packName}」已导入：${installed.length} 项。`)
           options.emitEvent({ kind: 'done', result })
           return result
@@ -612,7 +798,9 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         if (existing.some(record => record.id === packId)) throw new Error('整合包已存在。')
 
         const dshHome = await getDshHome()
-        await mkdir(path.join(dshHome, 'profiles', packId), { recursive: true })
+        const settings = await options.readSettings()
+        const profileName = settings.profileName
+        const profileBeforeInstall = await options.installer.readProfile(dshHome, profileName)
 
         // 决定要安装的包名集合：显式 items 优先，否则有 body 按 body，否则按 manifest。
         // 插件 / 技能 / 预设 / 应用是独立资源，分开处理。
@@ -645,11 +833,11 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         const installables: InstallableItem[] = []
 
         options.emitEvent({ kind: 'status', message: `正在导入整合包「${manifest.name}」…` })
-        snapshot = await createProfileSnapshot(dshHome, packId, options.snapshotRoot)
+        snapshot = await createProfileSnapshot(dshHome, profileName, options.snapshotRoot)
         options.emitEvent({ kind: 'snapshot' })
 
         if (inspection.hasBodies) {
-          // 本体解到 pack profile 内的持久目录：DSH 通过 file: 引用它，任务结束后不得删除。
+          // 本体解到启动器共享缓存：DSH 通过 file: 引用它，任务结束后不得删除。
           const bodiesDir = packBodiesDir(dshHome, packId)
           await rm(bodiesDir, { recursive: true, force: true }).catch(() => undefined)
           const knownNames = new Set(manifest.plugins.map(entry => entry.packageName))
@@ -666,7 +854,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
                 packageName,
                 version: null,
                 source: 'local-directory',
-                profileName: packId,
+                profileName,
                 platform: 'unknown',
                 subdirectory: null,
                 commit: '',
@@ -675,11 +863,11 @@ export function createPackManager(options: PackManagerOptions): PackManager {
                 nodeRange: null,
                 localDirectory: bodyDir,
               }
-              installables.push({ packageName, offline: true, install: async () => { await options.installer.installPluginTarget(target) } })
+              installables.push({ packageName, offline: true, install: async () => { await installManifestPlugin(target) } })
             } else {
-              const target = manifestEntryToTarget(manifestEntries.get(packageName), packId)
+              const target = manifestEntryToTarget(manifestEntries.get(packageName), profileName)
               if (target) {
-                installables.push({ packageName, offline: false, install: async () => { await options.installer.installPluginTarget(target) } })
+                installables.push({ packageName, offline: false, install: async () => { await installManifestPlugin(target) } })
               } else {
                 installables.push({ packageName, offline: false, install: async () => { throw new Error('清单中缺少该插件的来源，无法联网安装') } })
               }
@@ -691,9 +879,9 @@ export function createPackManager(options: PackManagerOptions): PackManager {
               installables.push({ packageName, install: async () => { throw new Error('插件名称非法。') } })
               continue
             }
-            const target = manifestEntryToTarget(manifestEntries.get(packageName), packId)
+            const target = manifestEntryToTarget(manifestEntries.get(packageName), profileName)
             if (target) {
-              installables.push({ packageName, offline: false, install: async () => { await options.installer.installPluginTarget(target) } })
+              installables.push({ packageName, offline: false, install: async () => { await installManifestPlugin(target) } })
             } else {
               installables.push({ packageName, offline: false, install: async () => { throw new Error('清单中缺少该插件的来源，无法联网安装') } })
             }
@@ -779,6 +967,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         }
 
         const { installed, failures } = await runSerialInstall(installables, { emitEvent: options.emitEvent })
+        await reapplyCurrentSelection(settings, profileBeforeInstall)
         const result = buildInstallResult(packId, installed, failures)
 
         const installedPluginNames = installed.filter(name => !presetNames.has(name) && !skillNames.has(name) && !applicationIds.has(name))
@@ -794,13 +983,17 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           installedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           state: result.state,
-          plugins: toInstalledPlugins(installedPluginNames),
+          plugins: installedPluginNames.map(packageName => ({
+            packageName,
+            enabled: manifestEntries.get(packageName)?.enabled !== false,
+          })),
           ...(installedPresetNames.length > 0 ? { presets: installedPresetNames.map(name => ({ name, enabled: true })) } : {}),
           ...(installedSkillNames.length > 0 ? { skills: installedSkillNames.map(name => ({ name, format: skillEntries.get(name)?.format ?? 'bundle', enabled: true })) } : {}),
           ...(installedApplicationIds.length > 0 ? { applications: installedApplicationIds.map(id => ({ id, name: applicationEntries.get(id)?.name ?? id, enabled: true })) } : {}),
           failures: result.failures.length > 0 ? result.failures : undefined,
         }
         await upsertPackRecord(options.registryPath, record)
+        await writeRecordManifest(record, manifest)
         const extraParts: string[] = []
         if (installedPresetNames.length > 0) extraParts.push(`${installedPresetNames.length} 个预设`)
         if (installedSkillNames.length > 0) extraParts.push(`${installedSkillNames.length} 个技能`)
@@ -828,8 +1021,9 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       try {
         const record = await findRecord(packId)
         const dshHome = await getDshHome()
+        const settings = await options.readSettings()
         const receipts = (await readPluginReceipts(options.pluginReceiptsPath))
-          .filter(item => item.profileName === packId)
+          .filter(item => item.profileName === settings.profileName && record.plugins.some(plugin => plugin.packageName === item.packageName))
         const presetNames = new Set((record.presets ?? []).map(preset => preset.name))
         const presetReceipts = (await readPresetReceipts(options.presetReceiptsPath))
           .filter(item => presetNames.has(item.name))
@@ -839,7 +1033,11 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         const applicationIds = new Set((record.applications ?? []).map(addon => addon.id))
         const applicationAddons = (await options.applicationAddons.list())
           .filter(addon => applicationIds.has(addon.id))
-        const manifest = buildManifestFromReceipts(packId, receipts, presetReceipts, skillReceipts, applicationAddons)
+        const orderedReceipts = record.plugins
+          .map(plugin => receipts.find(receipt => receipt.packageName === plugin.packageName))
+          .filter((receipt): receipt is PluginInstallReceipt => receipt !== undefined)
+        const manifest = buildManifestFromReceipts(packId, orderedReceipts, presetReceipts, skillReceipts, applicationAddons)
+        manifest.plugins = manifest.plugins.map((entry, index) => ({ ...entry, enabled: record.plugins[index]?.enabled ?? true }))
         // 只收集 manifest 引用的插件本体：profile 里可能混入无来源记录的手动安装插件，不应进包。
         const packageNames = manifest.plugins.map(entry => entry.packageName)
         // 预设本体也打进 zip：换机导入时可完全离线安装。
@@ -848,7 +1046,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           const dir = path.join(dshHome, '.agent-presets', preset.name)
           if (existsSync(dir)) presetDirs.set(preset.name, dir)
         }
-        const packProfileDir = path.join(dshHome, 'profiles', packId)
+        const packProfileDir = path.join(dshHome, 'profiles', settings.profileName)
         const exportRoot = path.join(options.snapshotRoot, 'exports')
         await mkdir(exportRoot, { recursive: true })
         exportDir = await mkdtemp(path.join(exportRoot, 'pack-'))
@@ -867,16 +1065,37 @@ export function createPackManager(options: PackManagerOptions): PackManager {
     },
 
     async activatePack(packId) {
-      await findRecord(packId)
-      const settings = await options.readSettings()
-      if (settings.profileName === packId) return settings
-      return options.saveSettings({ ...settings, profileName: packId })
+      const reason = guarded()
+      if (reason) throw new Error(reason)
+      beginTask()
+      try {
+        const record = await findRecord(packId)
+        const settings = await options.readSettings()
+        if (!settings.activePackId) await saveBaseline(await currentBaseline(settings))
+        await applyPluginSet(settings.profileName, record.plugins, record.plugins.map(item => item.packageName))
+        for (const skill of record.skills ?? []) await options.installer.toggleSkill(skill.name, skill.enabled)
+        for (const preset of record.presets ?? []) await options.installer.togglePreset(preset.name, preset.enabled)
+        if (options.applicationAddons.toggle) {
+          for (const addon of record.applications ?? []) await options.applicationAddons.toggle(addon.id, addon.enabled)
+        }
+        return options.saveSettings({ ...settings, activePackId: packId })
+      } finally {
+        active = false
+      }
     },
 
     async deactivatePack() {
-      const settings = await options.readSettings()
-      if (settings.profileName === DEFAULT_PROFILE_NAME) return settings
-      return options.saveSettings({ ...settings, profileName: DEFAULT_PROFILE_NAME })
+      const reason = guarded()
+      if (reason) throw new Error(reason)
+      beginTask()
+      try {
+        const settings = await options.readSettings()
+        if (!settings.activePackId) return settings
+        await restoreBaseline(settings)
+        return options.readSettings()
+      } finally {
+        active = false
+      }
     },
 
     async removePack(packId) {
@@ -885,60 +1104,14 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       beginTask()
       try {
         const record = await findRecord(packId)
-        const dshHome = await getDshHome()
         const settings = await options.readSettings()
-        if (settings.profileName === packId) {
-          await options.saveSettings({ ...settings, profileName: DEFAULT_PROFILE_NAME })
+        if (settings.activePackId === packId) {
+          await restoreBaseline(settings)
         }
-        const profile = await options.installer.readProfile(dshHome, packId)
-        for (const plugin of profile.plugins) {
-          try {
-            await options.installer.remove(plugin.packageName, packId)
-          } catch (error) {
-            log('error', `移除插件 ${plugin.packageName} 失败：${asErrorMessage(error)}`)
-          }
-        }
-        // 尽力清理 profile 目录（含 .pack-bodies 本体；DSH CLI 可能正在占用部分文件）。
-        await rm(path.join(dshHome, 'profiles', packId), { recursive: true, force: true }).catch(() => undefined)
         await removePackRecord(options.registryPath, packId)
-        // 技能全局安装：仅当没有其它包引用同名技能时才删除（DSH 技能不随 profile 隔离）。
-        const remaining = await readPackRegistry(options.registryPath)
-        const skillRoot = path.join(dshHome, 'skills')
-        for (const skill of record.skills ?? []) {
-          const stillReferenced = remaining.some(other => (other.skills ?? []).some(item => item.name === skill.name))
-          if (stillReferenced) continue
-          // 只删本次包实际安装的形态（bundle 目录 或 flat 单 .md）：同名异形技能可能是
-          // 用户自行从目录安装的独立技能，不能因为删包而无差别清除。
-          if (skill.format === 'flat') {
-            await rm(path.join(skillRoot, `${skill.name}.md`), { recursive: true, force: true }).catch(() => undefined)
-            await rm(path.join(skillRoot, '.disabled', `${skill.name}.md`), { recursive: true, force: true }).catch(() => undefined)
-          } else {
-            await rm(path.join(skillRoot, skill.name), { recursive: true, force: true }).catch(() => undefined)
-            await rm(path.join(skillRoot, '.disabled', skill.name), { recursive: true, force: true }).catch(() => undefined)
-          }
-          await removeSkillReceipt(options.skillReceiptsPath, skill.name).catch(() => undefined)
-        }
-        // Agent 预设同样全局安装：仅当没有其它包引用同名预设时才删除目录与 receipt。
-        const presetRoot = path.join(dshHome, '.agent-presets')
-        for (const preset of record.presets ?? []) {
-          const stillReferenced = remaining.some(other => (other.presets ?? []).some(item => item.name === preset.name))
-          if (stillReferenced) continue
-          await rm(path.join(presetRoot, preset.name), { recursive: true, force: true }).catch(() => undefined)
-          await rm(path.join(presetRoot, '.disabled', preset.name), { recursive: true, force: true }).catch(() => undefined)
-          await removePresetReceipt(options.presetReceiptsPath, preset.name).catch(() => undefined)
-        }
-        // Application Addon：仅当没有其它包引用时卸载。
-        for (const addon of record.applications ?? []) {
-          const stillReferenced = remaining.some(other => (other.applications ?? []).some(item => item.id === addon.id))
-          if (stillReferenced) continue
-          try {
-            await options.applicationAddons.uninstall(addon.id)
-          } catch (error) {
-            log('error', `卸载应用加载项 ${addon.id} 失败：${asErrorMessage(error)}`)
-          }
-        }
+        await removePackManifest(manifestRoot, packId)
         return {
-          removed: profile.plugins.length
+          removed: record.plugins.length
             + (record.presets?.length ?? 0)
             + (record.skills?.length ?? 0)
             + (record.applications?.length ?? 0),
@@ -955,12 +1128,13 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       active = true
       try {
         const result = await restoreProfileSnapshot(snapshot)
-        const profile = await options.installer.readProfile(snapshot.dshHome, snapshot.profileName)
-        // 本次新建 pack profile（create/import）→ 回滚 = 彻底撤销创建：删 profile 目录 + 注册表记录。
-        if (profileWasNew || !profile.initialized) {
+        // 共享 Profile 模式下回滚只恢复清单文件，绝不删除当前 Profile 目录。
+        if (profileWasNew && snapshot.profileName !== (await options.readSettings()).profileName) {
           await rm(path.join(snapshot.dshHome, 'profiles', snapshot.profileName), { recursive: true, force: true }).catch(() => undefined)
           await removePackRecord(options.registryPath, snapshot.profileName).catch(() => undefined)
         }
+        const settings = await options.readSettings()
+        await options.saveSettings({ ...settings, activePackId: null })
         options.emitEvent({ kind: 'status', message: `已还原快照 ${snapshot.id}` })
         return { restored: result.restored, profileName: snapshot.profileName }
       } finally {
@@ -982,24 +1156,17 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         if (!isSafePackageName(packageName)) throw new Error('插件名称无效。')
 
         const settings = await options.readSettings()
-        const dshHome = await getDshHome()
         const receipts = await readPluginReceipts(options.pluginReceiptsPath)
         const receipt = receipts.find(item => item.profileName === settings.profileName && item.packageName === packageName)
         if (!receipt) throw new Error('当前 Profile 中找不到该插件的来源记录。')
-        const target = receiptToTarget(receipt, packId)
-        if (!target) throw new Error('本地目录来源的插件无法加入整合包。')
-
-        await mkdir(path.join(dshHome, 'profiles', packId), { recursive: true })
-
         options.emitEvent({ kind: 'status', message: `正在向整合包添加插件 ${packageName}…` })
-        snapshot = await createProfileSnapshot(dshHome, packId, options.snapshotRoot)
-        options.emitEvent({ kind: 'snapshot' })
-        await options.installer.installPluginTarget(target)
         const record = await findRecord(packId)
         const plugins = [...record.plugins.filter(item => item.packageName !== packageName), { packageName, enabled: true }]
         const updated: PackRecord = { ...record, plugins, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        if (settings.activePackId === packId) await applyPluginSet(settings.profileName, updated.plugins, updated.plugins.map(item => item.packageName))
+        return toPackStatus(updated, settings.activePackId)
       } catch (error) {
         options.emitEvent({ kind: 'error', message: asErrorMessage(error) })
         throw error
@@ -1021,12 +1188,13 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         if (!receipt) throw new Error('当前环境找不到该预设的来源记录。')
         const record = await findRecord(packId)
         if (record.presets?.some(item => item.name === presetName)) {
-          return toPackStatus(record, settings.profileName)
+          return toPackStatus(record, settings.activePackId)
         }
         const presets = [...(record.presets ?? []), { name: presetName, enabled: true }]
         const updated: PackRecord = { ...record, presets, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        return toPackStatus(updated, settings.activePackId)
       } finally {
         active = false
       }
@@ -1045,12 +1213,13 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         if (!receipt) throw new Error('当前环境找不到该 Skill 的来源记录。')
         const record = await findRecord(packId)
         if (record.skills?.some(item => item.name === skillName)) {
-          return toPackStatus(record, settings.profileName)
+          return toPackStatus(record, settings.activePackId)
         }
         const skills = [...(record.skills ?? []), { name: skillName, format: receipt.format, enabled: true }]
         const updated: PackRecord = { ...record, skills, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        return toPackStatus(updated, settings.activePackId)
       } finally {
         active = false
       }
@@ -1064,12 +1233,13 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         assertSafePackId(packId)
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skillName)) throw new Error('Skill 名称无效。')
         const settings = await options.readSettings()
-        await options.installer.toggleSkill(skillName, Boolean(enabled))
         const record = await findRecord(packId)
         const skills = (record.skills ?? []).map(item => item.name === skillName ? { ...item, enabled: Boolean(enabled) } : item)
         const updated: PackRecord = { ...record, skills, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        if (settings.activePackId === packId) await options.installer.toggleSkill(skillName, Boolean(enabled))
+        return toPackStatus(updated, settings.activePackId)
       } finally {
         active = false
       }
@@ -1087,22 +1257,9 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         const skills = (record.skills ?? []).filter(item => item.name !== skillName)
         const updated: PackRecord = { ...record, skills: skills.length > 0 ? skills : undefined, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        const remaining = await readPackRegistry(options.registryPath)
-        const stillReferenced = remaining.some(other => (other.skills ?? []).some(item => item.name === skillName))
-        if (!stillReferenced) {
-          const dshHome = await getDshHome()
-          const skillRoot = path.join(dshHome, 'skills')
-          const removed = (record.skills ?? []).find(item => item.name === skillName)
-          if (removed?.format === 'flat') {
-            await rm(path.join(skillRoot, `${skillName}.md`), { recursive: true, force: true }).catch(() => undefined)
-            await rm(path.join(skillRoot, '.disabled', `${skillName}.md`), { recursive: true, force: true }).catch(() => undefined)
-          } else {
-            await rm(path.join(skillRoot, skillName), { recursive: true, force: true }).catch(() => undefined)
-            await rm(path.join(skillRoot, '.disabled', skillName), { recursive: true, force: true }).catch(() => undefined)
-          }
-          await removeSkillReceipt(options.skillReceiptsPath, skillName).catch(() => undefined)
-        }
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        if (settings.activePackId === packId) await options.installer.toggleSkill(skillName, false)
+        return toPackStatus(updated, settings.activePackId)
       } finally {
         active = false
       }
@@ -1120,12 +1277,13 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         if (!addon) throw new Error('当前环境找不到已安装的应用加载项。')
         const record = await findRecord(packId)
         if (record.applications?.some(item => item.id === addonId)) {
-          return toPackStatus(record, settings.profileName)
+          return toPackStatus(record, settings.activePackId)
         }
         const applications = [...(record.applications ?? []), { id: addonId, name: addon.name, enabled: true }]
         const updated: PackRecord = { ...record, applications, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        return toPackStatus(updated, settings.activePackId)
       } finally {
         active = false
       }
@@ -1138,14 +1296,15 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       try {
         assertSafePackId(packId)
         const settings = await options.readSettings()
-        if (options.applicationAddons.toggle) {
+        if (settings.activePackId === packId && options.applicationAddons.toggle) {
           await options.applicationAddons.toggle(addonId, Boolean(enabled))
         }
         const record = await findRecord(packId)
         const applications = (record.applications ?? []).map(item => item.id === addonId ? { ...item, enabled: Boolean(enabled) } : item)
         const updated: PackRecord = { ...record, applications, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        return toPackStatus(updated, settings.activePackId)
       } finally {
         active = false
       }
@@ -1162,16 +1321,9 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         const applications = (record.applications ?? []).filter(item => item.id !== addonId)
         const updated: PackRecord = { ...record, applications: applications.length > 0 ? applications : undefined, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        const remaining = await readPackRegistry(options.registryPath)
-        const stillReferenced = remaining.some(other => (other.applications ?? []).some(item => item.id === addonId))
-        if (!stillReferenced) {
-          try {
-            await options.applicationAddons.uninstall(addonId)
-          } catch (error) {
-            log('error', `卸载应用加载项 ${addonId} 失败：${asErrorMessage(error)}`)
-          }
-        }
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        if (settings.activePackId === packId && options.applicationAddons.toggle) await options.applicationAddons.toggle(addonId, false)
+        return toPackStatus(updated, settings.activePackId)
       } finally {
         active = false
       }
@@ -1185,12 +1337,13 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         assertSafePackId(packId)
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(presetName)) throw new Error('预设名称无效。')
         const settings = await options.readSettings()
-        await options.installer.togglePreset(presetName, Boolean(enabled))
         const record = await findRecord(packId)
         const presets = (record.presets ?? []).map(item => item.name === presetName ? { ...item, enabled: Boolean(enabled) } : item)
         const updated: PackRecord = { ...record, presets, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        if (settings.activePackId === packId) await options.installer.togglePreset(presetName, Boolean(enabled))
+        return toPackStatus(updated, settings.activePackId)
       } finally {
         active = false
       }
@@ -1208,17 +1361,9 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         const presets = (record.presets ?? []).filter(item => item.name !== presetName)
         const updated: PackRecord = { ...record, presets: presets.length > 0 ? presets : undefined, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        // 若没有其它包再引用该预设，则同步清理全局目录与 receipt（与 removePack 语义一致）。
-        const remaining = await readPackRegistry(options.registryPath)
-        const stillReferenced = remaining.some(other => (other.presets ?? []).some(item => item.name === presetName))
-        if (!stillReferenced) {
-          const dshHome = await getDshHome()
-          const presetRoot = path.join(dshHome, '.agent-presets')
-          await rm(path.join(presetRoot, presetName), { recursive: true, force: true }).catch(() => undefined)
-          await rm(path.join(presetRoot, '.disabled', presetName), { recursive: true, force: true }).catch(() => undefined)
-          await removePresetReceipt(options.presetReceiptsPath, presetName).catch(() => undefined)
-        }
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        if (settings.activePackId === packId) await options.installer.togglePreset(presetName, false)
+        return toPackStatus(updated, settings.activePackId)
       } finally {
         active = false
       }
@@ -1231,14 +1376,14 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       try {
         assertSafePackId(packId)
         if (!isSafePackageName(packageName)) throw new Error('插件名称无效。')
-        const dshHome = await getDshHome()
         const settings = await options.readSettings()
-        await options.installer.togglePlugin(dshHome, packId, packageName, Boolean(enabled))
         const record = await findRecord(packId)
         const plugins = record.plugins.map(item => item.packageName === packageName ? { ...item, enabled: Boolean(enabled) } : item)
         const updated: PackRecord = { ...record, plugins, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        if (settings.activePackId === packId) await applyPluginSet(settings.profileName, updated.plugins, updated.plugins.map(item => item.packageName))
+        return toPackStatus(updated, settings.activePackId)
       } finally {
         active = false
       }
@@ -1251,16 +1396,14 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       try {
         assertSafePackId(packId)
         if (!isSafePackageName(packageName)) throw new Error('插件名称无效。')
-        const dshHome = await getDshHome()
         const settings = await options.readSettings()
-        await options.installer.remove(packageName, packId)
-        // 清理该插件残留的离线本体目录（安装后引用已由 remove 断开，可安全删除）。
-        await rm(path.join(packBodiesDir(dshHome, packId), ...packageName.split('/')), { recursive: true, force: true }).catch(() => undefined)
         const record = await findRecord(packId)
         const plugins = record.plugins.filter(item => item.packageName !== packageName)
         const updated: PackRecord = { ...record, plugins, updatedAt: new Date().toISOString() }
         await upsertPackRecord(options.registryPath, updated)
-        return toPackStatus(updated, settings.profileName)
+        await writeRecordManifest(updated)
+        if (settings.activePackId === packId) await applyPluginSet(settings.profileName, updated.plugins, updated.plugins.map(item => item.packageName))
+        return toPackStatus(updated, settings.activePackId)
       } finally {
         active = false
       }

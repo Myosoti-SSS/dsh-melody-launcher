@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { parse } from 'yaml'
 import { afterEach, describe, expect, it } from 'vitest'
-import { approveBuildKeys, approveIgnoredGitHubBuilds, ignoredBuildKeys } from '../electron/plugin-install'
+import { approveBuildKeys, approveIgnoredGitHubBuilds, denyBuildKeys, ignoredBuildKeys } from '../electron/plugin-install'
 
 let temporaryDirectory = ''
 
@@ -61,5 +61,16 @@ describe('plugin build approval', () => {
 
     const workspace = parse(await readFile(workspacePath, 'utf8'))
     expect(workspace.allowBuilds).toEqual({ [registryKey]: true })
+  })
+
+  it('records exact optional native builds as explicitly denied', async () => {
+    temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'dsh-launcher-builds-'))
+    const workspacePath = path.join(temporaryDirectory, 'pnpm-workspace.yaml')
+    await writeFile(workspacePath, 'packages:\n  - .\n', 'utf8')
+    await denyBuildKeys(workspacePath, ['cpu-features@0.0.10', 'ssh2@1.17.0'])
+    expect(parse(await readFile(workspacePath, 'utf8')).allowBuilds).toEqual({
+      'cpu-features@0.0.10': false,
+      'ssh2@1.17.0': false,
+    })
   })
 })

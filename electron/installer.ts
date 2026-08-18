@@ -37,14 +37,14 @@ import {
 } from './dsh-install'
 import { checkDshUpdate } from './dsh-update'
 import { resolveNodeExecutable, type NodeRuntime, type NodeRuntimeProgress, type PnpmRuntime } from './node-runtime'
-import { approveIgnoredGitHubBuilds } from './plugin-install'
+import { approveBuildKeys, approveIgnoredGitHubBuilds, denyBuildKeys, ignoredBuildKeys } from './plugin-install'
 import { analyzeMetaRepository } from './meta-repo-catalog'
 import { analyzeRepository } from './plugin-catalog'
 import { prepareSubdirectoryPlugin, type PluginSourceProgress } from './plugin-source'
 import { readPluginReceipts, recordPluginInstall, removePluginReceipt } from './plugin-receipts'
 import { readPresetReceipts, recordPresetInstall } from './preset-receipts'
 import { readSkillReceipts, recordSkillInstall } from './skill-receipts'
-import { readProfile } from './profile'
+import { isSafePackageName, readProfile } from './profile'
 import { withExecutableDirectoryOnPath } from './process'
 import { analyzeSkillRepository } from './skill-catalog'
 import { readInstalledSkills as readLocalSkills, toggleInstalledSkill } from './skill-format'
@@ -99,6 +99,13 @@ export function validateLocalPluginDirectory(localDirectory?: string): string {
   return localDirectory
 }
 
+function validateNpmVersion(version?: string): string | undefined {
+  if (version === undefined) return undefined
+  const normalized = version.trim()
+  if (!/^[0-9A-Za-z][0-9A-Za-z._+-]{0,127}$/.test(normalized)) throw new Error('npm 插件版本格式无效。')
+  return normalized
+}
+
 export interface InstallerOptions {
   readSettings: () => Promise<AppSettings>
   saveSettings: (settings: AppSettings) => Promise<AppSettings>
@@ -146,6 +153,11 @@ export interface Installer {
     },
     profileOverride?: string,
   ): Promise<RepositoryInstallResult>
+  /** 直接安装 npm 发布的标准 Bundle；用于没有 GitHub 仓库的清单条目。 */
+  installNpmPackage(
+    request: { packageName: string; version?: string; repository?: string; approvedBuildKeys?: string[]; deniedBuildKeys?: string[] },
+    profileOverride?: string,
+  ): Promise<RepositoryInstallResult>
   /** 检测一个插件仓库，返回可安装组件清单（带 5 分钟缓存）。 */
   analyzePlugin(fullName: string, defaultBranch: string): Promise<RepositoryAnalysis>
   /** 检测一个 Skill 仓库，返回可安装组件清单（带 5 分钟缓存）。 */
@@ -157,6 +169,7 @@ export interface Installer {
     fullName: string,
     defaultBranch: string,
     onProgress?: (progress: CatalogAnalysisProgress) => void,
+    options?: { bypassCache?: boolean },
   ): Promise<CatalogRepositoryAnalysis>
   /** 安装一个 Skill。 */
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
@@ -220,11 +233,11 @@ export function createInstaller(options: InstallerOptions): Installer {
   const skillAnalysisCache = new Map<string, { expiresAt: number; analysis: SkillRepositoryAnalysis }>()
   const applicationAnalysisCache = new Map<string, { expiresAt: number; analysis: ApplicationRepositoryAnalysis }>()
 
-  const analyzePlugin = async (fullName: string, defaultBranch: string): Promise<RepositoryAnalysis> => {
+  const analyzePlugin = async (fullName: string, defaultBranch: string, bypassCache = false): Promise<RepositoryAnalysis> => {
     const settings = await options.readSettings()
     const cacheKey = `${fullName.toLowerCase()}#${defaultBranch}#${settings.profileName}`
     const cached = repositoryAnalysisCache.get(cacheKey)
-    if (cached && cached.expiresAt > Date.now()) return cached.analysis
+    if (!bypassCache && cached && cached.expiresAt > Date.now()) return cached.analysis
     const analysis = options.githubFetch
       ? await analyzeRepository(fullName, defaultBranch, settings.profileName, options.githubFetch)
       : await analyzeRepository(fullName, defaultBranch, settings.profileName)
@@ -232,10 +245,10 @@ export function createInstaller(options: InstallerOptions): Installer {
     return analysis
   }
 
-  const analyzeSkill = async (fullName: string, defaultBranch: string): Promise<SkillRepositoryAnalysis> => {
+  const analyzeSkill = async (fullName: string, defaultBranch: string, bypassCache = false): Promise<SkillRepositoryAnalysis> => {
     const cacheKey = `${fullName.toLowerCase()}#${defaultBranch}`
     const cached = skillAnalysisCache.get(cacheKey)
-    if (cached && cached.expiresAt > Date.now()) return cached.analysis
+    if (!bypassCache && cached && cached.expiresAt > Date.now()) return cached.analysis
     const analysis = options.githubFetch
       ? await analyzeSkillRepository(fullName, defaultBranch, options.githubFetch)
       : await analyzeSkillRepository(fullName, defaultBranch)
@@ -246,10 +259,11 @@ export function createInstaller(options: InstallerOptions): Installer {
   const analyzeApplication = async (
     fullName: string,
     defaultBranch: string,
+    bypassCache = false,
   ): Promise<ApplicationRepositoryAnalysis> => {
     const cacheKey = `${fullName.toLowerCase()}#${defaultBranch}`
     const cached = applicationAnalysisCache.get(cacheKey)
-    if (cached && cached.expiresAt > Date.now()) return cached.analysis
+    if (!bypassCache && cached && cached.expiresAt > Date.now()) return cached.analysis
     const analysis = options.githubFetch
       ? await analyzeApplicationRepository(fullName, defaultBranch, options.githubFetch)
       : await analyzeApplicationRepository(fullName, defaultBranch)
@@ -261,14 +275,16 @@ export function createInstaller(options: InstallerOptions): Installer {
     fullName: string,
     defaultBranch: string,
     onProgress?: (progress: CatalogAnalysisProgress) => void,
+    analyzeOptions: { bypassCache?: boolean } = {},
   ): Promise<CatalogRepositoryAnalysis> => {
+    const bypassCache = analyzeOptions.bypassCache === true
     const analysis = await analyzeCatalogWithProgress(
       fullName,
       defaultBranch,
       {
-        plugin: () => analyzePlugin(fullName, defaultBranch),
-        skill: () => analyzeSkill(fullName, defaultBranch),
-        application: () => analyzeApplication(fullName, defaultBranch),
+        plugin: () => analyzePlugin(fullName, defaultBranch, bypassCache),
+        skill: () => analyzeSkill(fullName, defaultBranch, bypassCache),
+        application: () => analyzeApplication(fullName, defaultBranch, bypassCache),
       },
       onProgress,
     )
@@ -280,15 +296,15 @@ export function createInstaller(options: InstallerOptions): Installer {
         ? await analyzeMetaRepository(
             fullName,
             defaultBranch,
-            (repository, branch) => analyzePlugin(repository, branch),
-            (repository, branch) => analyzeSkill(repository, branch),
+            (repository, branch) => analyzePlugin(repository, branch, bypassCache),
+            (repository, branch) => analyzeSkill(repository, branch, bypassCache),
             options.githubFetch,
           )
         : await analyzeMetaRepository(
             fullName,
             defaultBranch,
-            (repository, branch) => analyzePlugin(repository, branch),
-            (repository, branch) => analyzeSkill(repository, branch),
+            (repository, branch) => analyzePlugin(repository, branch, bypassCache),
+            (repository, branch) => analyzeSkill(repository, branch, bypassCache),
           )
       if (metaAnalysis) return metaAnalysis
     }
@@ -366,6 +382,8 @@ export function createInstaller(options: InstallerOptions): Installer {
     installingRepository?: string,
     allowBuildRetry = true,
     profileName?: string,
+    approvedRegistryBuildKeys: string[] = [],
+    deniedRegistryBuildKeys: string[] = [],
   ): Promise<void> {
     const settings = await options.readSettings()
     const targetProfile = profileName ?? settings.profileName
@@ -373,6 +391,9 @@ export function createInstaller(options: InstallerOptions): Installer {
     const pnpmRuntime = await preparePnpm(nodeRuntime, installingRepository)
     const executable = resolveNodeExecutable(settings.launchExecutable, nodeRuntime)
     const commandArgs = buildPluginCommandArgs(settings, executable, args, targetProfile)
+    const workspacePath = path.join(settings.dshHome, 'profiles', targetProfile, 'pnpm-workspace.yaml')
+    if (deniedRegistryBuildKeys.length > 0) await mkdir(path.dirname(workspacePath), { recursive: true })
+    if (deniedRegistryBuildKeys.length > 0) await denyBuildKeys(workspacePath, deniedRegistryBuildKeys)
 
     options.emitOutput('info', `插件操作：${args.join(' ')}`)
     if (installingRepository) {
@@ -428,7 +449,7 @@ export function createInstaller(options: InstallerOptions): Installer {
       })
       if (migrate.exitCode === 0) {
         options.emitOutput('info', 'Profile 依赖已迁移到当前 pnpm store，正在重试安装。')
-        return runPluginCommand(args, installingRepository, false, profileName)
+        return runPluginCommand(args, installingRepository, false, profileName, approvedRegistryBuildKeys, deniedRegistryBuildKeys)
       }
       throw new Error(`插件依赖迁移失败（代码 ${migrate.exitCode}），请查看运行日志。`)
     }
@@ -437,8 +458,11 @@ export function createInstaller(options: InstallerOptions): Installer {
     if (result.exitCode !== 0 && installingRepository && allowBuildRetry && result.output.includes('ERR_PNPM_IGNORED_BUILDS')) {
       const workspacePath = path.join(settings.dshHome, 'profiles', targetProfile, 'pnpm-workspace.yaml')
       const approved = await approveIgnoredGitHubBuilds(workspacePath, result.output, installingRepository)
+      const declared = new Set(approvedRegistryBuildKeys)
+      const registryKeys = ignoredBuildKeys(result.output).filter(key => declared.has(key))
+      approved.push(...await approveBuildKeys(workspacePath, registryKeys))
       if (approved.length > 0) {
-        options.emitOutput('info', `已允许当前仓库的 ${approved.length} 个构建脚本，正在自动重试。`)
+        options.emitOutput('info', `已允许当前插件清单声明的 ${approved.length} 个构建脚本，正在自动重试。`)
         emit({
           repository: installingRepository,
           kind: 'plugin',
@@ -446,7 +470,7 @@ export function createInstaller(options: InstallerOptions): Installer {
           percent: Math.max(82, currentPercent(82)),
           message: '已确认构建权限，正在重新安装',
         })
-        return runPluginCommand(args, installingRepository, false)
+        return runPluginCommand(args, installingRepository, false, profileName, approvedRegistryBuildKeys, deniedRegistryBuildKeys)
       }
     }
 
@@ -736,6 +760,53 @@ export function createInstaller(options: InstallerOptions): Installer {
         throw error
       } finally {
         for (const file of temporaryArtifacts) await rm(file, { force: true }).catch(() => undefined)
+        active = null
+      }
+    },
+
+    async installNpmPackage(request, profileOverride) {
+      if (!isSafePackageName(request.packageName)) throw new Error('npm 插件包名无效。')
+      const version = validateNpmVersion(request.version)
+      const profileName = profileOverride ?? (await options.readSettings()).profileName
+      const repository = request.repository ?? `npm:${request.packageName}`
+      if (active) throw new Error(`正在安装 ${active.repository}，请等待当前任务完成。`)
+      emit({ repository, kind: 'plugin', phase: 'preparing', percent: 5, message: '正在准备 npm 插件' })
+      try {
+        const specifier = version ? `${request.packageName}@${version}` : request.packageName
+        await runPluginCommand(
+          ['add', specifier],
+          repository,
+          true,
+          profileName,
+          request.approvedBuildKeys ?? [],
+          request.deniedBuildKeys ?? [],
+        )
+        emit({ repository, kind: 'plugin', phase: 'configuring', percent: 88, message: '正在核对插件加载顺序' })
+        const settings = await options.readSettings()
+        const installedProfile = await readProfile(settings.dshHome, profileName)
+        const installedPlugin = installedProfile.plugins.find(plugin => plugin.packageName === request.packageName)
+        if (!installedPlugin?.enabled || !installedPlugin.compatible) {
+          throw new Error('包已下载，但 DSH 没有把它识别为有效 Bundle。请检查插件清单和补丁文件。')
+        }
+        await verifyProfileComposition(profileName, repository)
+        await recordPluginInstall(options.pluginReceiptsPath, {
+          repository,
+          packageName: request.packageName,
+          profileName,
+          source: 'npm',
+          subdirectory: null,
+          version: version ?? installedPlugin.version ?? null,
+          commit: '',
+          installedAt: new Date().toISOString(),
+        })
+        const profile = profileName === settings.profileName ? installedProfile : await readProfile(settings.dshHome, settings.profileName)
+        const dshInstallation = await detectDsh()
+        emit({ repository, kind: 'plugin', phase: 'complete', percent: 100, message: `插件已安装到 ${profileName} Profile` })
+        return { kind: 'plugin', profile, settings, dshInstallation, installedProfileName: profileName, packageName: request.packageName }
+      } catch (error) {
+        emit({ repository, kind: 'plugin', phase: 'error', percent: currentPercent(0), message: error instanceof Error ? error.message : '安装失败' })
+        throw error
+      } finally {
         active = null
       }
     },

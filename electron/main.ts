@@ -7,6 +7,7 @@ import type { AppSettings, RuntimeOutput, WindowMode } from '../src/types'
 import { ACP_RUNTIME_DIRNAME, CREDENTIALS_LOCK_DIRNAME, createAiInstaller, healCredentialsLock, type AiInstaller } from './ai-install'
 import { createApplicationAddonManager, type ApplicationAddonManager } from './application-addons'
 import { applyWindowMode, createMainWindow, createRendererChannel } from './app-window'
+import { createCatalogSyncService, type CatalogSyncService } from './catalog-sync'
 import { runCommand } from './command'
 import { readDeepSeekApiKey } from './credentials'
 import { findInstalledDsh } from './dsh-install'
@@ -29,7 +30,7 @@ import { createPluginTrialManager, type PluginTrialManager } from './plugin-tria
 import { recordPluginInstall } from './plugin-receipts'
 import { configureProcessTracker, withExecutableDirectoryOnPath } from './process'
 import { createProcessSupervisor, type ProcessSupervisor } from './process-supervisor'
-import { readProfile, togglePlugin } from './profile'
+import { readProfile, reorderPlugins, togglePlugin } from './profile'
 import { installPresetFromDirectory } from './preset-install'
 import { installSkillFromDirectory } from './skill-install'
 import { createRendererEvents } from './renderer-events'
@@ -61,6 +62,7 @@ interface Services {
   launcherUpdater: LauncherUpdater
   githubAuth: GitHubAuthService
   applicationAddons: ApplicationAddonManager
+  catalogSync: CatalogSyncService
 }
 
 // app.getPath 依赖 app 就绪，因此服务在 whenReady 之后才装配。
@@ -87,6 +89,12 @@ function createServices(): Services {
       encrypt: value => safeStorage.encryptString(value),
       decrypt: value => safeStorage.decryptString(value),
     },
+  })
+  const catalogSync = createCatalogSyncService({
+    fetchImpl: githubAuth.fetch,
+    getAuthStatus: () => githubAuth.getStatus(),
+    pendingDir: path.join(userData, 'catalog', 'pending'),
+    onFlush: result => events.output('plugin', result.submitted > 0 ? 'success' : 'error', result.message),
   })
 
   /**
@@ -269,9 +277,11 @@ function createServices(): Services {
       if (target.source === 'npm' && target.version && target.version !== '0.0.0') request.version = target.version
       await installer.installPluginTarget(request, target.profileName)
     },
+    installNpmPackage: (request, profileOverride) => installer.installNpmPackage(request, profileOverride),
     remove: (packageName, profileName) => installer.remove(packageName, profileName),
     readProfile: (dshHome, profileName) => readProfile(dshHome, profileName),
     togglePlugin: (dshHome, profileName, packageName, enabled) => togglePlugin(dshHome, profileName, packageName, enabled),
+    reorderPlugins: (dshHome, profileName, packageNames) => reorderPlugins(dshHome, profileName, packageNames),
     // raw 整合包导入的技能：从本地 staging 目录全局安装（bundle 目录或 flat 单文件）。
     installSkillLocal: (dshHome, skill) => installSkillFromDirectory(dshHome, skill.name, skill.format, skill.sourceDir),
     installSkill: request => installer.installSkill(request),
@@ -286,6 +296,7 @@ function createServices(): Services {
     readSettings: () => settings.read(),
     saveSettings: next => settings.save(next),
     registryPath: path.join(userData, 'packs.json'),
+    manifestRoot: path.join(userData, 'pack-manifests'),
     snapshotRoot: path.join(userData, 'pack-snapshots'),
     pluginReceiptsPath,
     presetReceiptsPath,
@@ -312,7 +323,7 @@ function createServices(): Services {
     .then(current => healCredentialsLock(current.dshHome, path.join(userData, CREDENTIALS_LOCK_DIRNAME)))
     .catch(() => { /* 设置未就绪可忽略，锁会在下次 AI 会话前置处理 */ })
 
-  return { settings, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons }
+  return { settings, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons, catalogSync }
 }
 
 function openMainWindow(): void {

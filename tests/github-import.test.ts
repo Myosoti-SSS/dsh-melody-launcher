@@ -182,7 +182,7 @@ describe('importCatalogFromUrl', () => {
       fetchImpl,
     )
     expect(result.repository.defaultBranch).toBe('develop')
-    expect(analyze).toHaveBeenCalledWith('someone/dsh-example', 'develop')
+    expect(analyze).toHaveBeenCalledWith('someone/dsh-example', 'develop', '2026-08-01T00:00:00Z')
   })
 
   it('falls back to the metadata default branch when the URL has none', async () => {
@@ -190,7 +190,7 @@ describe('importCatalogFromUrl', () => {
     const fetchImpl = (async () => jsonResponse({ ...item, default_branch: 'master' })) as typeof fetch
     const result = await importCatalogFromUrl('https://github.com/someone/dsh-example', analyze, fetchImpl)
     expect(result.repository.defaultBranch).toBe('master')
-    expect(analyze).toHaveBeenCalledWith('someone/dsh-example', 'master')
+    expect(analyze).toHaveBeenCalledWith('someone/dsh-example', 'master', '2026-08-01T00:00:00Z')
   })
 
   it('falls back to main when metadata is unavailable and the URL has no branch', async () => {
@@ -198,7 +198,7 @@ describe('importCatalogFromUrl', () => {
     const fetchImpl = (async () => { throw new Error('network down') }) as typeof fetch
     const result = await importCatalogFromUrl('someone/dsh-example', analyze, fetchImpl)
     expect(result.repository.defaultBranch).toBe('main')
-    expect(analyze).toHaveBeenCalledWith('someone/dsh-example', 'main')
+    expect(analyze).toHaveBeenCalledWith('someone/dsh-example', 'main', undefined)
   })
 
   it('returns the analysis from the injected analyzer', async () => {

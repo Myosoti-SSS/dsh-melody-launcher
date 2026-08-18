@@ -73,7 +73,7 @@ export function buildImportedRepository(
 /** 解析 → 取元数据 → 定分支 → 建行 → 调分析。分析器由调用方注入，便于单测。 */
 export async function importCatalogFromUrl(
   url: string,
-  analyze: (fullName: string, branch: string) => Promise<CatalogRepositoryAnalysis>,
+  analyze: (fullName: string, branch: string, repositoryUpdatedAt?: string) => Promise<CatalogRepositoryAnalysis>,
   fetchImpl: typeof fetch = fetch,
 ): Promise<CatalogImportResult> {
   const parsed = parseGitHubImportUrl(url)
@@ -81,6 +81,6 @@ export async function importCatalogFromUrl(
   const item = await fetchGitHubRepository(parsed.fullName, fetchImpl)
   const branch = parsed.defaultBranch ?? item?.default_branch ?? 'main'
   const repository = buildImportedRepository(item, parsed.fullName, branch)
-  const analysis = await analyze(parsed.fullName, branch)
+  const analysis = await analyze(parsed.fullName, branch, item ? repository.updatedAt : undefined)
   return { repository, analysis }
 }
