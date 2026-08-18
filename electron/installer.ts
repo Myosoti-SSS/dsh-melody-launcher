@@ -37,7 +37,7 @@ import {
 } from './dsh-install'
 import { checkDshUpdate } from './dsh-update'
 import { resolveNodeExecutable, type NodeRuntime, type NodeRuntimeProgress, type PnpmRuntime } from './node-runtime'
-import { approveBuildKeys, approveIgnoredGitHubBuilds, denyBuildKeys, ignoredBuildKeys } from './plugin-install'
+import { approveAllIgnoredBuilds, denyBuildKeys } from './plugin-install'
 import { analyzeMetaRepository } from './meta-repo-catalog'
 import { analyzeRepository } from './plugin-catalog'
 import { prepareSubdirectoryPlugin, type PluginSourceProgress } from './plugin-source'
@@ -454,15 +454,13 @@ export function createInstaller(options: InstallerOptions): Installer {
       throw new Error(`插件依赖迁移失败（代码 ${migrate.exitCode}），请查看运行日志。`)
     }
 
-    // pnpm 默认拒绝执行依赖里的构建脚本。只为当前正在安装的仓库放行，然后重试一次。
+    // pnpm 默认拒绝执行依赖里的构建脚本。这里等价于 `pnpm approve-builds`，
+    // 批准 pnpm 报告的全部被忽略构建脚本后自动重试一次。
     if (result.exitCode !== 0 && installingRepository && allowBuildRetry && result.output.includes('ERR_PNPM_IGNORED_BUILDS')) {
       const workspacePath = path.join(settings.dshHome, 'profiles', targetProfile, 'pnpm-workspace.yaml')
-      const approved = await approveIgnoredGitHubBuilds(workspacePath, result.output, installingRepository)
-      const declared = new Set(approvedRegistryBuildKeys)
-      const registryKeys = ignoredBuildKeys(result.output).filter(key => declared.has(key))
-      approved.push(...await approveBuildKeys(workspacePath, registryKeys))
+      const approved = await approveAllIgnoredBuilds(workspacePath, result.output)
       if (approved.length > 0) {
-        options.emitOutput('info', `已允许当前插件清单声明的 ${approved.length} 个构建脚本，正在自动重试。`)
+        options.emitOutput('info', `已允许 ${approved.length} 个被忽略的构建脚本，正在自动重试。`)
         emit({
           repository: installingRepository,
           kind: 'plugin',
