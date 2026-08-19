@@ -11,9 +11,9 @@ import type { InstalledApplicationAddon, InstalledPreset, InstalledSkill, Manage
 type ResourceTab = 'plugins' | 'presets' | 'skills' | 'applications'
 
 export interface CreatePackDialogProps {
-  /** 当前 profile 已安装插件（含内置），用 packageName 作为选择键。 */
+  /** 当前 profile 已安装插件（含内置；内置会自动过滤），用 packageName 作为选择键。 */
   plugins: ManagedPlugin[]
-  /** 已安装的 Agent 预设；有 repository/sourcePath/revision 的才可加入可导出整合包。 */
+  /** 已安装的 Agent 预设；即使没有来源记录也会随包离线导出。 */
   presets: InstalledPreset[]
   /** 已安装且带来源记录的 Skill。 */
   skills: InstalledSkill[]
@@ -33,10 +33,12 @@ export function packIdFromName(name: string): string {
 }
 
 export function CreatePackDialog({ plugins, presets, skills, applications, onConfirm, onClose }: CreatePackDialogProps) {
+  // 内置 Bundle（核心插件）由启动器/DSH 自己提供，不属于用户可导出资源，不出现在勾选列表。
+  const selectablePlugins = plugins.filter(plugin => !plugin.builtin)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(plugins.filter(plugin => plugin.enabled).map(plugin => plugin.packageName)),
+    () => new Set(selectablePlugins.filter(plugin => plugin.enabled).map(plugin => plugin.packageName)),
   )
   const [selectedPresets, setSelectedPresets] = useState<Set<string>>(() => new Set())
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(() => new Set())
@@ -120,7 +122,7 @@ export function CreatePackDialog({ plugins, presets, skills, applications, onCon
           <div className="form-section divided">
             <div className="pack-resource-tabs" role="tablist" aria-label="选择要加入整合包的资源类型">
               <button type="button" role="tab" aria-selected={resourceTab === 'plugins'} className={resourceTab === 'plugins' ? 'active' : ''} onClick={() => setResourceTab('plugins')}>
-                插件 <span>{selected.size}/{plugins.length}</span>
+                插件 <span>{selected.size}/{selectablePlugins.length}</span>
               </button>
               <button type="button" role="tab" aria-selected={resourceTab === 'presets'} className={resourceTab === 'presets' ? 'active' : ''} onClick={() => setResourceTab('presets')}>
                 预设 <span>{selectedPresets.size}/{presets.length}</span>
@@ -135,13 +137,13 @@ export function CreatePackDialog({ plugins, presets, skills, applications, onCon
 
             {resourceTab === 'plugins' && (
               <div className="pack-resource-panel">
-                <h3>包含插件（已选 {selected.size} / {plugins.length}）</h3>
-                <p>从当前已安装插件中挑选；创建后会把这些插件组合进新的整合包 Profile。</p>
-                {plugins.length === 0 ? (
+                <h3>包含插件（已选 {selected.size} / {selectablePlugins.length}）</h3>
+                <p>从当前已安装插件中挑选（内置核心插件不参与打包）；创建后会把这些插件组合进新的整合包 Profile。</p>
+                {selectablePlugins.length === 0 ? (
                   <div className="pack-checklist-empty">当前 Profile 还没有可挑选的插件，先安装一些插件再来创建。</div>
                 ) : (
                   <div className="pack-plugin-checklist">
-                    {plugins.map(plugin => {
+                    {selectablePlugins.map(plugin => {
                       const checked = selected.has(plugin.packageName)
                       return (
                         <label className={`pack-checklist-item ${checked ? 'checked' : ''} ${plugin.enabled ? '' : 'muted'}`} key={plugin.packageName}>
@@ -162,7 +164,7 @@ export function CreatePackDialog({ plugins, presets, skills, applications, onCon
             {resourceTab === 'presets' && (
               <div className="pack-resource-panel">
                 <h3>包含预设（已选 {selectedPresets.size} / {presets.length}）</h3>
-                <p>从已安装且有来源记录的 Agent 预设中挑选；没有来源记录的预设无法随包导出/重装。</p>
+                <p>从已安装的 Agent 预设中挑选；即使没有来源记录，也会把本地预设本体打进整合包离线导出。</p>
                 {presets.length === 0 ? (
                   <div className="pack-checklist-empty">当前环境还没有可加入整合包的 Agent 预设。</div>
                 ) : (
@@ -171,18 +173,17 @@ export function CreatePackDialog({ plugins, presets, skills, applications, onCon
                       const addable = Boolean(preset.repository && preset.sourcePath && preset.revision)
                       const checked = selectedPresets.has(preset.name)
                       return (
-                        <label className={`pack-checklist-item ${checked ? 'checked' : ''} ${addable ? '' : 'muted'}`} key={preset.name}>
+                        <label className={`pack-checklist-item ${checked ? 'checked' : ''}`} key={preset.name}>
                           <input
                             type="checkbox"
                             checked={checked}
-                            disabled={!addable}
                             onChange={() => togglePreset(preset.name)}
                             aria-label={`${checked ? '取消' : '选择'} 预设 ${preset.name}`}
                           />
                           <span className="pack-item-glyph">{preset.name.slice(0, 2).toUpperCase()}</span>
                           <span className="pack-checklist-copy">
                             <strong>{preset.name}</strong>
-                            <small>{addable ? `${preset.repository} · ${preset.sourcePath}` : '无来源记录，不可加入'}</small>
+                            <small>{addable ? `${preset.repository} · ${preset.sourcePath}` : '无来源记录，将随包离线导出'}</small>
                           </span>
                         </label>
                       )
@@ -261,7 +262,7 @@ export function CreatePackDialog({ plugins, presets, skills, applications, onCon
             onClick={() => onConfirm({
               name: name.trim(),
               description: description.trim(),
-              packageNames: plugins.filter(plugin => selected.has(plugin.packageName)).map(plugin => plugin.packageName),
+              packageNames: selectablePlugins.filter(plugin => selected.has(plugin.packageName)).map(plugin => plugin.packageName),
               presetNames: presets.filter(preset => selectedPresets.has(preset.name)).map(preset => preset.name),
               skillNames: skills.filter(skill => selectedSkills.has(skill.name)).map(skill => skill.name),
               applicationIds: applications.filter(addon => selectedApplications.has(addon.id)).map(addon => addon.id),
