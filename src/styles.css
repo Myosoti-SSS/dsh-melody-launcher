@@ -3236,6 +3236,8 @@ input:focus-visible {
 
 .install-cell {
   display: flex;
+  width: 100%;
+  min-width: 0;
   justify-content: flex-end;
 }
 
@@ -3310,6 +3312,38 @@ input:focus-visible {
   min-width: 62px;
   min-height: 30px;
   padding: 0 10px;
+}
+
+/* Keep catalog row actions in a stable slot.  Rows can expose a single
+ * install/update command, a trial plus install pair, or an in-progress
+ * state; the right edge should stay fixed and the controls should not
+ * resize when their labels change. */
+.repository-row .installed-actions,
+.repository-row .ai-ready-actions {
+  width: 100%;
+  align-items: flex-end;
+}
+
+.repository-row .installed-label {
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.repository-row .installed-command-row,
+.repository-row .ai-ready-actions {
+  width: 100%;
+}
+
+.repository-row .installed-command-row > .install-button,
+.repository-row .ai-ready-actions > .install-button,
+.repository-row .ai-ready-actions > .ai-try-button,
+.repository-row .plugin-trial-actions > button {
+  box-sizing: border-box;
+  width: 96px;
+  min-width: 96px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 7px;
 }
 
 .install-progress {

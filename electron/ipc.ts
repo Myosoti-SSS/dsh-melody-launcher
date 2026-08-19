@@ -189,9 +189,9 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       payload.fullName,
       payload.defaultBranch,
       payload.repositoryUpdatedAt,
-      () => installer.analyzeCatalogRepository(payload.fullName, payload.defaultBranch, progress => {
+      componentKinds => installer.analyzeCatalogRepository(payload.fullName, payload.defaultBranch, progress => {
         if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, progress)
-      }, { bypassCache: true }),
+      }, { bypassCache: true, componentKinds }),
       message => {
         if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, {
           repository: payload.fullName,
@@ -216,9 +216,9 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
         fullName,
         branch,
         repositoryUpdatedAt,
-        () => installer.analyzeCatalogRepository(fullName, branch, progress => {
+        componentKinds => installer.analyzeCatalogRepository(fullName, branch, progress => {
           if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, progress)
-        }, { bypassCache: true }),
+        }, { bypassCache: true, componentKinds }),
         message => {
           if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, {
             repository: fullName,

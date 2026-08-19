@@ -590,7 +590,7 @@ export function DiscoverView({
       <PageHeading
         eyebrow="DSH MARKET"
         title="DSH 资源市场"
-        description={`统一浏览 GitHub 中 ${topicTotals.plugin.toLocaleString('zh-CN')} 个 Plugin、${topicTotals.skill.toLocaleString('zh-CN')} 个 Skill 和 ${topicTotals.application.toLocaleString('zh-CN')} 个应用候选，安装前会按仓库内容重新识别类型。`}
+        description={`统一浏览 GitHub 中 ${topicTotals.plugin.toLocaleString('zh-CN')} 个 Plugin 和 ${topicTotals.application.toLocaleString('zh-CN')} 个应用候选；安装前仍会按仓库内容识别其中的 Skill。`}
       />
 
       <div className="discovery-controls">

@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 
-/** GitHub 双 topic 资源市场的分页条。 */
+/** GitHub 资源市场的分页条。 */
 
 interface CatalogPaginationProps {
   page: number

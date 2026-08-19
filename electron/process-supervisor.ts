@@ -24,6 +24,28 @@ function waitForExit(child) {
 async function killTree(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return
   if (process.platform === 'win32') {
+    // 某些 DSH 通道会把机器人进程脱离父进程树。先从 WMI 快照递归收集
+    // 后代并反向结束，再用 taskkill 做一次兜底，避免微信服务遗留在后台。
+    const script = [
+      '$ErrorActionPreference = "SilentlyContinue"',
+      '$root = ' + String(pid),
+      '$rows = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)',
+      '$ids = @($root)',
+      '$todo = @($root)',
+      'while ($todo.Count -gt 0) {',
+      '  $parent = $todo[0]',
+      '  if ($todo.Count -gt 1) { $todo = @($todo[1..($todo.Count - 1)]) } else { $todo = @() }',
+      '  foreach ($child in @($rows | Where-Object { $_.ParentProcessId -eq $parent } | Select-Object -ExpandProperty ProcessId)) {',
+      '    if ($ids -notcontains $child) { $ids += $child; $todo += $child }',
+      '  }',
+      '}',
+      '[Array]::Reverse($ids)',
+      'foreach ($id in $ids) { Stop-Process -Id $id -Force }',
+    ].join('; ')
+    const snapshotKiller = spawn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script,
+    ], { windowsHide: true, stdio: 'ignore' })
+    await waitForExit(snapshotKiller)
     const killer = spawn('taskkill.exe', ['/pid', String(pid), '/t', '/f'], {
       windowsHide: true,
       stdio: 'ignore',

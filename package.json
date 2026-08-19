@@ -1,6 +1,6 @@
 {
   "name": "dsh-launcher",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "description": "A local desktop launcher and plugin organizer for DeepSeek Harness.",
   "keywords": [
@@ -33,6 +33,7 @@
     "package:win": "npm run build && electron-builder --win portable"
   },
   "dependencies": {
+    "@xmldom/xmldom": "^0.8.14",
     "adm-zip": "^0.6.0",
     "lucide-react": "^1.31.0",
     "react": "^19.2.8",
