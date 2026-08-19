@@ -62,7 +62,7 @@ describe('process supervisor', () => {
     expect(child.exitCode !== null || child.signalCode !== null).toBe(true)
   }, 20_000)
 
-  it('ends a detached descendant created by a tracked process', async () => {
+  it.skipIf(process.platform !== 'win32')('ends a detached descendant created by a tracked process', async () => {
     temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'dsh-process-supervisor-descendant-'))
     supervisor = await createProcessSupervisor({
       root: path.join(temporaryDirectory, 'supervisor'),
