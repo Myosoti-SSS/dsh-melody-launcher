@@ -749,6 +749,38 @@ describe('analyzeImport', () => {
 })
 
 // ---------------------------------------------------------------------------
+// removePack
+// ---------------------------------------------------------------------------
+
+describe('removePack runtime guard', () => {
+  it('allows deleting an inactive pack while DSH runtime is running', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    stub.readProfile.mockResolvedValue({ ...defaultProfile, plugins: [managedPlugin('alpha')] })
+    const store = makeSettings(env.dshHome, 'web')
+    const { manager } = makeManager(env, stub, store, { isRuntimeRunning: () => true })
+    await upsertPackRecord(env.registryPath, recordFor('pack-x', [{ packageName: 'alpha', enabled: true }]))
+
+    const result = await manager.removePack('pack-x')
+    expect(result.removed).toBe(1)
+    expect(await readPackRegistry(env.registryPath)).toEqual([])
+  })
+
+  it('still blocks deleting an active pack while DSH runtime is running', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    stub.readProfile.mockResolvedValue({ ...defaultProfile, plugins: [managedPlugin('alpha')] })
+    const store = makeSettings(env.dshHome, 'web')
+    store.current.activePackId = 'pack-x'
+    const { manager } = makeManager(env, stub, store, { isRuntimeRunning: () => true })
+    await upsertPackRecord(env.registryPath, recordFor('pack-x', [{ packageName: 'alpha', enabled: true }]))
+
+    await expect(manager.removePack('pack-x')).rejects.toThrow('DSH 运行时正在运行')
+    expect(await readPackRegistry(env.registryPath)).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // activate / deactivate
 // ---------------------------------------------------------------------------
 

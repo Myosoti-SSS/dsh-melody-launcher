@@ -1134,12 +1134,18 @@ export function createPackManager(options: PackManagerOptions): PackManager {
     },
 
     async removePack(packId) {
-      const reason = guarded()
+      const settings = await options.readSettings()
+      const reason = settings.activePackId === packId
+        ? guarded()
+        : guardPackStart({
+            isRuntimeRunning: () => false,
+            isInstallerBusy: options.isInstallerBusy,
+            isPackBusy: () => active,
+          })
       if (reason) throw new Error(reason)
       beginTask()
       try {
         const record = await findRecord(packId)
-        const settings = await options.readSettings()
         if (settings.activePackId === packId) {
           await restoreBaseline(settings)
         }
