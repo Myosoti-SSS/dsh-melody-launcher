@@ -378,7 +378,7 @@ export interface CatalogRepositoryAnalysis {
   /** agent-preset 组件（meta-repo 子模块里的预设目录），非聚合仓库无此字段。 */
   presetAnalysis?: PresetRepositoryAnalysis | null
   warnings: string[]
-  /** 共享检测目录同步状态；仅运行时附加，不写入共享 JSON。 */
+  /** 共享检测目录同步状态；仅运行时附加，不写入共享 XML。 */
   sync?: CatalogSyncInfo
 }
 

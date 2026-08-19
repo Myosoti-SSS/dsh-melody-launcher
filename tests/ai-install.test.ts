@@ -12,6 +12,7 @@ import {
   buildInstallPrompt,
   buildPluginAdaptationPrompt,
   buildRuntimeRepairPrompt,
+  createAiInstaller,
   createProfileSnapshot,
   decideApproval,
   healCredentialsLock,
@@ -25,7 +26,8 @@ import {
   restoreProfileSnapshot,
 } from '../electron/ai-install'
 import type { AcpPermissionRequest } from '../electron/acp-client'
-import type { PluginInstallability, PluginInstallTarget, RepositoryAnalysis } from '../src/types'
+import type { NodeRuntime } from '../electron/node-runtime'
+import type { AiInstallEvent, AppSettings, PluginInstallability, PluginInstallTarget, RepositoryAnalysis } from '../src/types'
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -325,6 +327,72 @@ describe('aiInfrastructureFailure', () => {
 
   it('正常的不可安装研究结论不算基础设施故障', () => {
     expect(aiInfrastructureFailure('该仓库既不是标准插件 Bundle，也不包含有效 Skill，因此无法安装。')).toBeNull()
+  })
+})
+
+describe('AI task cancellation', () => {
+  it('cancels a runtime repair while the managed runtime is still preparing', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ai-cancel-preparing-'))
+    const dshHome = path.join(root, 'dsh-home')
+    const profileName = 'web'
+    await mkdir(path.join(dshHome, 'profiles', profileName), { recursive: true })
+    await writeFile(path.join(dshHome, 'profiles', profileName, 'package.json'), JSON.stringify({
+      name: 'dsh-profile-web',
+      dependencies: {},
+      dsh: { profile: { bundles: [] } },
+    }))
+
+    const settings: AppSettings = {
+      dshInstallPath: path.join(root, 'dsh-runtime'),
+      dshHome,
+      profileName,
+      workspace: dshHome,
+      launchExecutable: 'dsh',
+      launchArgs: ['web'],
+      webPort: 3080,
+      openAfterLaunch: false,
+    }
+    let releaseNode!: (runtime: NodeRuntime) => void
+    let markNodeStarted!: () => void
+    const nodeStarted = new Promise<void>(resolve => { markNodeStarted = resolve })
+    const nodeRuntime = new Promise<NodeRuntime>(resolve => { releaseNode = resolve })
+    const events: AiInstallEvent[] = []
+    let pnpmPreparationCount = 0
+    const installer = createAiInstaller({
+      readSettings: async () => settings,
+      prepareNodeRuntime: async () => {
+        markNodeStarted()
+        return nodeRuntime
+      },
+      preparePnpmRuntime: async () => {
+        pnpmPreparationCount += 1
+        return { root, executable: 'pnpm' }
+      },
+      acpRuntimeRoot: path.join(root, 'acp-runtime'),
+      snapshotRoot: path.join(root, 'snapshots'),
+      emitOutput: () => undefined,
+      emitEvent: event => events.push(event),
+      isRuntimeRunning: () => false,
+      isInstallerBusy: () => false,
+      analyzePlugin: async () => analysis('invalid'),
+      readApiKey: async () => 'sk-test',
+    })
+
+    try {
+      const repair = installer.repairRuntime({ profileName, diagnostics: 'failed to load plugin' })
+      await nodeStarted
+      await installer.cancel()
+
+      expect(installer.status()).toMatchObject({ phase: 'cancelled', message: '用户已取消' })
+      expect(events.filter(event => event.kind === 'cancelled')).toHaveLength(1)
+
+      releaseNode({ root, node: 'node', npm: 'npm', npx: 'npx', managed: true })
+      await expect(repair).resolves.toEqual({ ok: false, message: '用户已取消' })
+      expect(pnpmPreparationCount).toBe(0)
+      expect(installer.isBusy()).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 

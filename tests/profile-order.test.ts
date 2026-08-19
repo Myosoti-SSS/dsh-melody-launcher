@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { movePackage, movePackageTo, reorderProfilePlugins } from '../src/lib/profile-order'
+import { activeOrderFromDisplay, movePackage, movePackageTo, reorderProfilePlugins } from '../src/lib/profile-order'
 import type { ManagedPlugin, ProfileState } from '../src/types'
 
 function plugin(packageName: string, enabled: boolean, order: number | null): ManagedPlugin {
@@ -44,6 +44,20 @@ describe('reorderProfilePlugins', () => {
     reorderProfilePlugins(profile, ['c', 'a', 'b'])
     expect(profile.activeBundles).toEqual(['a', 'b', 'c'])
     expect(profile.plugins[0].order).toBe(1)
+  })
+})
+
+describe('activeOrderFromDisplay', () => {
+  it('restores a re-enabled plugin to its retained display position', () => {
+    expect(activeOrderFromDisplay(['a', 'b', 'c', 'd'], ['a', 'b', 'd', 'c'])).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('does not mutate either input array', () => {
+    const displayOrder = ['a', 'b', 'c', 'd']
+    const activePackageNames = ['a', 'b', 'd', 'c']
+    activeOrderFromDisplay(displayOrder, activePackageNames)
+    expect(displayOrder).toEqual(['a', 'b', 'c', 'd'])
+    expect(activePackageNames).toEqual(['a', 'b', 'd', 'c'])
   })
 })
 

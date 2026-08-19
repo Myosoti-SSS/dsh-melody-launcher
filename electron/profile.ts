@@ -1,6 +1,7 @@
 import { access, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ManagedPlugin, ProfileState } from '../src/types'
+import { readPluginReceipts } from './plugin-receipts'
 
 interface PackageManifest {
   name?: string
@@ -87,7 +88,7 @@ async function resolveDependencyManifest(profileDir: string, packageName: string
   }
 }
 
-export async function readProfile(dshHome: string, profileName: string): Promise<ProfileState> {
+export async function readProfile(dshHome: string, profileName: string, pluginReceiptsPath?: string): Promise<ProfileState> {
   const { profileDir, manifestPath } = profilePaths(dshHome, profileName)
   const manifest = await readJson<PackageManifest>(manifestPath)
   if (!manifest) {
@@ -105,6 +106,14 @@ export async function readProfile(dshHome: string, profileName: string): Promise
   const profileBundles = [...(manifest.dsh?.profile?.bundles ?? [])]
   const dependencies = Object.keys(manifest.dependencies ?? {})
   const allNames = [...new Set([...profileBundles, ...dependencies])]
+  let receipts: Awaited<ReturnType<typeof readPluginReceipts>> = []
+  if (pluginReceiptsPath) {
+    try {
+      receipts = await readPluginReceipts(pluginReceiptsPath)
+    } catch {
+      // 安装收据只是来源补充，损坏时不能阻塞 Profile 本身的读取。
+    }
+  }
   const manifests = new Map<string, ResolvedDependency>()
   await Promise.all(dependencies.map(async packageName => {
     manifests.set(packageName, await resolveDependencyManifest(profileDir, packageName))
@@ -119,8 +128,16 @@ export async function readProfile(dshHome: string, profileName: string): Promise
       const compatible = builtin || enabled || Boolean(resolvedDependency?.bundleAvailable)
       const manifestRepo = repositoryUrl(dependencyManifest ?? {})
       const dependencyRepo = repositoryFullNameFromSpecifier(manifest.dependencies?.[packageName])
-      const repositoryFullName = dependencyRepo ?? repositoryFullNameFromSpecifier(manifestRepo)
-      const repo = dependencyRepo ? `https://github.com/${dependencyRepo}` : manifestRepo
+      const receiptRepo = repositoryFullNameFromSpecifier(receipts.find(receipt =>
+        receipt.profileName === profileName && receipt.packageName === packageName,
+      )?.repository)
+      const repositoryFullName = dependencyRepo ?? repositoryFullNameFromSpecifier(manifestRepo) ?? receiptRepo
+      // Always expose a browser-ready GitHub URL when the source can be normalized.
+      // This also fixes manifests that use `github:owner/repo`, `git+https://...`,
+      // or a repository URL containing `/tree/<branch>/<subdirectory>`.
+      const repo = repositoryFullName
+        ? `https://github.com/${repositoryFullName}`
+        : manifestRepo
       return {
         packageName,
         displayName: displayName(packageName),
@@ -158,6 +175,7 @@ async function updateBundles(
   dshHome: string,
   profileName: string,
   transform: (bundles: string[], manifest: PackageManifest) => string[],
+  pluginReceiptsPath?: string,
 ): Promise<ProfileState> {
   const { profileDir, manifestPath } = profilePaths(dshHome, profileName)
   const manifest = await readJson<PackageManifest>(manifestPath)
@@ -179,7 +197,7 @@ async function updateBundles(
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
     await unlink(temporaryPath).catch(() => undefined)
   }
-  return readProfile(dshHome, profileName)
+  return readProfile(dshHome, profileName, pluginReceiptsPath)
 }
 
 export async function togglePlugin(
@@ -187,6 +205,7 @@ export async function togglePlugin(
   profileName: string,
   packageName: string,
   enabled: boolean,
+  pluginReceiptsPath?: string,
 ): Promise<ProfileState> {
   return updateBundles(dshHome, profileName, (bundles, manifest) => {
     if (CORE_BUNDLES.has(packageName) && !enabled) {
@@ -197,20 +216,21 @@ export async function togglePlugin(
     if (enabled && !bundles.includes(packageName)) return [...bundles, packageName]
     if (!enabled) return bundles.filter(name => name !== packageName)
     return bundles
-  })
+  }, pluginReceiptsPath)
 }
 
 export async function reorderPlugins(
   dshHome: string,
   profileName: string,
   packageNames: string[],
+  pluginReceiptsPath?: string,
 ): Promise<ProfileState> {
   return updateBundles(dshHome, profileName, bundles => {
     if (packageNames.length !== bundles.length) throw new Error('新的加载顺序不完整，请刷新后重试。')
     const current = new Set(bundles)
     if (packageNames.some(name => !current.has(name))) throw new Error('新的加载顺序包含未知插件。')
     return packageNames
-  })
+  }, pluginReceiptsPath)
 }
 
 export async function pathExists(target: string): Promise<boolean> {

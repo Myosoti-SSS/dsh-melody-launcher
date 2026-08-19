@@ -704,15 +704,18 @@ export const demoApi: LauncherApi = {
   discoverCatalog: async (query, sort, page): Promise<CatalogDiscoveryResult> => {
     const needle = query.trim().toLowerCase()
     const matchingRepositories = demoRepositories
+      // 演示目录与真实目录保持一致：不再把仅有 dsh-skill 来源的仓库
+      // 当作独立市场结果，但混合仓库仍然保留并在检测后识别 Skill 组件。
+      .filter(repo => repo.kind === 'dsh' || repo.candidateTypes.some(type => type !== 'skill'))
       .filter(repo => !needle || `${repo.fullName} ${repo.description}`.toLowerCase().includes(needle))
       .sort((a, b) => sort === 'stars' ? b.stars - a.stars : b.updatedAt.localeCompare(a.updatedAt))
     const start = (Math.max(1, page) - 1) * 30
     const repositories = matchingRepositories.slice(start, start + 30)
     return {
       repositories,
-      topicTotals: { plugin: 3_257, skill: 15, application: 8 },
+      topicTotals: { plugin: 3_257, skill: 0, application: 8 },
       page: Math.max(1, page),
-      pageCount: 67,
+      pageCount: 34,
       rateRemaining: 9,
       warnings: [],
       dshInstallation: demoDshInstallation,

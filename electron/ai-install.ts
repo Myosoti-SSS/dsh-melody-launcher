@@ -38,7 +38,7 @@ import {
   type AcpTransport,
 } from './acp-client'
 import { prepareAiRepositorySource, type AiRepositorySource, type SubmoduleInfo } from './ai-repository-source'
-import { runCommand } from './command'
+import { collectCommandOutput } from './command'
 import type { NodeRuntime, PnpmRuntime } from './node-runtime'
 import { spawnCommand, withExecutableDirectoryOnPath } from './process'
 
@@ -1006,13 +1006,15 @@ export async function prepareAcpRuntime(
   acpRuntimeRoot: string,
   nodeRuntime: NodeRuntime,
   onOutput?: (text: string) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) throw new Error('AI 任务已取消。')
   if (await isAcpRuntimeReady(acpRuntimeRoot)) return
   await mkdir(acpRuntimeRoot, { recursive: true })
   await atomicWrite(path.join(acpRuntimeRoot, 'package.json'), '{"name":"dsh-acp-runtime","private":true}\n')
   const specifiers = ACP_RUNTIME_PACKAGES.map(([name, version]) => `${name}@${version}`)
   onOutput?.('正在安装或更新 ACP 运行时（精确 pin 版本，可能需要几分钟）…')
-  const result = await runCommand(nodeRuntime.npm, [
+  const child = spawnCommand(nodeRuntime.npm, [
     'install',
     '--prefix', acpRuntimeRoot,
     '--save-exact',
@@ -1023,8 +1025,18 @@ export async function prepareAcpRuntime(
   ], {
     cwd: acpRuntimeRoot,
     env: nodeEnvironment(),
-    onOutput: text => onOutput?.(text),
   })
+  const stopInstallation = () => { void killChildProcessTree(child) }
+  signal?.addEventListener('abort', stopInstallation, { once: true })
+  let result
+  try {
+    result = await collectCommandOutput(child, {
+    onOutput: text => onOutput?.(text),
+    })
+  } finally {
+    signal?.removeEventListener('abort', stopInstallation)
+  }
+  if (signal?.aborted) throw new Error('AI 任务已取消。')
   if (result.exitCode !== 0) {
     throw new Error(`ACP 运行时安装失败（exit ${result.exitCode}）：${result.output.slice(-300)}`)
   }
@@ -1173,11 +1185,20 @@ async function abortTask(current: ActiveTask, reason: string): Promise<void> {
 }
 
 async function killChildProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null) return
   if (process.platform === 'win32' && child.pid) {
     const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true })
     await new Promise<void>(resolve => {
-      killer.once('error', () => resolve())
-      killer.once('exit', () => resolve())
+      const timeout = setTimeout(() => {
+        killer.kill()
+        resolve()
+      }, 5_000)
+      const finish = () => {
+        clearTimeout(timeout)
+        resolve()
+      }
+      killer.once('error', finish)
+      killer.once('exit', finish)
     })
   } else {
     child.kill('SIGTERM')
@@ -1188,7 +1209,12 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
   let currentStatus: AiInstallStatus = IDLE_STATUS
   let task: ActiveTask | null = null
   let preparing = false
+  let preparationController: AbortController | null = null
   let snapshot: ProfileSnapshot | null = null
+
+  function assertPreparationActive(controller: AbortController): void {
+    if (controller.signal.aborted) throw new Error('用户已取消')
+  }
 
   function setStatus(partial: Partial<AiInstallStatus>): void {
     currentStatus = { ...currentStatus, ...partial }
@@ -1251,8 +1277,12 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
     prompt: string
     apiKey: string
     environment: NodeJS.ProcessEnv
-  }): Promise<void> {
+  }, preparationSignal?: AbortSignal): Promise<void> {
     const taskDir = await mkdtemp(path.join(options.acpRuntimeRoot, 'ai-task-'))
+    if (preparationSignal?.aborted) {
+      await rm(taskDir, { recursive: true, force: true }).catch(() => undefined)
+      throw new Error('用户已取消')
+    }
     const current: ActiveTask = {
       settings: ctx.settings,
       acp: null,
@@ -1398,6 +1428,8 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
     if (task || preparing) return { ok: false, message: '已有一个 AI 任务在进行中。' }
 
     preparing = true
+    const controller = new AbortController()
+    preparationController = controller
     setStatus({
       phase: 'preparing',
       repository: input.repository,
@@ -1414,11 +1446,14 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
     let repositorySource: AiRepositorySource | null = null
     try {
       const settings = await options.readSettings()
+      assertPreparationActive(controller)
       const analysis = await options.analyzePlugin(input.repository, input.defaultBranch)
+      assertPreparationActive(controller)
       if (!AI_INSTALLABLE.has(analysis.installability)) {
         throw new Error(`该仓库是「${analysis.installability}」形态，属于标准插件，请直接使用「安装」。`)
       }
       const apiKey = await options.readApiKey(settings.dshHome)
+      assertPreparationActive(controller)
       if (!apiKey) throw new Error('未配置 DeepSeek API Key，请先在设置中配置。')
 
       // key 已读入内存并经 env 注入；把凭据文件移出工作区，让 agent 摸不到。
@@ -1441,6 +1476,7 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
         options.githubFetch,
         text => log(text),
       )
+      assertPreparationActive(controller)
       log(`仓库本地副本已准备：${repositorySource.repositoryPath}`)
       if (repositorySource.submodules.length > 0 || repositorySource.skippedSubmodules.length > 0) {
         log(`聚合仓库：${repositorySource.submodules.length} 个子模块已预取，${repositorySource.skippedSubmodules.length} 个跳过`)
@@ -1461,10 +1497,13 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
 
       log('准备 Node 运行时…')
       const nodeRuntime = await options.prepareNodeRuntime()
+      assertPreparationActive(controller)
       log('准备 pnpm 插件运行环境…')
       const pnpmRuntime = await options.preparePnpmRuntime(nodeRuntime)
+      assertPreparationActive(controller)
       log('准备 ACP 运行时（首次安装可能需要几分钟）…')
-      await prepareAcpRuntime(options.acpRuntimeRoot, nodeRuntime, text => options.emitOutput('info', `[acp-install] ${text}`))
+      await prepareAcpRuntime(options.acpRuntimeRoot, nodeRuntime, text => options.emitOutput('info', `[acp-install] ${text}`), controller.signal)
+      assertPreparationActive(controller)
 
       const taskEnvironment = withExecutableDirectoryOnPath(
         settings.launchExecutable,
@@ -1475,12 +1514,18 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
       )
 
       snapshot = await createProfileSnapshot(settings.dshHome, settings.profileName, options.snapshotRoot)
+      assertPreparationActive(controller)
       options.emitEvent({ kind: 'snapshot', snapshotId: snapshot.id })
       log(`已对 profile「${settings.profileName}」做快照：${snapshot.id}`)
 
-      await runTask({ settings, prompt, apiKey, environment: taskEnvironment })
+      await runTask({ settings, prompt, apiKey, environment: taskEnvironment }, controller.signal)
       return { ok: currentStatus.phase === 'done', message: currentStatus.message }
     } catch (error) {
+      if (controller.signal.aborted) {
+        const message = '用户已取消'
+        if (currentStatus.phase !== 'cancelled') finishTerminal('cancelled', message)
+        return { ok: false, message }
+      }
       const message = asError(error, 'AI 安装启动失败').message
       options.emitOutput('error', `[ai] ${message}`)
       setStatus({ phase: 'error', message })
@@ -1501,6 +1546,7 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
           options.emitOutput('error', `[ai] 凭据文件还原失败：${asError(error, '未知错误').message}（请手动恢复 ${credentialsLock.locked}）`)
         }
       }
+      if (preparationController === controller) preparationController = null
       preparing = false
     }
   }
@@ -1516,6 +1562,8 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
     if (task || preparing) return { ok: false, message: '已有一个 AI 任务在进行中。' }
 
     preparing = true
+    const controller = new AbortController()
+    preparationController = controller
     setStatus({
       phase: 'preparing',
       repository: null,
@@ -1530,9 +1578,11 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
     let credentialsLock: CredentialsLock | null = null
     try {
       const settings = await options.readSettings()
+      assertPreparationActive(controller)
       const profileManifest = path.join(settings.dshHome, 'profiles', input.profileName, 'package.json')
       if (!existsSync(profileManifest)) throw new Error(`Profile「${input.profileName}」尚未初始化。`)
       const apiKey = await options.readApiKey(settings.dshHome)
+      assertPreparationActive(controller)
       if (!apiKey) throw new Error('未配置 DeepSeek API Key，请先在设置中配置。')
 
       credentialsLock = await lockCredentialsOut(settings.dshHome, credentialsLockRoot)
@@ -1541,10 +1591,13 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
       const prompt = input.buildPrompt(settings)
       log('准备 Node 运行时…')
       const nodeRuntime = await options.prepareNodeRuntime()
+      assertPreparationActive(controller)
       log('准备 pnpm 插件运行环境…')
       const pnpmRuntime = await options.preparePnpmRuntime(nodeRuntime)
+      assertPreparationActive(controller)
       log('准备 ACP 运行时（首次安装可能需要几分钟）…')
-      await prepareAcpRuntime(options.acpRuntimeRoot, nodeRuntime, text => options.emitOutput('info', `[acp-install] ${text}`))
+      await prepareAcpRuntime(options.acpRuntimeRoot, nodeRuntime, text => options.emitOutput('info', `[acp-install] ${text}`), controller.signal)
+      assertPreparationActive(controller)
 
       const taskEnvironment = withExecutableDirectoryOnPath(
         settings.launchExecutable,
@@ -1555,12 +1608,18 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
       )
 
       snapshot = await createProfileSnapshot(settings.dshHome, input.profileName, options.snapshotRoot)
+      assertPreparationActive(controller)
       options.emitEvent({ kind: 'snapshot', snapshotId: snapshot.id })
       log(`已对 profile「${input.profileName}」做快照：${snapshot.id}`)
 
-      await runTask({ settings, prompt, apiKey, environment: taskEnvironment })
+      await runTask({ settings, prompt, apiKey, environment: taskEnvironment }, controller.signal)
       return { ok: currentStatus.phase === 'done', message: currentStatus.message }
     } catch (error) {
+      if (controller.signal.aborted) {
+        const message = '用户已取消'
+        if (currentStatus.phase !== 'cancelled') finishTerminal('cancelled', message)
+        return { ok: false, message }
+      }
       const message = asError(error, 'AI 分析与修复启动失败').message
       options.emitOutput('error', `[ai] ${message}`)
       setStatus({ phase: 'error', message })
@@ -1575,6 +1634,7 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
           options.emitOutput('error', `[ai] 凭据文件还原失败：${asError(error, '未知错误').message}（请手动恢复 ${credentialsLock.locked}）`)
         }
       }
+      if (preparationController === controller) preparationController = null
       preparing = false
     }
   }
@@ -1623,7 +1683,14 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
 
   async function cancel(): Promise<void> {
     const current = task
-    if (!current || current.aborted) return
+    if (!current) {
+      if (!preparing || !preparationController || preparationController.signal.aborted) return
+      log('用户请求取消准备中的任务…')
+      preparationController.abort('用户已取消')
+      finishTerminal('cancelled', '用户已取消')
+      return
+    }
+    if (current.aborted) return
     log('用户请求取消…')
     await abortTask(current, '用户已取消')
   }

@@ -6,14 +6,53 @@ export interface SpawnedProcessTracker {
 }
 
 let processTracker: SpawnedProcessTracker | null = null
+const localProcesses = new Set<ChildProcess>()
 
 export function configureProcessTracker(tracker: SpawnedProcessTracker | null): void {
   processTracker = tracker
 }
 
 export function trackSpawnedProcess<T extends ChildProcess>(child: T): T {
+  localProcesses.add(child)
+  const forget = () => localProcesses.delete(child)
+  child.once('exit', forget)
+  child.once('error', forget)
   processTracker?.track(child)
   return child
+}
+
+function waitForExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  return new Promise(resolve => {
+    const finish = () => resolve()
+    child.once('exit', finish)
+    child.once('error', finish)
+  })
+}
+
+/**
+ * 结束启动器自己创建的进程。监督器通常会先完成同样的工作；这里保留
+ * 主进程中的句柄作为兜底，覆盖监督器启动较晚、通信丢失或窗口快速关闭的情况。
+ */
+export async function shutdownTrackedProcesses(): Promise<void> {
+  const processes = [...localProcesses]
+  await Promise.allSettled(processes.map(async child => {
+    if (!child.pid || child.exitCode !== null || child.signalCode !== null) return
+    if (process.platform === 'win32') {
+      const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      })
+      await waitForExit(killer)
+      return
+    }
+    try {
+      child.kill('SIGTERM')
+    } catch {
+      // 子进程可能已经在监督器中被结束。
+    }
+    await waitForExit(child)
+  }))
 }
 
 interface SpawnCommandOptions {

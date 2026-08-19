@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeCatalogWithProgress, classifyCatalogRepository } from '../electron/catalog-analysis'
+import { analyzeCatalogWithProgress, classifyCatalogRepository, mergeMetaRepositoryAnalysis } from '../electron/catalog-analysis'
 import type { ApplicationRepositoryAnalysis, CatalogAnalysisProgress, RepositoryAnalysis, SkillRepositoryAnalysis } from '../src/types'
 
 function plugin(installability: RepositoryAnalysis['installability']): RepositoryAnalysis {
@@ -184,6 +184,33 @@ describe('catalog repository classification', () => {
 
     expect(result.kind).toBe('hybrid')
     expect(result.componentKinds).toEqual(['plugin', 'application'])
+  })
+
+  it('keeps a root application when a meta-repository adds Skills from submodules', () => {
+    const root = classify(
+      'demo/application-meta',
+      fulfilled(plugin('application')),
+      fulfilled(skill('invalid')),
+      fulfilled(application('ready')),
+    )
+    const meta = {
+      ...classify(
+        'demo/application-meta',
+        fulfilled(plugin('invalid')),
+        fulfilled(skill('choice')),
+        fulfilled(application('invalid')),
+      ),
+      summary: '聚合仓库（meta-repo）：检测到子模块 Skill。',
+    }
+
+    const merged = mergeMetaRepositoryAnalysis(root, meta)
+
+    expect(merged.kind).toBe('hybrid')
+    expect(merged.componentKinds).toEqual(['skill', 'application'])
+    expect(merged.applicationAnalysis?.targets[0]?.packageName).toBe('demo-app')
+    expect(merged.skillAnalysis?.targets).toHaveLength(1)
+    expect(merged.summary).toContain('1 个应用加载项')
+    expect(merged.summary).toContain('1 个 Skill')
   })
 })
 

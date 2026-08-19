@@ -59,14 +59,24 @@ function LauncherShell() {
   const [githubAccountOpen, setGitHubAccountOpen] = useState(false)
   const [createPackOpen, setCreatePackOpen] = useState(false)
   const [updateOpen, setUpdateOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('dsh-launcher:sidebar-collapsed') === 'true'
+    } catch {
+      return false
+    }
+  })
   const [confirmingRemoval, setConfirmingRemoval] = useState<ManagedPlugin | null>(null)
   // 仓库结构检测结果由各视图发起，App 统一持有，避免切页后丢失。
   const [repositoryAnalyses, setRepositoryAnalyses] = useState<Record<string, CatalogRepositoryAnalysis>>({})
 
+  const installingResource = isInstallProgressActive(store.installProgress)
   const installingDsh = store.busy === BUSY.dshInstall
-    || (isInstallProgressActive(store.installProgress) && store.installProgress.kind === 'dsh')
-  const installingApplication = isInstallProgressActive(store.installProgress) && store.installProgress.kind === 'application'
-  const runtimeBusy = store.busy === BUSY.runtime || installingDsh || installingApplication || Boolean(store.busy?.startsWith('application'))
+    || (installingResource && store.installProgress?.kind === 'dsh')
+  const installingApplication = installingResource && store.installProgress?.kind === 'application'
+  // 安装会写入 Profile、Skill 或应用注册表；跨页时仍需阻止这些写操作。
+  const profileMutationLocked = installingResource
+  const runtimeBusy = store.busy === BUSY.runtime || installingResource || installingApplication || Boolean(store.busy?.startsWith('application'))
 
   const toggleRuntime = async () => {
     // 刚启动时自动切到日志视图，让用户看到启动过程。
@@ -146,7 +156,7 @@ function LauncherShell() {
             onUpdate={() => setUpdateOpen(true)}
             onClose={closeWindow}
           />
-          <div className="app-body">
+          <div className={`app-body ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
             <SideNavigation
               view={navigation.view}
               profile={profile}
@@ -154,8 +164,21 @@ function LauncherShell() {
               profileName={settings.profileName}
               packs={store.packs}
               activePackId={settings.activePackId}
+              collapsed={sidebarCollapsed}
+              profileMutationLocked={profileMutationLocked}
               onPackChange={packId => {
                 void (packId ? store.activatePack(packId) : store.deactivatePack())
+              }}
+              onToggleCollapsed={() => {
+                setSidebarCollapsed(current => {
+                  const next = !current
+                  try {
+                    localStorage.setItem('dsh-launcher:sidebar-collapsed', String(next))
+                  } catch {
+                    // The UI state can remain session-only when storage is unavailable.
+                  }
+                  return next
+                })
               }}
               onChange={navigation.setView}
             />
@@ -170,6 +193,13 @@ function LauncherShell() {
                   pluginTrials={store.pluginTrials}
                   selected={store.selected}
                   busy={store.busy}
+                  profileLocked={profileMutationLocked}
+                  settings={settings}
+                  runtime={store.runtime}
+                  packs={store.packs}
+                  activePackId={settings.activePackId}
+                  activeRuntimeReplacement={store.activeRuntimeReplacement}
+                  runtimeBusy={runtimeBusy}
                   onSelect={plugin => store.selectPlugin(plugin.packageName)}
                   onToggle={store.togglePlugin}
                   onToggleSkill={store.toggleSkill}
@@ -181,6 +211,12 @@ function LauncherShell() {
                   onBrowse={() => navigation.setView('discover')}
                   onOpenPath={path => void api.openPath(path)}
                   onOpenRepository={url => void api.openExternal(url)}
+                  onPackChange={packId => {
+                    void (packId ? store.activatePack(packId) : store.deactivatePack())
+                  }}
+                  onToggleRuntime={toggleRuntime}
+                  onOpenHarness={openHarness}
+                  onOpenRuntimeSettings={() => navigation.setView('runtime')}
                   onUninstall={setConfirmingRemoval}
                   onTrialPlugin={(packageName, profileName) => { void store.trialPlugin(packageName, profileName) }}
                   onAdaptPlugin={(packageName, profileName) => { void ai.adaptPlugin(packageName, profileName) }}
@@ -257,7 +293,7 @@ function LauncherShell() {
                 <PacksView
                   packs={store.packs}
                   profile={profile}
-                  busy={store.busy}
+                  busy={profileMutationLocked ? 'profile-write-lock' : store.busy}
                   onRefresh={() => { void store.refreshPacks(); void store.refreshPackSnapshots() }}
                   onCreate={() => setCreatePackOpen(true)}
                   onImport={() => void handlePackImport()}
@@ -298,7 +334,7 @@ function LauncherShell() {
       {settingsOpen && (
         <SettingsDialog
           settings={settings}
-          busy={store.busy === BUSY.settings}
+          busy={store.busy === BUSY.settings || profileMutationLocked}
           onClose={() => setSettingsOpen(false)}
           onSave={async next => { if (await store.saveSettings(next)) setSettingsOpen(false) }}
         />
@@ -342,6 +378,7 @@ function LauncherShell() {
           pendingApproval={ai.pendingApproval}
           hasSnapshot={ai.hasSnapshot}
           busy={ai.busy !== null}
+          cancelling={ai.cancelling}
           onApprove={ai.approve}
           onCancel={ai.cancel}
           onRollback={() => void ai.rollback()}
