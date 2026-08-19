@@ -6,6 +6,7 @@ import type {
   ApplicationRepositoryAnalysis,
   AppSettings,
   CatalogAnalysisProgress,
+  CatalogComponentKind,
   CatalogRepositoryAnalysis,
   DshInstallationStatus,
   DshUpdateStatus,
@@ -27,7 +28,7 @@ import type {
 } from '../src/types'
 import { analyzeApplicationRepository } from './application-catalog'
 import { runCommand, type CommandOptions, type CommandResult, type OutputLevel } from './command'
-import { analyzeCatalogWithProgress } from './catalog-analysis'
+import { analyzeCatalogWithProgress, mergeMetaRepositoryAnalysis } from './catalog-analysis'
 import {
   findInstalledDsh,
   getManagedDshStatus,
@@ -169,7 +170,7 @@ export interface Installer {
     fullName: string,
     defaultBranch: string,
     onProgress?: (progress: CatalogAnalysisProgress) => void,
-    options?: { bypassCache?: boolean },
+    options?: { bypassCache?: boolean; componentKinds?: CatalogComponentKind[] },
   ): Promise<CatalogRepositoryAnalysis>
   /** 安装一个 Skill。 */
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>
@@ -275,16 +276,42 @@ export function createInstaller(options: InstallerOptions): Installer {
     fullName: string,
     defaultBranch: string,
     onProgress?: (progress: CatalogAnalysisProgress) => void,
-    analyzeOptions: { bypassCache?: boolean } = {},
+    analyzeOptions: { bypassCache?: boolean; componentKinds?: CatalogComponentKind[] } = {},
   ): Promise<CatalogRepositoryAnalysis> => {
     const bypassCache = analyzeOptions.bypassCache === true
+    const selected = analyzeOptions.componentKinds ? new Set(analyzeOptions.componentKinds) : null
+    // Preset 存在于 meta-repo 子模块中，识别它需要 Plugin/Skill 两条轻量结构路径。
+    const checkPlugin = !selected || selected.has('plugin') || selected.has('preset')
+    const checkSkill = !selected || selected.has('skill') || selected.has('preset')
+    const checkApplication = !selected || selected.has('application')
+    const skippedPlugin = (): RepositoryAnalysis => ({
+      repository: fullName,
+      defaultBranch,
+      installability: 'invalid',
+      summary: '共享标签未要求检查 Plugin。',
+      targets: [],
+    })
+    const skippedSkill = (): SkillRepositoryAnalysis => ({
+      repository: fullName,
+      defaultBranch,
+      installability: 'invalid',
+      summary: '共享标签未要求检查 Skill。',
+      targets: [],
+    })
+    const skippedApplication = (): ApplicationRepositoryAnalysis => ({
+      repository: fullName,
+      defaultBranch,
+      installability: 'invalid',
+      summary: '共享标签未要求检查 Runtime。',
+      targets: [],
+    })
     const analysis = await analyzeCatalogWithProgress(
       fullName,
       defaultBranch,
       {
-        plugin: () => analyzePlugin(fullName, defaultBranch, bypassCache),
-        skill: () => analyzeSkill(fullName, defaultBranch, bypassCache),
-        application: () => analyzeApplication(fullName, defaultBranch, bypassCache),
+        plugin: () => checkPlugin ? analyzePlugin(fullName, defaultBranch, bypassCache) : Promise.resolve(skippedPlugin()),
+        skill: () => checkSkill ? analyzeSkill(fullName, defaultBranch, bypassCache) : Promise.resolve(skippedSkill()),
+        application: () => checkApplication ? analyzeApplication(fullName, defaultBranch, bypassCache) : Promise.resolve(skippedApplication()),
       },
       onProgress,
     )
@@ -296,17 +323,17 @@ export function createInstaller(options: InstallerOptions): Installer {
         ? await analyzeMetaRepository(
             fullName,
             defaultBranch,
-            (repository, branch) => analyzePlugin(repository, branch, bypassCache),
-            (repository, branch) => analyzeSkill(repository, branch, bypassCache),
+            (repository, branch) => checkPlugin ? analyzePlugin(repository, branch, bypassCache) : Promise.resolve(skippedPlugin()),
+            (repository, branch) => checkSkill ? analyzeSkill(repository, branch, bypassCache) : Promise.resolve(skippedSkill()),
             options.githubFetch,
           )
         : await analyzeMetaRepository(
             fullName,
             defaultBranch,
-            (repository, branch) => analyzePlugin(repository, branch, bypassCache),
-            (repository, branch) => analyzeSkill(repository, branch, bypassCache),
+            (repository, branch) => checkPlugin ? analyzePlugin(repository, branch, bypassCache) : Promise.resolve(skippedPlugin()),
+            (repository, branch) => checkSkill ? analyzeSkill(repository, branch, bypassCache) : Promise.resolve(skippedSkill()),
           )
-      if (metaAnalysis) return metaAnalysis
+      if (metaAnalysis) return mergeMetaRepositoryAnalysis(analysis, metaAnalysis)
     }
 
     return analysis
@@ -530,7 +557,7 @@ export function createInstaller(options: InstallerOptions): Installer {
       launchExecutable: dshInstallation.executable,
       launchArgs: ['web'],
     })
-    const profile = await readProfile(saved.dshHome, saved.profileName)
+    const profile = await readProfile(saved.dshHome, saved.profileName, options.pluginReceiptsPath)
     emit({
       repository,
       kind: 'dsh',
@@ -588,7 +615,7 @@ export function createInstaller(options: InstallerOptions): Installer {
         await runPluginCommand(['add', `github:${fullName}`], fullName)
         emit({ repository: fullName, kind, phase: 'configuring', percent: 90, message: '正在更新插件配置' })
         const settings = await options.readSettings()
-        const profile = await readProfile(settings.dshHome, settings.profileName)
+        const profile = await readProfile(settings.dshHome, settings.profileName, options.pluginReceiptsPath)
         const dshInstallation = await detectDsh()
         emit({ repository: fullName, kind, phase: 'complete', percent: 100, message: '插件安装完成' })
         return { kind, profile, settings, dshInstallation }
@@ -611,7 +638,7 @@ export function createInstaller(options: InstallerOptions): Installer {
       const targetProfile = profileName ?? settings.profileName
       await runPluginCommand(['remove', packageName], undefined, true, targetProfile)
       await removePluginReceipt(options.pluginReceiptsPath, targetProfile, packageName)
-      return readProfile(settings.dshHome, targetProfile)
+      return readProfile(settings.dshHome, targetProfile, options.pluginReceiptsPath)
     },
 
     analyzePlugin,
@@ -643,7 +670,7 @@ export function createInstaller(options: InstallerOptions): Installer {
 
     async listInstalledRepositories(): Promise<string[]> {
       const settings = await options.readSettings()
-      const profile = await readProfile(settings.dshHome, settings.profileName)
+      const profile = await readProfile(settings.dshHome, settings.profileName, options.pluginReceiptsPath)
       const receipts = await readPluginReceipts(options.pluginReceiptsPath)
       const repositories = new Set<string>()
       for (const plugin of profile.plugins) {
@@ -720,7 +747,7 @@ export function createInstaller(options: InstallerOptions): Installer {
         await runPluginCommand(['add', specifier], fullName, true, profileName)
         emit({ repository: fullName, kind: 'plugin', phase: 'configuring', percent: 88, message: '正在核对插件加载顺序' })
         const settings = await options.readSettings()
-        const installedProfile = await readProfile(settings.dshHome, profileName)
+        const installedProfile = await readProfile(settings.dshHome, profileName, options.pluginReceiptsPath)
         const installedPlugin = installedProfile.plugins.find(plugin => plugin.packageName === target.packageName)
         if (!installedPlugin?.enabled || !installedPlugin.compatible) {
           throw new Error('包已下载，但 DSH 没有把它识别为有效 Bundle。请检查插件清单和补丁文件。')
@@ -737,9 +764,12 @@ export function createInstaller(options: InstallerOptions): Installer {
           commit: target.commit,
           installedAt: new Date().toISOString(),
         })
+        // The receipt is the authoritative source for local `file:` and archive-subdirectory
+        // installs. Re-read after recording it so the returned Profile immediately exposes
+        // the GitHub repository to the renderer.
         const profile = profileName === settings.profileName
-          ? installedProfile
-          : await readProfile(settings.dshHome, settings.profileName)
+          ? await readProfile(settings.dshHome, profileName, options.pluginReceiptsPath)
+          : await readProfile(settings.dshHome, settings.profileName, options.pluginReceiptsPath)
         const dshInstallation = await detectDsh()
         emit({ repository: fullName, kind: 'plugin', phase: 'complete', percent: 100, message: `插件已安装到 ${profileName} Profile` })
         return {
@@ -784,7 +814,7 @@ export function createInstaller(options: InstallerOptions): Installer {
         )
         emit({ repository, kind: 'plugin', phase: 'configuring', percent: 88, message: '正在核对插件加载顺序' })
         const settings = await options.readSettings()
-        const installedProfile = await readProfile(settings.dshHome, profileName)
+        const installedProfile = await readProfile(settings.dshHome, profileName, options.pluginReceiptsPath)
         const installedPlugin = installedProfile.plugins.find(plugin => plugin.packageName === request.packageName)
         if (!installedPlugin?.enabled || !installedPlugin.compatible) {
           throw new Error('包已下载，但 DSH 没有把它识别为有效 Bundle。请检查插件清单和补丁文件。')
@@ -800,7 +830,9 @@ export function createInstaller(options: InstallerOptions): Installer {
           commit: '',
           installedAt: new Date().toISOString(),
         })
-        const profile = profileName === settings.profileName ? installedProfile : await readProfile(settings.dshHome, settings.profileName)
+        const profile = profileName === settings.profileName
+          ? await readProfile(settings.dshHome, profileName, options.pluginReceiptsPath)
+          : await readProfile(settings.dshHome, settings.profileName, options.pluginReceiptsPath)
         const dshInstallation = await detectDsh()
         emit({ repository, kind: 'plugin', phase: 'complete', percent: 100, message: `插件已安装到 ${profileName} Profile` })
         return { kind: 'plugin', profile, settings, dshInstallation, installedProfileName: profileName, packageName: request.packageName }

@@ -1,192 +1,200 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { CatalogRepositoryAnalysis } from '../src/types'
-import { createCatalogSyncService, repositoryPath } from '../electron/catalog-sync'
+import { catalogTagsFromAnalysis, parseCatalogIndex, serializeCatalogIndex } from '../electron/catalog-index'
+import { mergeCatalogEntries } from '../electron/catalog-sync'
+import { createCatalogSyncService } from '../electron/catalog-sync'
 
 function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  })
+  return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
-function analysis(repository = 'demo/example'): CatalogRepositoryAnalysis {
+function analysis(repository = 'demo/example', kind: CatalogRepositoryAnalysis['kind'] = 'plugin'): CatalogRepositoryAnalysis {
   return {
     repository,
     defaultBranch: 'main',
-    kind: 'plugin',
-    componentKinds: ['plugin'],
-    summary: '检测到一个 Plugin。',
-    pluginAnalysis: {
-      repository,
-      defaultBranch: 'main',
-      installability: 'ready',
-      summary: 'ready',
-      targets: [],
-    },
+    kind,
+    componentKinds: kind === 'hybrid' ? ['plugin', 'skill'] : kind === 'dsh' || kind === 'invalid' ? [] : [kind],
+    summary: '检测结果',
+    pluginAnalysis: null,
     skillAnalysis: null,
     applicationAnalysis: null,
+    presetAnalysis: null,
     warnings: [],
   }
 }
 
-function remoteRecord(repositoryUpdatedAt: string): string {
-  return Buffer.from(JSON.stringify({
-    schemaVersion: 1,
-    repository: 'demo/example',
+function indexContent(entries: Array<{ repository: string; tags: string; updated?: string }>): string {
+  return serializeCatalogIndex(entries.map(entry => ({
+    repository: entry.repository,
     defaultBranch: 'main',
-    repositoryUpdatedAt,
-    analyzedAt: '2026-08-18T00:01:00.000Z',
-    submittedBy: 'reviewer',
-    analysis: analysis(),
-  })).toString('base64')
+    repositoryUpdatedAt: entry.updated ?? '2026-08-18T00:00:00.000Z',
+    tags: entry.tags.split(',') as never[],
+  })))
 }
 
-describe('GitHub shared catalog analysis', () => {
-  it('uses a merged fresh record before running local analysis', async () => {
-    const fetchImpl = vi.fn(async () => json({ content: remoteRecord('2026-08-18T00:00:00.000Z') })) as unknown as typeof fetch
-    const analyzeLocal = vi.fn(async () => analysis())
+describe('共享 XML 索引', () => {
+  it('只保存最终标签并按仓库名排序', () => {
+    const xml = indexContent([
+      { repository: 'zeta/tool', tags: 'runtime' },
+      { repository: 'Alpha/plugin', tags: 'plugin,skill' },
+    ])
+    expect(xml).not.toContain('summary')
+    expect(xml.indexOf('Alpha/plugin')).toBeLessThan(xml.indexOf('zeta/tool'))
+    expect(parseCatalogIndex(xml)).toEqual([
+      expect.objectContaining({ repository: 'Alpha/plugin', tags: ['plugin', 'skill'] }),
+      expect.objectContaining({ repository: 'zeta/tool', tags: ['runtime'] }),
+    ])
+  })
+
+  it('把统一检测结果压缩成安装分类标签', () => {
+    expect(catalogTagsFromAnalysis(analysis('demo/p', 'plugin'))).toEqual(['plugin'])
+    expect(catalogTagsFromAnalysis(analysis('demo/h', 'hybrid'))).toEqual(['plugin', 'skill'])
+    expect(catalogTagsFromAnalysis(analysis('demo/d', 'dsh'))).toEqual(['dsh'])
+    expect(catalogTagsFromAnalysis(analysis('demo/i', 'invalid'))).toEqual(['invalid'])
+  })
+})
+
+describe('GitHub shared catalog XML', () => {
+  it('每次检测优先向远端校验，并用 ETag 避免重复下载 XML', async () => {
+    const xml = indexContent([{ repository: 'demo/example', tags: 'plugin', updated: '2026-08-18T00:00:00.000Z' }])
+    const seenIfNoneMatch: Array<string | null> = []
+    let calls = 0
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      calls += 1
+      seenIfNoneMatch.push(new Headers(init?.headers).get('If-None-Match'))
+      if (calls === 1) return new Response(JSON.stringify({ content: Buffer.from(xml).toString('base64'), sha: 'catalog-a' }), { status: 200, headers: { etag: '"catalog-a"' } })
+      return new Response(null, { status: 304, headers: { etag: '"catalog-a"' } })
+    }) as unknown as typeof fetch
+    const analyzeLocal = vi.fn(async (kinds?: string[]) => {
+      expect(kinds).toEqual(['plugin'])
+      return analysis()
+    })
     const service = createCatalogSyncService({
       fetchImpl,
       getAuthStatus: async () => ({ authenticated: false, login: null }),
     })
 
-    const result = await service.resolve(
-      'demo/example',
-      'main',
-      '2026-08-17T00:00:00.000Z',
-      analyzeLocal,
-    )
+    await service.resolve('demo/example', 'main', '2026-08-17T00:00:00.000Z', analyzeLocal)
+    await service.resolve('demo/example', 'main', '2026-08-17T00:00:00.000Z', analyzeLocal)
 
+    expect(calls).toBe(2)
+    expect(seenIfNoneMatch).toEqual([null, '"catalog-a"'])
+    expect(analyzeLocal).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses a fresh XML tag and passes only the tagged detector kinds', async () => {
+    const xml = indexContent([{ repository: 'demo/example', tags: 'plugin', updated: '2026-08-18T00:00:00.000Z' }])
+    const fetchImpl = vi.fn(async () => json({ content: Buffer.from(xml).toString('base64') })) as unknown as typeof fetch
+    const analyzeLocal = vi.fn(async (kinds?: string[]) => {
+      expect(kinds).toEqual(['plugin'])
+      return analysis()
+    })
+    const service = createCatalogSyncService({
+      fetchImpl,
+      getAuthStatus: async () => ({ authenticated: false, login: null }),
+    })
+    const result = await service.resolve('demo/example', 'main', '2026-08-17T00:00:00.000Z', analyzeLocal)
     expect(result.sync).toMatchObject({ source: 'github', state: 'remote' })
-    expect(analyzeLocal).not.toHaveBeenCalled()
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
-  })
-
-  it('rescans a stale record and keeps working when the user is signed out', async () => {
-    const fetchImpl = vi.fn(async () => json({ content: remoteRecord('2026-08-16T00:00:00.000Z') })) as unknown as typeof fetch
-    const analyzeLocal = vi.fn(async () => analysis())
-    const service = createCatalogSyncService({
-      fetchImpl,
-      getAuthStatus: async () => ({ authenticated: false, login: null }),
-    })
-
-    const result = await service.resolve(
-      'demo/example',
-      'main',
-      '2026-08-18T00:00:00.000Z',
-      analyzeLocal,
-    )
-
     expect(analyzeLocal).toHaveBeenCalledOnce()
-    expect(result.sync).toMatchObject({ source: 'local', state: 'not-authenticated' })
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
-  it('submits a missing record through the user fork and opens a pull request', async () => {
-    let uploaded: Record<string, unknown> | null = null
+  it('结构化合并不同用户的结果，后来的同名仓库结果覆盖旧结果', () => {
+    const first = parseCatalogIndex(indexContent([
+      { repository: 'demo/base', tags: 'plugin' },
+      { repository: 'demo/shared', tags: 'plugin', updated: '2026-08-18T00:00:00.000Z' },
+    ]))
+    const second = parseCatalogIndex(indexContent([
+      { repository: 'demo/other', tags: 'skill' },
+      { repository: 'demo/shared', tags: 'skill', updated: '2026-08-19T00:00:00.000Z' },
+    ]))
+    const merged = mergeCatalogEntries(first, second)
+    expect(merged.map(entry => entry.repository)).toEqual(['demo/base', 'demo/other', 'demo/shared'])
+    expect(merged.find(entry => entry.repository === 'demo/shared')?.tags).toEqual(['skill'])
+  })
+
+  it('分支非快进时重新读取并合并主仓库和分支结果', async () => {
+    const pendingDir = await mkdtemp(path.join(os.tmpdir(), 'dsh-launcher-catalog-publish-'))
+    const pending = parseCatalogIndex(indexContent([{ repository: 'demo/local', tags: 'skill' }]))
+    await writeFile(path.join(pendingDir, 'index.xml'), serializeCatalogIndex(pending), 'utf8')
+    const branchEntries = indexContent([{ repository: 'demo/branch', tags: 'plugin' }])
+    const mainEntries = indexContent([{ repository: 'demo/main', tags: 'runtime' }])
+    let branchRefReads = 0
+    let patchCalls = 0
+    let uploadedXml = ''
+    const requestLog: string[] = []
     const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
       const method = init?.method ?? 'GET'
-      if (url.includes(`/contents/${repositoryPath('demo/example')}?ref=main`) && url.includes('/rirko/')) return json({}, 404)
-      if (url.endsWith('/repos/rirko/dsh-melody-launcher')) return json({ default_branch: 'main' })
-      if (url.endsWith('/repos/contributor/dsh-melody-launcher')) return json({ default_branch: 'main', parent: { full_name: 'rirko/dsh-melody-launcher' } })
-      if (url.includes('/repos/rirko/dsh-melody-launcher/git/ref/heads/main')) return json({ object: { sha: 'a'.repeat(40) } })
-      if (url.includes('/repos/contributor/dsh-melody-launcher/git/ref/heads/catalog-sync%2Fdemo-example')) return json({}, 404)
-      if (url.endsWith('/repos/contributor/dsh-melody-launcher/git/refs') && method === 'POST') return json({ ref: 'ok' }, 201)
-      if (url.includes('/repos/contributor/dsh-melody-launcher/contents/') && method === 'GET') return json({}, 404)
-      if (url.includes('/repos/contributor/dsh-melody-launcher/contents/') && method === 'PUT') {
-        uploaded = JSON.parse(String(init?.body)) as Record<string, unknown>
-        return json({ content: { sha: 'b'.repeat(40) } }, 201)
+      requestLog.push(`${method} ${url}`)
+      const parsed = new URL(url)
+      const pathname = parsed.pathname
+      if (method === 'GET' && pathname === '/repos/rirko/dsh-melody-launcher') return json({ default_branch: 'main' })
+      if (method === 'GET' && pathname === '/repos/alice/dsh-melody-launcher') return json({ default_branch: 'main', parent: { full_name: 'rirko/dsh-melody-launcher' } })
+      if (method === 'GET' && pathname === '/repos/rirko/dsh-melody-launcher/git/ref/heads/main') return json({ object: { sha: 'main-sha' } })
+      if (method === 'GET' && pathname === '/repos/alice/dsh-melody-launcher/git/ref/heads/plugin-update') {
+        branchRefReads += 1
+        return branchRefReads === 1 ? json({ message: 'Not Found' }, 404) : json({ object: { sha: 'branch-sha-2' } })
       }
-      if (url.includes('/repos/rirko/dsh-melody-launcher/pulls?')) return json([])
-      if (url.endsWith('/repos/rirko/dsh-melody-launcher/pulls') && method === 'POST') {
-        return json({ html_url: 'https://github.com/rirko/dsh-melody-launcher/pull/99' }, 201)
+      if (method === 'POST' && pathname === '/repos/alice/dsh-melody-launcher/git/refs') return json({ object: { sha: 'branch-sha-1' } }, 201)
+      if (method === 'GET' && pathname === '/repos/alice/dsh-melody-launcher/contents/catalog/index.xml') {
+        return branchRefReads < 2 ? json({ message: 'Not Found' }, 404) : json({ content: Buffer.from(branchEntries).toString('base64') })
       }
-      throw new Error(`unexpected request: ${method} ${url}`)
+      if (method === 'GET' && pathname === '/repos/rirko/dsh-melody-launcher/contents/catalog/index.xml') return json({ content: Buffer.from(mainEntries).toString('base64') })
+      if (method === 'GET' && pathname.startsWith('/repos/alice/dsh-melody-launcher/git/commits/')) return json({ tree: { sha: 'tree-sha' } })
+      if (method === 'POST' && pathname === '/repos/alice/dsh-melody-launcher/git/blobs') {
+        const body = JSON.parse(String(init?.body)) as { content?: string }
+        uploadedXml = Buffer.from(body.content ?? '', 'base64').toString('utf8')
+        return json({ sha: 'blob-sha' })
+      }
+      if (method === 'POST' && pathname === '/repos/alice/dsh-melody-launcher/git/trees') return json({ sha: 'new-tree-sha' })
+      if (method === 'POST' && pathname === '/repos/alice/dsh-melody-launcher/git/commits') return json({ sha: `commit-${patchCalls + 1}` })
+      if (method === 'PATCH' && pathname === '/repos/alice/dsh-melody-launcher/git/refs/heads/plugin-update') {
+        patchCalls += 1
+        return patchCalls === 1 ? json({ message: 'Update is not a fast forward' }, 409) : json({ ok: true })
+      }
+      if (method === 'GET' && pathname === '/repos/rirko/dsh-melody-launcher/pulls') return json([])
+      if (method === 'POST' && pathname === '/repos/rirko/dsh-melody-launcher/pulls') return json({ html_url: 'https://github.com/rirko/dsh-melody-launcher/pull/99' }, 201)
+      throw new Error(`未模拟的请求：${method} ${url}`)
     }) as unknown as typeof fetch
-    const service = createCatalogSyncService({
-      fetchImpl,
-      getAuthStatus: async () => ({ authenticated: true, login: 'contributor' }),
-    })
-
-    const result = await service.resolve(
-      'demo/example',
-      'main',
-      '2026-08-18T00:00:00.000Z',
-      async () => analysis(),
-    )
-
-    expect(result.sync).toEqual({
-      source: 'local',
-      state: 'published',
-      message: '检测完成，结果已提交到 GitHub，等待合并。',
-      pullRequestUrl: 'https://github.com/rirko/dsh-melody-launcher/pull/99',
-    })
-    const uploadedBody = uploaded as unknown as Record<string, unknown>
-    expect(uploadedBody).toMatchObject({
-      message: 'catalog: update demo/example',
-      branch: 'catalog-sync/demo-example',
-    })
-    const record = JSON.parse(Buffer.from(String(uploadedBody.content), 'base64').toString('utf8'))
-    expect(record).toMatchObject({
-      schemaVersion: 1,
-      repository: 'demo/example',
-      repositoryUpdatedAt: '2026-08-18T00:00:00.000Z',
-      submittedBy: 'contributor',
-    })
-  })
-
-  it('queues multiple detections locally and flushes them as one commit and PR', async () => {
-    const pendingDir = await mkdtemp(path.join(os.tmpdir(), 'dsh-launcher-catalog-pending-'))
     try {
-      let blobCount = 0
-      let batchCommitCount = 0
-      let batchPullCount = 0
-      const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-        const method = init?.method ?? 'GET'
-        if (url.includes('/contents/catalog/analysis/') && !url.includes('catalog-sync')) return json({}, 404)
-        if (url.endsWith('/repos/rirko/dsh-melody-launcher')) return json({ default_branch: 'main' })
-        if (url.includes('/git/ref/heads/main')) return json({ object: { sha: 'a'.repeat(40) } })
-        if (url.includes('/git/ref/heads/plugin-update') && method === 'GET') return json({}, 404)
-        if (url.endsWith('/git/refs') && method === 'POST') return json({ object: { sha: 'b'.repeat(40) } }, 201)
-        if (url.includes('/git/commits/b') && method === 'GET') return json({ tree: { sha: 'c'.repeat(40) } })
-        if (url.endsWith('/git/blobs') && method === 'POST') return json({ sha: `blob-${++blobCount}` }, 201)
-        if (url.endsWith('/git/trees') && method === 'POST') return json({ sha: 'd'.repeat(40) }, 201)
-        if (url.endsWith('/git/commits') && method === 'POST') {
-          batchCommitCount += 1
-          return json({ sha: 'e'.repeat(40) }, 201)
-        }
-        if (url.includes('/git/refs/heads/plugin-update') && method === 'PATCH') return json({}, 200)
-        if (url.includes('/pulls?') && method === 'GET') return json([])
-        if (url.endsWith('/pulls') && method === 'POST') {
-          batchPullCount += 1
-          return json({ html_url: 'https://github.com/rirko/dsh-melody-launcher/pull/100' }, 201)
-        }
-        throw new Error(`unexpected request: ${method} ${url}`)
-      }) as unknown as typeof fetch
       const service = createCatalogSyncService({
         fetchImpl,
         pendingDir,
-        getAuthStatus: async () => ({ authenticated: true, login: 'rirko' }),
+        getAuthStatus: async () => ({ authenticated: true, login: 'alice' }),
       })
+      const result = await service.flushPending()
+      expect(result.submitted).toBe(1)
+      expect(result.pullRequestUrl).toContain('/pull/99')
+      expect(patchCalls).toBe(2)
+      expect(uploadedXml).toContain('demo/main')
+      expect(uploadedXml).toContain('demo/branch')
+      expect(uploadedXml).toContain('demo/local')
+      expect(requestLog.filter(entry => entry.includes('/git/ref/heads/plugin-update')).length).toBeGreaterThanOrEqual(2)
+      const commitRequest = requestLog.find(entry => entry === 'POST https://api.github.com/repos/alice/dsh-melody-launcher/git/commits')
+      expect(commitRequest).toBeDefined()
+    } finally {
+      await rm(pendingDir, { recursive: true, force: true })
+    }
+  })
 
-      await expect(service.resolve('demo/example', 'main', '2026-08-18T00:00:00.000Z', async () => analysis())).resolves.toMatchObject({
-        sync: { state: 'queued' },
+  it('queues many results into one local index file', async () => {
+    const pendingDir = await mkdtemp(path.join(os.tmpdir(), 'dsh-launcher-catalog-'))
+    try {
+      const fetchImpl = vi.fn(async () => json({}, 404)) as unknown as typeof fetch
+      const service = createCatalogSyncService({
+        fetchImpl,
+        pendingDir,
+        getAuthStatus: async () => ({ authenticated: false, login: null }),
       })
-      await expect(service.resolve('demo/second', 'main', '2026-08-18T00:00:00.000Z', async () => analysis('demo/second'))).resolves.toMatchObject({
-        sync: { state: 'queued' },
-      })
-      expect((await readdir(pendingDir)).filter(name => name.endsWith('.json'))).toHaveLength(2)
-
-      const flushed = await service.flushPending()
-      expect(flushed).toMatchObject({ submitted: 2, pullRequestUrl: 'https://github.com/rirko/dsh-melody-launcher/pull/100' })
-      expect(batchCommitCount).toBe(1)
-      expect(batchPullCount).toBe(1)
-      expect((await readdir(pendingDir)).filter(name => name.endsWith('.json'))).toHaveLength(0)
+      await service.resolve('zeta/example', 'main', '2026-08-18T00:00:00.000Z', async () => analysis('zeta/example'))
+      await service.resolve('Alpha/example', 'main', '2026-08-18T00:00:00.000Z', async () => analysis('Alpha/example'))
+      const localXml = await readFile(path.join(pendingDir, 'index.xml'), 'utf8')
+      expect(localXml).toContain('<dsh-catalog')
+      expect(localXml).not.toContain('pluginAnalysis')
+      expect(localXml.indexOf('Alpha/example')).toBeLessThan(localXml.indexOf('zeta/example'))
     } finally {
       await rm(pendingDir, { recursive: true, force: true })
     }

@@ -28,7 +28,7 @@ import { createProxyAwareFetch } from './network'
 import { createPackManager, type InstallInstaller, type PackInstallTarget, type PackManager } from './pack'
 import { createPluginTrialManager, type PluginTrialManager } from './plugin-trial'
 import { recordPluginInstall } from './plugin-receipts'
-import { configureProcessTracker, withExecutableDirectoryOnPath } from './process'
+import { configureProcessTracker, shutdownTrackedProcesses, withExecutableDirectoryOnPath } from './process'
 import { createProcessSupervisor, type ProcessSupervisor } from './process-supervisor'
 import { readProfile, reorderPlugins, togglePlugin } from './profile'
 import { installPresetFromDirectory } from './preset-install'
@@ -54,6 +54,7 @@ const events = createRendererEvents(createRendererChannel(getWindow))
 
 interface Services {
   settings: SettingsStore
+  pluginReceiptsPath: string
   runtime: RuntimeController
   installer: Installer
   pluginTrial: PluginTrialManager
@@ -279,9 +280,9 @@ function createServices(): Services {
     },
     installNpmPackage: (request, profileOverride) => installer.installNpmPackage(request, profileOverride),
     remove: (packageName, profileName) => installer.remove(packageName, profileName),
-    readProfile: (dshHome, profileName) => readProfile(dshHome, profileName),
-    togglePlugin: (dshHome, profileName, packageName, enabled) => togglePlugin(dshHome, profileName, packageName, enabled),
-    reorderPlugins: (dshHome, profileName, packageNames) => reorderPlugins(dshHome, profileName, packageNames),
+    readProfile: (dshHome, profileName) => readProfile(dshHome, profileName, pluginReceiptsPath),
+    togglePlugin: (dshHome, profileName, packageName, enabled) => togglePlugin(dshHome, profileName, packageName, enabled, pluginReceiptsPath),
+    reorderPlugins: (dshHome, profileName, packageNames) => reorderPlugins(dshHome, profileName, packageNames, pluginReceiptsPath),
     // raw 整合包导入的技能：从本地 staging 目录全局安装（bundle 目录或 flat 单文件）。
     installSkillLocal: (dshHome, skill) => installSkillFromDirectory(dshHome, skill.name, skill.format, skill.sourceDir),
     installSkill: request => installer.installSkill(request),
@@ -323,7 +324,7 @@ function createServices(): Services {
     .then(current => healCredentialsLock(current.dshHome, path.join(userData, CREDENTIALS_LOCK_DIRNAME)))
     .catch(() => { /* 设置未就绪可忽略，锁会在下次 AI 会话前置处理 */ })
 
-  return { settings, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons, catalogSync }
+  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons, catalogSync }
 }
 
 function openMainWindow(): void {
@@ -380,6 +381,11 @@ function delay(milliseconds: number): Promise<void> {
 
 async function shutdownLauncherProcesses(): Promise<void> {
   const current = services
+  // 先让监督器对仍在运行的根进程做快照；若 DSH 派生了脱离父进程树的服务，
+  // 必须在正常停止根进程前收集它们，否则关闭后无法再定位微信机器人 PID。
+  const supervisorShutdown = processSupervisor?.shutdown().catch(error => {
+    console.error('[process-supervisor] 清理子进程失败。', error)
+  }) ?? Promise.resolve()
   const gracefulTasks: Promise<unknown>[] = []
   if (current?.runtime.isRunning()) gracefulTasks.push(current.runtime.stop())
   if (current?.pluginTrial.isBusy()) gracefulTasks.push(current.pluginTrial.cancel())
@@ -389,9 +395,11 @@ async function shutdownLauncherProcesses(): Promise<void> {
   if (current?.applicationAddons.isBusy()) gracefulTasks.push(waitForIdle(() => current.applicationAddons.isBusy()))
 
   const graceful = Promise.allSettled(gracefulTasks)
-  await Promise.race([graceful, delay(2_000)])
-  await processSupervisor?.shutdown().catch(error => {
-    console.error('[process-supervisor] 清理子进程失败。', error)
+  await Promise.race([Promise.all([graceful, supervisorShutdown]), delay(2_000)])
+  await supervisorShutdown
+  // 监督器处理完整树后，主进程再用本地句柄兜底，覆盖通信丢失或快速关闭。
+  await shutdownTrackedProcesses().catch(error => {
+    console.error('[process-tracker] 清理子进程失败。', error)
   })
   configureProcessTracker(null)
   await Promise.race([graceful, delay(800)])

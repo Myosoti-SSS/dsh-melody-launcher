@@ -125,7 +125,15 @@ function presetTargets(analysis: CatalogRepositoryAnalysis | undefined): PresetI
 }
 
 function analysisBadge(analysis: CatalogRepositoryAnalysis): { className: string; label: string } {
-  if (analysis.kind === 'hybrid') return { className: 'hybrid', label: 'Plugin + Skill 等' }
+  if (analysis.kind === 'hybrid') {
+    const label = analysis.componentKinds.map(kind => {
+      if (kind === 'plugin') return 'Plugin'
+      if (kind === 'skill') return 'Skill'
+      if (kind === 'application') return '应用加载项'
+      return 'Agent 预设'
+    }).join(' + ')
+    return { className: 'hybrid', label }
+  }
   if (analysis.kind === 'skill') return { className: 'skill', label: 'Skill' }
   if (analysis.kind === 'application') return { className: 'application', label: '应用加载项' }
   if (analysis.kind === 'preset') return { className: 'preset', label: 'Agent 预设' }
@@ -582,7 +590,7 @@ export function DiscoverView({
       <PageHeading
         eyebrow="DSH MARKET"
         title="DSH 资源市场"
-        description={`统一浏览 GitHub 中 ${topicTotals.plugin.toLocaleString('zh-CN')} 个 Plugin、${topicTotals.skill.toLocaleString('zh-CN')} 个 Skill 和 ${topicTotals.application.toLocaleString('zh-CN')} 个应用候选，安装前会按仓库内容重新识别类型。`}
+        description={`统一浏览 GitHub 中 ${topicTotals.plugin.toLocaleString('zh-CN')} 个 Plugin 和 ${topicTotals.application.toLocaleString('zh-CN')} 个应用候选；安装前仍会按仓库内容识别其中的 Skill。`}
       />
 
       <div className="discovery-controls">
@@ -590,18 +598,18 @@ export function DiscoverView({
           <Search size={18} />
           <input
             value={query}
-            disabled={batchRunning}
+            disabled={loading}
             onChange={event => setQuery(event.target.value)}
             placeholder="搜索名称、作者或说明"
             aria-label="搜索 DSH 资源"
           />
-          {query && <button type="button" disabled={batchRunning} onClick={() => { setQuery(''); void search('', sort, 1) }} aria-label="清除搜索"><X size={16} /></button>}
-          <button type="submit" className="search-submit" disabled={batchRunning}>搜索</button>
+          {query && <button type="button" disabled={loading} onClick={() => { setQuery(''); void search('', sort, 1) }} aria-label="清除搜索"><X size={16} /></button>}
+          <button type="submit" className="search-submit" disabled={loading}>搜索</button>
         </form>
         <div className="discovery-actions">
           <div className="segmented-control" aria-label="资源排序方式">
-            <button type="button" disabled={batchRunning} className={sort === 'stars' ? 'active' : ''} onClick={() => { setSort('stars'); void search(query, 'stars', 1) }}><Star size={15} />热门</button>
-            <button type="button" disabled={batchRunning} className={sort === 'updated' ? 'active' : ''} onClick={() => { setSort('updated'); void search(query, 'updated', 1) }}><Clock3 size={15} />最近更新</button>
+            <button type="button" disabled={loading} className={sort === 'stars' ? 'active' : ''} onClick={() => { setSort('stars'); void search(query, 'stars', 1) }}><Star size={15} />热门</button>
+            <button type="button" disabled={loading} className={sort === 'updated' ? 'active' : ''} onClick={() => { setSort('updated'); void search(query, 'updated', 1) }}><Clock3 size={15} />最近更新</button>
           </div>
           <button
             type="button"
@@ -616,7 +624,7 @@ export function DiscoverView({
           <button
             type="button"
             className="secondary-button catalog-scan-button"
-            disabled={loading || batchRunning || hasActiveChecks || activeInstalling !== null || aiActive || importing}
+            disabled={loading || importing}
             onClick={() => setImportOpen(true)}
             title="从 GitHub 链接导入仓库，加入市场并复用检测 / 安装流程"
           >
@@ -645,7 +653,7 @@ export function DiscoverView({
         pageCount={pageCount}
         visibleCount={repositories.length}
         loading={loading}
-        disabled={batchRunning || hasActiveChecks || activeInstalling !== null}
+        disabled={loading}
         onPageChange={nextPage => void search(query, sort, nextPage)}
       />
 
@@ -701,11 +709,14 @@ export function DiscoverView({
                   : needsDialog
                     ? '选择组件'
                     : anyInstalled ? '更新' : '安装'
-          const actionDisabled = activeInstalling !== null
-            || hasActiveChecks
-            || aiActive
-            || Boolean(analysis && (analysis.kind === 'invalid' || totalTargets === 0))
-            || Boolean(singleApplication && !singleApplication.supported)
+          const actionDisabled = isChecking
+            || (Boolean(analysis) && (
+              activeInstalling !== null
+              || aiActive
+              || analysis.kind === 'invalid'
+              || totalTargets === 0
+              || Boolean(singleApplication && !singleApplication.supported)
+            ))
           // 非标准形态（plugin 的 dynamic/application/invalid，或整体 invalid）——普通安装装不了，转「AI 尝试」。
           const aiTryable = AI_INSTALL_ENABLED
             && !!analysis
@@ -833,7 +844,7 @@ export function DiscoverView({
                       <button
                         type="button"
                         className="secondary-button accent ai-try-button"
-                        disabled={aiActive || hasActiveChecks || activeInstalling !== null}
+                        disabled={aiActive || activeInstalling !== null}
                         onClick={() => onAiInstall(repo)}
                         title="让 DSH 的 AI 研究仓库并尝试安装（实验性，只读自动放行、写操作需批准、可一键还原快照）"
                       >

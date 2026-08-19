@@ -25,10 +25,13 @@ export const FEATURED_REPOSITORIES: CatalogRepositoryResult[] = [
 ]
 
 /** 把内置条目前插到检索结果顶部；与结果里已存在的同名仓库去重。 */
-export function prependFeatured(repositories: CatalogRepositoryResult[]): CatalogRepositoryResult[] {
+export function prependFeatured(
+  repositories: CatalogRepositoryResult[],
+  featuredRepositories: CatalogRepositoryResult[] = FEATURED_REPOSITORIES,
+): CatalogRepositoryResult[] {
   const existing = new Set(repositories.map(repository => repository.fullName.toLowerCase()))
   return [
-    ...FEATURED_REPOSITORIES.filter(repository => !existing.has(repository.fullName.toLowerCase())),
+    ...featuredRepositories.filter(repository => !existing.has(repository.fullName.toLowerCase())),
     ...repositories,
   ]
 }

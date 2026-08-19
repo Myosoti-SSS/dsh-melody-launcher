@@ -1,4 +1,4 @@
-import { Box, GitFork, Layers3, Package, Sparkles, SquareTerminal } from 'lucide-react'
+import { Box, GitFork, Layers3, Package, PanelLeftClose, PanelLeftOpen, Sparkles, SquareTerminal } from 'lucide-react'
 import type { PackStatus, ProfileState, RuntimeState, ViewName } from '../types'
 
 /** 管理界面左侧导航与当前 Profile 摘要。 */
@@ -17,13 +17,16 @@ interface SideNavigationProps {
   profileName: string
   packs: PackStatus[]
   activePackId: string | null | undefined
+  collapsed: boolean
+  profileMutationLocked: boolean
   onPackChange: (packId: string) => void
+  onToggleCollapsed: () => void
   onChange: (view: ViewName) => void
 }
 
-export function SideNavigation({ view, profile, runtime, profileName, packs, activePackId, onPackChange, onChange }: SideNavigationProps) {
+export function SideNavigation({ view, profile, runtime, profileName, packs, activePackId, collapsed, profileMutationLocked, onPackChange, onToggleCollapsed, onChange }: SideNavigationProps) {
   const entries: NavigationEntry[] = [
-    { id: 'plugins', label: '插件顺序', icon: Layers3, count: profile.plugins.length },
+    { id: 'plugins', label: '启动项管理', icon: Layers3, count: profile.plugins.length },
     { id: 'discover', label: '资源市场', icon: Sparkles },
     { id: 'packs', label: '整合包', icon: Package },
     { id: 'github', label: 'GitHub', icon: GitFork },
@@ -31,7 +34,7 @@ export function SideNavigation({ view, profile, runtime, profileName, packs, act
   ]
 
   return (
-    <aside className="side-navigation">
+    <aside className={`side-navigation ${collapsed ? 'collapsed' : ''}`}>
       <nav aria-label="主导航">
         {entries.map(entry => {
           const Icon = entry.icon
@@ -51,24 +54,37 @@ export function SideNavigation({ view, profile, runtime, profileName, packs, act
           )
         })}
       </nav>
-      <div className="profile-summary">
-        <div className="profile-icon"><Box size={17} /></div>
-        <div className="profile-copy">
-          <strong>{profileName}</strong>
-          <span>{profile.initialized ? `${profile.activeBundles.length} 层已激活` : '等待初始化'}</span>
-          {packs.length > 0 && (
-            <select
-              className="pack-switcher"
-              aria-label="切换整合包"
-              value={activePackId ?? ''}
-              onChange={event => onPackChange(event.target.value)}
-            >
-              <option value="">默认配置</option>
-              {packs.map(pack => <option key={pack.id} value={pack.id}>{pack.name}</option>)}
-            </select>
-          )}
+      <div className="side-navigation-footer">
+        <button
+          type="button"
+          className="sidebar-collapse-button"
+          title={collapsed ? '展开侧边栏' : '收起侧边栏'}
+          aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+          onClick={onToggleCollapsed}
+        >
+          {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          <span>{collapsed ? '展开侧边栏' : '收起侧边栏'}</span>
+        </button>
+        <div className="profile-summary">
+          <div className="profile-icon"><Box size={17} /></div>
+          <div className="profile-copy">
+            <strong>{profileName}</strong>
+            <span>{profile.initialized ? `${profile.activeBundles.length} 层已激活` : '等待初始化'}</span>
+            {packs.length > 0 && view !== 'plugins' && (
+              <select
+                className="pack-switcher"
+                aria-label="切换整合包"
+                value={activePackId ?? ''}
+                disabled={profileMutationLocked}
+                onChange={event => onPackChange(event.target.value)}
+              >
+                <option value="">默认配置</option>
+                {packs.map(pack => <option key={pack.id} value={pack.id}>{pack.name}</option>)}
+              </select>
+            )}
+          </div>
+          <span className={`mini-status ${runtime.running ? 'running' : ''}`} title={runtime.running ? 'DSH 正在运行' : 'DSH 未运行'} />
         </div>
-        <span className={`mini-status ${runtime.running ? 'running' : ''}`} title={runtime.running ? 'DSH 正在运行' : 'DSH 未运行'} />
       </div>
     </aside>
   )

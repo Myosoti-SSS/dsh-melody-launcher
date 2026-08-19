@@ -111,6 +111,16 @@ export function createAcpClient(options: AcpClientOptions): AcpClient {
   let closedError: Error | undefined
   let closed = false
 
+  function rejectPendingRequests(error: Error): void {
+    closed = true
+    closedError = error
+    for (const { reject, timer } of pending.values()) {
+      if (timer) clearTimeout(timer)
+      reject(error)
+    }
+    pending.clear()
+  }
+
   transport.onLine(line => {
     if (closed) return
     let message: unknown
@@ -134,14 +144,9 @@ export function createAcpClient(options: AcpClientOptions): AcpClient {
 
   transport.onClose(error => {
     if (closed) return
-    closed = true
-    closedError = error ?? new Error('ACP 连接已关闭')
-    for (const { reject, timer } of pending.values()) {
-      if (timer) clearTimeout(timer)
-      reject(closedError)
-    }
-    pending.clear()
-    options.onClose?.(closedError)
+    const closeError = error ?? new Error('ACP 连接已关闭')
+    rejectPendingRequests(closeError)
+    options.onClose?.(closeError)
   })
 
   function sendRaw(message: unknown): void {
@@ -294,7 +299,9 @@ export function createAcpClient(options: AcpClientOptions): AcpClient {
     },
     close(): void {
       if (closed) return
-      closed = true
+      // transport.close() only closes stdin and may not emit onClose until the child exits.
+      // Reject requests here so an unbounded session/prompt cannot keep cancellation stuck.
+      rejectPendingRequests(new Error('ACP 连接已关闭'))
       transport.close()
     },
   }

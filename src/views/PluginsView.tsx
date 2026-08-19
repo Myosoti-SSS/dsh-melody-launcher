@@ -6,6 +6,7 @@ import {
   Boxes,
   CircleAlert,
   CircleCheck,
+  ChevronRight,
   Download,
   ExternalLink,
   Folder,
@@ -13,23 +14,27 @@ import {
   GripVertical,
   Link2,
   LoaderCircle,
+  Package,
   PackageCheck,
   Play,
   RefreshCw,
   Search,
-  SlidersHorizontal,
   Sparkles,
   Trash2,
   Wrench,
   X,
 } from 'lucide-react'
-import { useState } from 'react'
-import { PageHeading } from '../components/PageHeading'
-import { pluginInitial } from '../lib/format'
-import { movePackage, movePackageTo } from '../lib/profile-order'
-import type { InstalledApplicationAddon, InstalledPreset, InstalledSkill, ManagedPlugin, PluginTrialResult, ProfileState } from '../types'
+import { useEffect, useState } from 'react'
+import { activeOrderFromDisplay, movePackage, movePackageTo } from '../lib/profile-order'
+import type { AppSettings, InstalledApplicationAddon, InstalledPreset, InstalledSkill, ManagedPlugin, PackStatus, PluginTrialResult, ProfileState, RuntimeState } from '../types'
 
 /** 插件加载顺序页：列表、排序、启停与详情。 */
+
+type ResourceSelection =
+  | { kind: 'plugin'; id: string }
+  | { kind: 'skill'; id: string }
+
+type SecondaryResourceTab = 'skill' | 'applications' | 'presets'
 
 interface PluginsViewProps {
   profile: ProfileState
@@ -40,17 +45,29 @@ interface PluginsViewProps {
   pluginTrials: Record<string, PluginTrialResult>
   selected: ManagedPlugin | null
   busy: string | null
+  settings: AppSettings
+  runtime: RuntimeState
+  packs: PackStatus[]
+  activePackId: string | null | undefined
+  activeRuntimeReplacement: InstalledApplicationAddon | null
+  runtimeBusy: boolean
+  /** 资源安装会写入 Profile 或本地资源目录；只锁定这些写操作。 */
+  profileLocked: boolean
   onSelect: (plugin: ManagedPlugin) => void
-  onToggle: (plugin: ManagedPlugin, enabled: boolean) => void
+  onToggle: (plugin: ManagedPlugin, enabled: boolean) => Promise<boolean>
   onToggleSkill: (skill: InstalledSkill, enabled: boolean) => void
   onToggleApplication: (application: InstalledApplicationAddon, enabled: boolean) => void
   onUninstallApplication: (application: InstalledApplicationAddon) => void
   onTogglePreset: (preset: InstalledPreset, enabled: boolean) => void
-  onReorder: (names: string[]) => void
+  onReorder: (names: string[]) => Promise<void> | void
   onRefresh: () => void
   onBrowse: () => void
   onOpenPath: (path: string) => void
   onOpenRepository: (url: string) => void
+  onPackChange: (packId: string) => void
+  onToggleRuntime: () => void
+  onOpenHarness: () => void
+  onOpenRuntimeSettings: () => void
   onUninstall: (plugin: ManagedPlugin) => void
   onTrialPlugin: (packageName: string, profileName: string) => void
   onAdaptPlugin: (packageName: string, profileName: string) => void
@@ -67,6 +84,13 @@ export function PluginsView({
   pluginTrials,
   selected,
   busy,
+  profileLocked,
+  settings,
+  runtime,
+  packs,
+  activePackId,
+  activeRuntimeReplacement,
+  runtimeBusy,
   onSelect,
   onToggle,
   onToggleSkill,
@@ -78,6 +102,10 @@ export function PluginsView({
   onBrowse,
   onOpenPath,
   onOpenRepository,
+  onPackChange,
+  onToggleRuntime,
+  onOpenHarness,
+  onOpenRuntimeSettings,
   onUninstall,
   onTrialPlugin,
   onAdaptPlugin,
@@ -85,143 +113,267 @@ export function PluginsView({
   aiSubject,
 }: PluginsViewProps) {
   const [filter, setFilter] = useState('')
+  const [showActivePlugins, setShowActivePlugins] = useState(true)
+  const [showInactivePlugins, setShowInactivePlugins] = useState(true)
+  const [pluginDisplayOrder, setPluginDisplayOrder] = useState<string[]>(() => profile.plugins.map(plugin => plugin.packageName))
   const [dragged, setDragged] = useState<string | null>(null)
+  const [secondaryTab, setSecondaryTab] = useState<SecondaryResourceTab>('skill')
+  const [selection, setSelection] = useState<ResourceSelection | null>(() => (
+    selected ? { kind: 'plugin', id: selected.packageName } : null
+  ))
+
+  useEffect(() => {
+    if (!selection || selection.kind === 'plugin') {
+      setSelection(selected ? { kind: 'plugin', id: selected.packageName } : null)
+    }
+  }, [selected?.packageName])
+
+  const pluginNamesKey = profile.plugins.map(plugin => plugin.packageName).join('\n')
+  useEffect(() => {
+    setPluginDisplayOrder(current => reconcilePluginDisplayOrder(current, profile.plugins.map(plugin => plugin.packageName)))
+  }, [profileName, pluginNamesKey])
 
   const active = profile.plugins.filter(plugin => plugin.enabled)
   const inactive = profile.plugins.filter(plugin => !plugin.enabled)
   const activeNames = active.map(plugin => plugin.packageName)
+  const pluginsByName = new Map(profile.plugins.map(plugin => [plugin.packageName, plugin]))
+  const orderedPlugins = pluginDisplayOrder.map(packageName => pluginsByName.get(packageName)).filter((plugin): plugin is ManagedPlugin => Boolean(plugin))
   const visible = (plugin: ManagedPlugin) =>
-    !filter || `${plugin.displayName} ${plugin.packageName}`.toLowerCase().includes(filter.toLowerCase())
+    (plugin.enabled ? showActivePlugins : showInactivePlugins)
+    && (!filter || `${plugin.displayName} ${plugin.packageName}`.toLowerCase().includes(filter.toLowerCase()))
+  const selectedPlugin = selection?.kind === 'plugin'
+    ? profile.plugins.find(plugin => plugin.packageName === selection.id) ?? null
+    : null
+  const selectedSkill = selection?.kind === 'skill'
+    ? installedSkills.find(skill => skill.name === selection.id) ?? null
+    : null
+  const runtimeAddons = installedApplications.filter(application => application.launchMode === 'runtime-replacement')
+  const runtimeSelection = activeRuntimeReplacement ? `addon:${activeRuntimeReplacement.id}` : 'web'
+
+  const selectRuntime = (value: string) => {
+    if (value === 'web') {
+      if (activeRuntimeReplacement) onToggleApplication(activeRuntimeReplacement, false)
+      return
+    }
+    const addon = runtimeAddons.find(application => `addon:${application.id}` === value)
+    if (addon && !addon.enabled) onToggleApplication(addon, true)
+  }
 
   const move = (packageName: string, direction: -1 | 1) => {
     const names = movePackage(activeNames, packageName, direction)
-    if (names) onReorder(names)
+    if (names) {
+      setPluginDisplayOrder(current => applyActiveOrderToDisplay(current, names))
+      onReorder(names)
+    }
   }
 
   const dropAt = (targetName: string) => {
     const names = dragged ? movePackageTo(activeNames, dragged, targetName) : null
     setDragged(null)
-    if (names) onReorder(names)
+    if (names) {
+      setPluginDisplayOrder(current => applyActiveOrderToDisplay(current, names))
+      onReorder(names)
+    }
+  }
+
+  const togglePluginAtCurrentPosition = async (plugin: ManagedPlugin, enabled: boolean) => {
+    if (!enabled) {
+      await onToggle(plugin, false)
+      return
+    }
+
+    const targetOrder = activeOrderFromDisplay(pluginDisplayOrder, [...activeNames, plugin.packageName])
+    const toggled = await onToggle(plugin, true)
+    if (toggled) await onReorder(targetOrder)
   }
 
   return (
     <div className="page plugins-page">
-      <PageHeading
-        eyebrow="WEB PROFILE"
-        title="插件加载顺序"
-        description="Plugin 按顺序加载，Skill 独立启停；应用加载项在下方单独管理，不计入 Web Profile。"
-        actions={(
-          <>
-            <button className="secondary-button" type="button" onClick={onRefresh}><RefreshCw size={17} />刷新</button>
-            <button className="secondary-button accent" type="button" onClick={onBrowse}><Download size={17} />获取插件</button>
-          </>
-        )}
-      />
-
-      <div className="stats-strip" aria-label="配置概况">
-        <div><strong>{profile.activeBundles.length}</strong><span>已激活</span></div>
-        <div><strong>{profile.disabledCount}</strong><span>已停用</span></div>
-        <div><strong>{profile.dependencyCount}</strong><span>第三方依赖</span></div>
-        <button type="button" onClick={() => onOpenPath(profile.profileDir)} title="在资源管理器中打开配置目录">
-          <Folder size={16} /><span className="path-clip">{profile.profileDir}</span><ExternalLink size={14} />
-        </button>
+      <div className="management-titlebar">
+        <div>
+          <span className="management-eyebrow">WEB PROFILE</span>
+          <h1>插件与 Skill 管理</h1>
+          <p>调整加载顺序、启停状态，并从下方查看选中资源的简介。</p>
+        </div>
+        <div className="management-title-actions">
+          <button className="secondary-button" type="button" onClick={onRefresh}><RefreshCw size={17} />刷新</button>
+          <button className="secondary-button accent" type="button" onClick={onBrowse}><Download size={17} />获取资源</button>
+        </div>
       </div>
 
       {!profile.initialized ? (
         <EmptyProfile onBrowse={onBrowse} />
       ) : (
-        <div className="plugin-layout">
-          <section className="plugin-list-panel" aria-label="插件列表">
-            <div className="list-toolbar">
-              <label className="search-field compact">
-                <Search size={16} />
-                <input value={filter} onChange={event => setFilter(event.target.value)} placeholder="筛选已安装插件" />
-                {filter && <button type="button" onClick={() => setFilter('')} aria-label="清除筛选"><X size={15} /></button>}
+        <>
+          <div className="management-surface">
+          <div className="management-primary-panel">
+            <div className="management-pack-bar">
+              <label className="management-pack-control">
+                <Package size={18} />
+                <span>整合包</span>
+                <ChevronRight size={15} className="management-control-chevron" />
+                <select
+                  aria-label="加载整合包"
+                  value={activePackId ?? ''}
+                  disabled={profileLocked}
+                  onChange={event => onPackChange(event.target.value)}
+                >
+                  <option value="">默认配置</option>
+                  {packs.map(pack => <option key={pack.id} value={pack.id}>{pack.name}</option>)}
+                </select>
               </label>
-              <span>{active.length} 个加载层</span>
+              <div className="management-stats" aria-label="配置概况">
+                <span><strong>{profile.activeBundles.length}</strong> 激活</span>
+                <span><strong>{profile.disabledCount}</strong> 停用</span>
+                <span><strong>{installedSkills.length}</strong> Skill</span>
+                <button type="button" onClick={() => onOpenPath(profile.profileDir)} title="在资源管理器中打开配置目录">
+                  <Folder size={15} /><span className="path-clip">{profile.profileDir}</span>
+                </button>
+              </div>
             </div>
-            <div className="plugin-management-grid">
-              <div className="plugin-management-column">
-            <div className="column-headings" aria-hidden="true">
-              <span>优先级</span><span>插件</span><span>版本</span><span>状态</span><span />
+          <section className="plugin-list-panel management-plugin-panel" aria-label="插件管理">
+            <div className="plugin-pane-toolbar">
+              <div className="management-pane-heading"><span>Plugin</span><small>{profile.plugins.length} 个插件</small></div>
+              <div className="plugin-status-filters" aria-label="Plugin 状态筛选">
+                <label className={showActivePlugins ? 'selected' : ''}>
+                  <input type="checkbox" checked={showActivePlugins} onChange={event => setShowActivePlugins(event.target.checked)} />
+                  <span>已激活</span><strong>{active.length}</strong>
+                </label>
+                <label className={showInactivePlugins ? 'selected' : ''}>
+                  <input type="checkbox" checked={showInactivePlugins} onChange={event => setShowInactivePlugins(event.target.checked)} />
+                  <span>未激活</span><strong>{inactive.length}</strong>
+                </label>
+              </div>
             </div>
-            <div className="plugin-rows">
-              {active.filter(visible).map((plugin, index) => (
+            <div className="plugin-management-column">
+              <div className="column-headings" aria-hidden="true">
+              <span>优先级</span><span>状态</span><span>插件</span><span>简介</span><span>版本</span><span />
+              </div>
+              <div className="plugin-rows">
+              {orderedPlugins.filter(visible).map(plugin => {
+                const activeIndex = activeNames.indexOf(plugin.packageName)
+                return (
                 <PluginRow
                   key={plugin.packageName}
                   plugin={plugin}
-                  selected={selected?.packageName === plugin.packageName}
+                  selected={selection?.kind === 'plugin' && selection.id === plugin.packageName}
                   busy={isComponentBusy(busy, plugin.repositoryFullName, plugin.packageName)}
+                  locked={profileLocked}
                   linked={installedApplications.some(application => sameRepository(application.repository, plugin.repositoryFullName))}
                   dragging={dragged === plugin.packageName}
-                  canMoveUp={index > 0}
-                  canMoveDown={index < active.length - 1}
-                  onSelect={() => onSelect(plugin)}
-                  onToggle={enabled => onToggle(plugin, enabled)}
+                  canMoveUp={plugin.enabled && activeIndex > 0}
+                  canMoveDown={plugin.enabled && activeIndex >= 0 && activeIndex < active.length - 1}
+                  onSelect={() => { onSelect(plugin); setSelection({ kind: 'plugin', id: plugin.packageName }) }}
+                  onToggle={enabled => { void togglePluginAtCurrentPosition(plugin, enabled) }}
                   onMove={moveDirection => move(plugin.packageName, moveDirection)}
                   onDragStart={() => setDragged(plugin.packageName)}
                   onDrop={() => dropAt(plugin.packageName)}
                 />
-              ))}
-              {inactive.length > 0 && <div className="disabled-divider"><span>已停用</span><i /></div>}
-              {inactive.filter(visible).map(plugin => (
-                <PluginRow
-                  key={plugin.packageName}
-                  plugin={plugin}
-                  selected={selected?.packageName === plugin.packageName}
-                  busy={isComponentBusy(busy, plugin.repositoryFullName, plugin.packageName)}
-                  linked={installedApplications.some(application => sameRepository(application.repository, plugin.repositoryFullName))}
-                  dragging={false}
-                  canMoveUp={false}
-                  canMoveDown={false}
-                  onSelect={() => onSelect(plugin)}
-                  onToggle={enabled => onToggle(plugin, enabled)}
-                  onMove={() => undefined}
-                  onDragStart={() => undefined}
-                  onDrop={() => undefined}
-                />
-              ))}
-            </div>
-              </div>
-              <div className="secondary-management-column">
-                <SkillList skills={installedSkills.filter(skill => visibleSkill(skill, filter))} busy={busy} onToggle={onToggleSkill} />
-                <PresetList presets={installedPresets.filter(preset => visiblePreset(preset, filter))} busy={busy} onToggle={onTogglePreset} />
+                )
+              })}
               </div>
             </div>
           </section>
-          <PluginDetails
-            plugin={selected}
+          </div>
+          <div className="management-secondary-panel">
+          <div className="management-runtime-control">
+            <div className="management-runtime-label">
+              <span className={`management-runtime-dot ${runtime.running ? 'running' : ''}`} />
+              <span>运行时管理<small>{activeRuntimeReplacement?.name ?? `${settings.profileName} · Web`}</small></span>
+            </div>
+            <select
+              aria-label="运行时管理"
+              value={runtimeSelection}
+              disabled={profileLocked || runtimeBusy || runtime.running}
+              onChange={event => selectRuntime(event.target.value)}
+            >
+              <option value="web">DSH Web</option>
+              {runtimeAddons.map(addon => <option key={addon.id} value={`addon:${addon.id}`}>{addon.name}</option>)}
+            </select>
+            <button
+              type="button"
+              className={`management-runtime-action ${runtime.running ? 'stop' : ''}`}
+              onClick={onToggleRuntime}
+              disabled={profileLocked || runtimeBusy}
+            >
+              {runtimeBusy ? <LoaderCircle className="spin" size={15} /> : runtime.running ? <CircleCheck size={15} /> : <Play size={15} fill="currentColor" />}
+              {runtime.running ? '停止' : '启动'}
+            </button>
+            <button type="button" className="icon-button" onClick={runtime.url ? onOpenHarness : onOpenRuntimeSettings} title={runtime.url ? '打开 Harness' : '打开运行与日志'} aria-label={runtime.url ? '打开 Harness' : '打开运行与日志'}>
+              <ExternalLink size={15} />
+            </button>
+          </div>
+          <div className="management-search-control">
+            <label className="search-field compact">
+              <Search size={15} />
+              <input value={filter} onChange={event => setFilter(event.target.value)} placeholder="筛选 Plugin、Skill、加载项或预设" />
+              {filter && <button type="button" onClick={() => setFilter('')} aria-label="清除筛选"><X size={14} /></button>}
+            </label>
+          </div>
+          <section className="skill-list-panel" aria-label="Skill、应用加载项与预设管理">
+            <div className="resource-tabs" role="tablist" aria-label="资源类型">
+              <button type="button" role="tab" aria-selected={secondaryTab === 'skill'} className={secondaryTab === 'skill' ? 'active' : ''} onClick={() => setSecondaryTab('skill')}>
+                <BookOpenCheck size={14} />Skill<span>{installedSkills.length}</span>
+              </button>
+              <button type="button" role="tab" aria-selected={secondaryTab === 'applications'} className={secondaryTab === 'applications' ? 'active' : ''} onClick={() => setSecondaryTab('applications')}>
+                <AppWindow size={14} />应用加载项<span>{installedApplications.length}</span>
+              </button>
+              <button type="button" role="tab" aria-selected={secondaryTab === 'presets'} className={secondaryTab === 'presets' ? 'active' : ''} onClick={() => setSecondaryTab('presets')}>
+                <Boxes size={14} />预设<span>{installedPresets.length}</span>
+              </button>
+            </div>
+            {secondaryTab === 'skill' && <div className="resource-tab-panel" role="tabpanel">
+              <SkillList skills={installedSkills.filter(skill => visibleSkill(skill, filter))} selectedName={selection?.kind === 'skill' ? selection.id : null} busy={busy} locked={profileLocked} onSelect={skill => setSelection({ kind: 'skill', id: skill.name })} onToggle={onToggleSkill} />
+            </div>}
+            {secondaryTab === 'applications' && <div className="resource-tab-panel" role="tabpanel">
+              <ApplicationList
+                applications={installedApplications.filter(application => visibleApplication(application, filter))}
+                plugins={profile.plugins}
+                busy={busy}
+                locked={profileLocked}
+                onToggle={onToggleApplication}
+                onUninstall={onUninstallApplication}
+              />
+            </div>}
+            {secondaryTab === 'presets' && <div className="resource-tab-panel" role="tabpanel">
+              <PresetList presets={installedPresets.filter(preset => visiblePreset(preset, filter))} busy={busy} locked={profileLocked} onToggle={onTogglePreset} />
+            </div>}
+          </section>
+          </div>
+          </div>
+          <section className="resource-details-panel" aria-label="资源简介">
+          {selectedPlugin ? <PluginDetails
+            plugin={selectedPlugin}
             profileName={profileName}
-            trial={selected ? pluginTrials[`${profileName}:${selected.packageName}`] : undefined}
-            busy={Boolean(selected && busy === `plugin-trial:${selected.packageName}`)}
+            trial={pluginTrials[`${profileName}:${selectedPlugin.packageName}`]}
+            busy={busy === `plugin-trial:${selectedPlugin.packageName}`}
+            locked={profileLocked}
             aiActive={aiActive}
-            adapting={Boolean(selected && aiActive && aiSubject === selected.packageName)}
+            adapting={Boolean(aiActive && aiSubject === selectedPlugin.packageName)}
             onOpenRepository={onOpenRepository}
             onUninstall={onUninstall}
             onTrialPlugin={onTrialPlugin}
             onAdaptPlugin={onAdaptPlugin}
-          />
-        </div>
+          /> : selectedSkill ? <SkillDetails skill={selectedSkill} locked={profileLocked} busy={busy === `skill:${selectedSkill.name}`} onToggle={onToggleSkill} onOpenRepository={onOpenRepository} /> : <div className="resource-details-empty">选择一个 Plugin 或 Skill 查看简介</div>}
+          </section>
+        </>
       )}
 
-      <section className="application-addon-panel" aria-label="应用加载项">
-        <div className="application-addon-heading">
-          <div>
-            <span><AppWindow size={15} />应用加载项</span>
-            <p>独立应用宿主与伴随工具；不参与 Plugin 加载顺序。标记“协同”的项目会与同仓库 Plugin 同步启停。</p>
-          </div>
-          <small>{installedApplications.length} 个已安装</small>
-        </div>
-        <ApplicationList
-          applications={installedApplications.filter(application => visibleApplication(application, filter))}
-          plugins={profile.plugins}
-          busy={busy}
-          onToggle={onToggleApplication}
-          onUninstall={onUninstallApplication}
-        />
-      </section>
     </div>
   )
+}
+
+function reconcilePluginDisplayOrder(current: string[], incoming: string[]): string[] {
+  const available = new Set(incoming)
+  const retained = current.filter(packageName => available.has(packageName))
+  const retainedSet = new Set(retained)
+  return [...retained, ...incoming.filter(packageName => !retainedSet.has(packageName))]
+}
+
+function applyActiveOrderToDisplay(current: string[], activeOrder: string[]): string[] {
+  const active = new Set(activeOrder)
+  let activeIndex = 0
+  return current.map(packageName => active.has(packageName) ? activeOrder[activeIndex++] : packageName)
 }
 
 function visibleSkill(skill: InstalledSkill, filter: string): boolean {
@@ -232,10 +384,11 @@ function visibleApplication(application: InstalledApplicationAddon, filter: stri
   return !filter || `${application.name} ${application.packageName} ${application.description}`.toLowerCase().includes(filter.toLowerCase())
 }
 
-function ApplicationList({ applications, plugins, busy, onToggle, onUninstall }: {
+function ApplicationList({ applications, plugins, busy, locked, onToggle, onUninstall }: {
   applications: InstalledApplicationAddon[]
   plugins: ManagedPlugin[]
   busy: string | null
+  locked: boolean
   onToggle: (application: InstalledApplicationAddon, enabled: boolean) => void
   onUninstall: (application: InstalledApplicationAddon) => void
 }) {
@@ -262,7 +415,7 @@ function ApplicationList({ applications, plugins, busy, onToggle, onUninstall }:
                     <input
                       type="checkbox"
                       checked={application.enabled}
-                      disabled={applicationBusy}
+                      disabled={locked || applicationBusy}
                       onChange={event => onToggle(application, event.target.checked)}
                       aria-label={`${application.enabled ? '停用' : '启用'} ${application.name}`}
                     />
@@ -271,7 +424,7 @@ function ApplicationList({ applications, plugins, busy, onToggle, onUninstall }:
                   <button
                     type="button"
                     className="application-remove-button"
-                    disabled={busy === `application-remove:${application.id}`}
+                    disabled={locked || busy === `application-remove:${application.id}`}
                     onClick={() => onUninstall(application)}
                     title={`卸载 ${application.name}`}
                     aria-label={`卸载 ${application.name}`}
@@ -301,34 +454,32 @@ function visiblePreset(preset: InstalledPreset, filter: string): boolean {
 }
 
 /** Agent 预设列：与 Skill 相同的开关机制（目录在 .agent-presets/.disabled 下时停用）。 */
-function PresetList({ presets, busy, onToggle }: {
+function PresetList({ presets, busy, locked, onToggle }: {
   presets: InstalledPreset[]
   busy: string | null
+  locked: boolean
   onToggle: (preset: InstalledPreset, enabled: boolean) => void
 }) {
   return (
     <div className="skill-management-column preset-management-column">
-      <div className="skill-column-heading"><span><Boxes size={14} />预设</span><small>{presets.length} 个已安装</small></div>
       {presets.length === 0 ? (
         <div className="skill-empty">尚未安装预设</div>
       ) : (
         <div className="skill-rows">
           {presets.map(preset => (
             <div className={`skill-row ${preset.enabled ? '' : 'disabled'}`} key={preset.name}>
-              <div className="skill-identity">
-                <div className="skill-glyph preset-glyph"><Boxes size={15} /></div>
-                <div><strong>{preset.name}</strong><span>{preset.enabled ? '已启用' : '已停用'}</span></div>
-              </div>
               <label className="switch" title={preset.enabled ? '停用预设' : '启用预设'}>
                 <input
                   type="checkbox"
                   checked={preset.enabled}
-                  disabled={busy === `preset:${preset.name}`}
+                  disabled={locked || busy === `preset:${preset.name}`}
                   onChange={event => onToggle(preset, event.target.checked)}
                   aria-label={`${preset.enabled ? '停用' : '启用'} 预设 ${preset.name}`}
                 />
                 <span>{busy === `preset:${preset.name}` && <LoaderCircle className="spin" size={11} />}</span>
               </label>
+              <div className="skill-name-cell"><strong>{preset.name}</strong></div>
+              <span className="skill-description-cell">{preset.enabled ? '已启用' : '已停用'}</span>
             </div>
           ))}
         </div>
@@ -337,29 +488,29 @@ function PresetList({ presets, busy, onToggle }: {
   )
 }
 
-function SkillList({ skills, busy, onToggle }: {
+function SkillList({ skills, selectedName, busy, locked, onSelect, onToggle }: {
   skills: InstalledSkill[]
+  selectedName: string | null
   busy: string | null
+  locked: boolean
+  onSelect: (skill: InstalledSkill) => void
   onToggle: (skill: InstalledSkill, enabled: boolean) => void
 }) {
   return (
     <div className="skill-management-column">
-      <div className="skill-column-heading"><span><BookOpenCheck size={14} />Skill</span><small>{skills.length} 个已安装</small></div>
       {skills.length === 0 ? (
         <div className="skill-empty">尚未安装 Skill</div>
       ) : (
         <div className="skill-rows">
           {skills.map(skill => (
-            <div className={`skill-row ${skill.enabled ? '' : 'disabled'}`} key={skill.name}>
-              <div className="skill-identity">
-                <div className="skill-glyph"><BookOpenCheck size={15} /></div>
-                <div><strong>{skill.name}</strong><span>{skill.description}</span></div>
-              </div>
-              <label className="switch" title={skill.enabled ? '停用 Skill' : '启用 Skill'}>
+            <div className={`skill-row ${skill.enabled ? '' : 'disabled'} ${selectedName === skill.name ? 'selected' : ''}`} key={skill.name} onClick={() => onSelect(skill)}>
+              <div className="skill-name-cell"><strong>{skill.name}</strong></div>
+              <span className="skill-description-cell">{skill.description || '该 Skill 没有提供描述。'}</span>
+              <label className="switch" title={skill.enabled ? '停用 Skill' : '启用 Skill'} onClick={event => event.stopPropagation()}>
                 <input
                   type="checkbox"
                   checked={skill.enabled}
-                  disabled={busy === `skill:${skill.name}`}
+                  disabled={locked || busy === `skill:${skill.name}`}
                   onChange={event => onToggle(skill, event.target.checked)}
                   aria-label={`${skill.enabled ? '停用' : '启用'} Skill ${skill.name}`}
                 />
@@ -373,10 +524,11 @@ function SkillList({ skills, busy, onToggle }: {
   )
 }
 
-function PluginRow({ plugin, selected, busy, linked, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop }: {
+function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop }: {
   plugin: ManagedPlugin
   selected: boolean
   busy: boolean
+  locked: boolean
   linked: boolean
   dragging: boolean
   canMoveUp: boolean
@@ -390,49 +542,58 @@ function PluginRow({ plugin, selected, busy, linked, dragging, canMoveUp, canMov
   return (
     <div
       className={`plugin-row ${selected ? 'selected' : ''} ${plugin.enabled ? '' : 'disabled'} ${dragging ? 'dragging' : ''}`}
-      draggable={plugin.enabled}
+      draggable={plugin.enabled && !locked && !busy}
       onDragStart={event => {
+        if (locked || busy || !plugin.enabled) {
+          event.preventDefault()
+          return
+        }
         event.dataTransfer.effectAllowed = 'move'
         onDragStart()
       }}
-      onDragOver={event => event.preventDefault()}
-      onDrop={event => { event.preventDefault(); onDrop() }}
+      onDragOver={event => {
+        if (!locked && !busy && plugin.enabled) event.preventDefault()
+      }}
+      onDrop={event => {
+        if (locked || busy || !plugin.enabled) return
+        event.preventDefault()
+        onDrop()
+      }}
       onClick={onSelect}
     >
       <div className="priority-cell">
         {plugin.enabled ? <><GripVertical size={15} /><strong>{String(plugin.order).padStart(2, '0')}</strong></> : <span>—</span>}
       </div>
-      <div className="plugin-identity">
-        <div className={`plugin-glyph glyph-${plugin.packageName.length % 4}`}>{pluginInitial(plugin)}</div>
-        <div><strong>{plugin.displayName}{linked && <span className="linked-component-badge"><Link2 size={10} />协同</span>}</strong><span>{plugin.packageName}</span></div>
-      </div>
-      <span className="plugin-version">{plugin.version}</span>
       <div className="state-cell">
         {!plugin.compatible && <span className="compatibility-warning" title="未检测到 dsh.bundle 声明"><CircleAlert size={16} /></span>}
         <label className={`switch ${plugin.locked ? 'locked' : ''}`} title={plugin.locked ? '核心组合层始终启用' : plugin.enabled ? '停用插件' : '启用插件'} onClick={event => event.stopPropagation()}>
           <input
             type="checkbox"
             checked={plugin.enabled}
-            disabled={plugin.locked || busy || !plugin.compatible}
+            disabled={locked || plugin.locked || busy || !plugin.compatible}
             onChange={event => onToggle(event.target.checked)}
             aria-label={`${plugin.enabled ? '停用' : '启用'} ${plugin.displayName}`}
           />
           <span>{busy && <LoaderCircle className="spin" size={11} />}</span>
         </label>
       </div>
+      <div className="plugin-name-cell"><strong>{plugin.displayName}{linked && <span className="linked-component-badge"><Link2 size={10} />协同</span>}</strong><span>{plugin.packageName}</span></div>
+      <span className="plugin-description-cell">{plugin.description || '该插件没有提供描述。'}</span>
+      <span className="plugin-version">{plugin.version}</span>
       <div className="row-actions" onClick={event => event.stopPropagation()}>
-        <button type="button" disabled={!canMoveUp} onClick={() => onMove(-1)} title="向上移动" aria-label={`向上移动 ${plugin.displayName}`}><ArrowUp size={15} /></button>
-        <button type="button" disabled={!canMoveDown} onClick={() => onMove(1)} title="向下移动" aria-label={`向下移动 ${plugin.displayName}`}><ArrowDown size={15} /></button>
+        <button type="button" disabled={locked || busy || !canMoveUp} onClick={() => onMove(-1)} title="向上移动" aria-label={`向上移动 ${plugin.displayName}`}><ArrowUp size={15} /></button>
+        <button type="button" disabled={locked || busy || !canMoveDown} onClick={() => onMove(1)} title="向下移动" aria-label={`向下移动 ${plugin.displayName}`}><ArrowDown size={15} /></button>
       </div>
     </div>
   )
 }
 
-function PluginDetails({ plugin, profileName, trial, busy, aiActive, adapting, onOpenRepository, onUninstall, onTrialPlugin, onAdaptPlugin }: {
+function PluginDetails({ plugin, profileName, trial, busy, locked, aiActive, adapting, onOpenRepository, onUninstall, onTrialPlugin, onAdaptPlugin }: {
   plugin: ManagedPlugin | null
   profileName: string
   trial?: PluginTrialResult
   busy: boolean
+  locked: boolean
   aiActive: boolean
   adapting: boolean
   onOpenRepository: (url: string) => void
@@ -443,10 +604,6 @@ function PluginDetails({ plugin, profileName, trial, busy, aiActive, adapting, o
   if (!plugin) return <aside className="plugin-details empty">选择一个插件查看详情</aside>
   return (
     <aside className="plugin-details">
-      <div className="detail-topline">
-        <div className={`plugin-glyph large glyph-${plugin.packageName.length % 4}`}>{pluginInitial(plugin)}</div>
-        <div className={`detail-state ${plugin.enabled ? 'active' : ''}`}><span />{plugin.enabled ? '已激活' : '已停用'}</div>
-      </div>
       <h2>{plugin.displayName}</h2>
       <p className="package-name">{plugin.packageName}</p>
       <p className="plugin-description">{plugin.description}</p>
@@ -456,17 +613,13 @@ function PluginDetails({ plugin, profileName, trial, busy, aiActive, adapting, o
         <div><dt>来源</dt><dd>{plugin.builtin ? 'DSH 内置' : 'Profile 依赖'}</dd></div>
         <div><dt>兼容性</dt><dd className={plugin.compatible ? 'good' : 'warning'}>{plugin.compatible ? 'Bundle 已识别' : '未检测到 Bundle'}</dd></div>
       </dl>
-      <div className="detail-note">
-        <SlidersHorizontal size={16} />
-        <p>{plugin.enabled ? '本层会按当前优先级参与下一次 DSH 启动。' : '插件文件仍保留在本机，可随时重新启用。'}</p>
-      </div>
       <div className="detail-actions">
         {!plugin.builtin && (
           <div className="detail-trial-actions">
             <button
               type="button"
               className={`secondary-button full trial-button ${trial?.phase ?? ''}`}
-              disabled={busy || aiActive || trial?.phase === 'running'}
+              disabled={locked || busy || aiActive || trial?.phase === 'running'}
               onClick={() => onTrialPlugin(plugin.packageName, profileName)}
               title={trial?.message ?? '只加载 DSH Web 核心与当前插件进行隔离试运行'}
             >
@@ -483,7 +636,7 @@ function PluginDetails({ plugin, profileName, trial, busy, aiActive, adapting, o
               <button
                 type="button"
                 className="secondary-button accent full"
-                disabled={aiActive}
+                disabled={locked || aiActive}
                 onClick={() => onAdaptPlugin(plugin.packageName, profileName)}
               >
                 {adapting ? <LoaderCircle className="spin" size={16} /> : <Wrench size={16} />}
@@ -493,9 +646,45 @@ function PluginDetails({ plugin, profileName, trial, busy, aiActive, adapting, o
           </div>
         )}
         {plugin.repository && <button type="button" className="secondary-button full" onClick={() => onOpenRepository(plugin.repository!)}><FolderGit2 size={16} />查看仓库<ExternalLink size={14} /></button>}
-        {!plugin.builtin && <button type="button" className="danger-button full" onClick={() => onUninstall(plugin)}><Trash2 size={16} />从此配置卸载</button>}
+        {!plugin.builtin && <button type="button" className="danger-button full" disabled={locked} onClick={() => onUninstall(plugin)}><Trash2 size={16} />从此配置卸载</button>}
       </div>
     </aside>
+  )
+}
+
+function SkillDetails({ skill, locked, busy, onToggle, onOpenRepository }: {
+  skill: InstalledSkill
+  locked: boolean
+  busy: boolean
+  onToggle: (skill: InstalledSkill, enabled: boolean) => void
+  onOpenRepository: (url: string) => void
+}) {
+  return (
+    <div className="skill-details">
+      <div className="skill-details-copy">
+        <div>
+          <span className="resource-detail-kind">SKILL</span>
+          <h2>{skill.name}</h2>
+          <p className="package-name">{skill.format === 'bundle' ? 'Bundle Skill' : 'Flat Skill'} · {skill.path}</p>
+        </div>
+        <p className="plugin-description">{skill.description || '该 Skill 没有提供描述。'}</p>
+      </div>
+      <dl>
+        <div><dt>模型调用</dt><dd>{skill.modelInvocable ? '支持' : '不支持'}</dd></div>
+        <div><dt>用户调用</dt><dd>{skill.userInvocable ? '支持' : '不支持'}</dd></div>
+        <div><dt>来源</dt><dd>{skill.repository ?? '本地 Skill'}</dd></div>
+      </dl>
+      <div className="detail-actions skill-detail-actions">
+        <label className="detail-toggle">
+          <span>{skill.enabled ? '停用 Skill' : '启用 Skill'}</span>
+          <span className="switch" title={skill.enabled ? '停用 Skill' : '启用 Skill'}>
+            <input type="checkbox" checked={skill.enabled} disabled={locked || busy} onChange={event => onToggle(skill, event.target.checked)} aria-label={`${skill.enabled ? '停用' : '启用'} Skill ${skill.name}`} />
+            <span>{busy && <LoaderCircle className="spin" size={11} />}</span>
+          </span>
+        </label>
+        {skill.repository && <button type="button" className="secondary-button" onClick={() => onOpenRepository(skill.repository!)}><FolderGit2 size={16} />查看来源<ExternalLink size={14} /></button>}
+      </div>
+    </div>
   )
 }
 

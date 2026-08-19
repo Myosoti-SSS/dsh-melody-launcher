@@ -37,6 +37,7 @@ import { createLinkedComponentController } from './linked-components'
 
 export interface IpcDependencies {
   settings: SettingsStore
+  pluginReceiptsPath: string
   runtime: RuntimeController
   installer: Installer
   launcherUpdater: LauncherUpdater
@@ -51,7 +52,7 @@ export interface IpcDependencies {
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons, catalogSync } = deps
+  const { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons, catalogSync } = deps
   const linkedComponents = createLinkedComponentController({
     readSettings: () => settings.read(),
     readProfile,
@@ -60,8 +61,21 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     isRuntimeRunning: () => runtime.isRunning(),
   })
 
+  // 安装、整合包切换、试运行和 AI 均可能改写同一个 Profile 或资源目录。
+  // 渲染层只按动作禁用控件；这里作为跨页面的最终保护。
+  const assertProfileMutationAvailable = () => {
+    if (installer.isBusy()) throw new Error('DSH 或资源安装进行中，请等待完成。')
+    if (packManager.isBusy()) throw new Error('整合包操作进行中，请等待完成。')
+    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中，请等待完成。')
+    if (aiInstaller.isBusy()) throw new Error('AI 任务进行中，请等待完成。')
+    if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中，请等待完成。')
+  }
+
   ipcMain.handle(IPC.settingsGet, () => settings.read())
-  ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => settings.save(next))
+  ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => {
+    assertProfileMutationAvailable()
+    return settings.save(next)
+  })
   ipcMain.handle(IPC.dshDetect, () => installer.detectDsh())
   ipcMain.handle(IPC.dshUpdateCheck, () => installer.checkDshUpdate())
   ipcMain.handle(IPC.launcherUpdateCheck, () => launcherUpdater.check())
@@ -129,19 +143,21 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
 
   ipcMain.handle(IPC.profileRead, async () => {
     const current = await settings.read()
-    return readProfile(current.dshHome, current.profileName)
+    return readProfile(current.dshHome, current.profileName, pluginReceiptsPath)
   })
   ipcMain.handle(IPC.profileToggle, async (_event, payload: { packageName: string; enabled: boolean; profileName?: string }) => {
+    assertProfileMutationAvailable()
     if (!isSafePackageName(payload.packageName)) throw new Error('插件名称无效。')
     if (payload.profileName !== undefined && !isSafeProfileName(payload.profileName)) throw new Error('Profile 名称无效。')
     return linkedComponents.togglePlugin(payload.packageName, Boolean(payload.enabled), payload.profileName)
   })
   ipcMain.handle(IPC.profileReorder, async (_event, packageNames: string[]) => {
+    assertProfileMutationAvailable()
     if (!Array.isArray(packageNames) || packageNames.some(name => !isSafePackageName(name))) {
       throw new Error('插件顺序无效。')
     }
     const current = await settings.read()
-    return reorderPlugins(current.dshHome, current.profileName, packageNames)
+    return reorderPlugins(current.dshHome, current.profileName, packageNames, pluginReceiptsPath)
   })
 
   ipcMain.handle(IPC.catalogDiscover, async (_event, payload: { query: string; sort: DiscoverySort; page: number }) => {
@@ -173,9 +189,9 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       payload.fullName,
       payload.defaultBranch,
       payload.repositoryUpdatedAt,
-      () => installer.analyzeCatalogRepository(payload.fullName, payload.defaultBranch, progress => {
+      componentKinds => installer.analyzeCatalogRepository(payload.fullName, payload.defaultBranch, progress => {
         if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, progress)
-      }, { bypassCache: true }),
+      }, { bypassCache: true, componentKinds }),
       message => {
         if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, {
           repository: payload.fullName,
@@ -200,9 +216,9 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
         fullName,
         branch,
         repositoryUpdatedAt,
-        () => installer.analyzeCatalogRepository(fullName, branch, progress => {
+        componentKinds => installer.analyzeCatalogRepository(fullName, branch, progress => {
           if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, progress)
-        }, { bypassCache: true }),
+        }, { bypassCache: true, componentKinds }),
         message => {
           if (!event.sender.isDestroyed()) event.sender.send(IPC_EVENTS.catalogAnalysisProgress, {
             repository: fullName,
@@ -218,9 +234,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     )
   })
   ipcMain.handle(IPC.pluginsInstall, async (_event, request: string | PluginInstallRequest) => {
-    if (packManager.isBusy()) throw new Error('整合包操作进行中')
-    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
-    if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中')
+    assertProfileMutationAvailable()
     const fullName = typeof request === 'string' ? request : request.repository
     if (!isSafeRepositoryName(fullName)) throw new Error('GitHub 仓库名称无效。')
     if (typeof request === 'string') return installer.install(fullName)
@@ -233,9 +247,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     })
   })
   ipcMain.handle(IPC.pluginsUninstall, async (_event, payload: string | { packageName: string; profileName?: string }) => {
-    if (packManager.isBusy()) throw new Error('整合包操作进行中')
-    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
-    if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中')
+    assertProfileMutationAvailable()
     const packageName = typeof payload === 'string' ? payload : payload?.packageName
     if (!isSafePackageName(packageName)) throw new Error('插件名称无效。')
     const profileName = typeof payload === 'object' ? payload.profileName : undefined
@@ -244,22 +256,20 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
   ipcMain.handle(IPC.pluginsTrialRead, () => pluginTrial.list())
   ipcMain.handle(IPC.pluginsTrial, async (_event, payload: { packageName: string; profileName?: string }) => {
+    assertProfileMutationAvailable()
     if (!payload || !isSafePackageName(payload.packageName)) throw new Error('插件名称无效。')
     if (payload.profileName !== undefined && !isSafeProfileName(payload.profileName)) throw new Error('Profile 名称无效。')
-    if (packManager.isBusy()) throw new Error('整合包操作进行中')
-    if (aiInstaller.isBusy()) throw new Error('AI 任务进行中')
-    if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中')
     return pluginTrial.trial(payload.packageName, payload.profileName)
   })
 
   ipcMain.handle(IPC.skillsInstall, async (_event, request: SkillInstallRequest) => {
-    if (packManager.isBusy()) throw new Error('整合包操作进行中')
-    if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中')
+    assertProfileMutationAvailable()
     if (!isSafeRepositoryName(request.repository)) throw new Error('GitHub 仓库名称无效。')
     return installer.installSkill(request)
   })
   ipcMain.handle(IPC.skillsReadInstalled, () => installer.readInstalledSkills())
   ipcMain.handle(IPC.skillsToggle, async (_event, payload: { name: string; enabled: boolean }) => {
+    assertProfileMutationAvailable()
     if (!payload || typeof payload.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.name)) {
       throw new Error('Skill 名称无效。')
     }
@@ -268,29 +278,28 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
 
   ipcMain.handle(IPC.applicationsReadInstalled, () => applicationAddons.list())
   ipcMain.handle(IPC.applicationsInstall, async (_event, request: ApplicationInstallRequest) => {
+    assertProfileMutationAvailable()
     if (!request || !isSafeRepositoryName(request.repository)) throw new Error('GitHub 仓库名称无效。')
     if (typeof request.defaultBranch !== 'string' || typeof request.targetId !== 'string') throw new Error('应用加载项请求无效。')
-    if (packManager.isBusy()) throw new Error('整合包操作进行中')
-    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
-    if (aiInstaller.isBusy()) throw new Error('AI 任务进行中')
-    if (installer.isBusy()) throw new Error('插件安装操作进行中')
 
     const installed = await applicationAddons.install(request)
     const current = await settings.read()
-    const profile = await readProfile(current.dshHome, current.profileName)
+    const profile = await readProfile(current.dshHome, current.profileName, pluginReceiptsPath)
     return { ...installed, profile }
   })
   ipcMain.handle(IPC.applicationsToggle, async (_event, payload: { id: string; enabled: boolean }) => {
+    assertProfileMutationAvailable()
     if (!payload || typeof payload.id !== 'string') throw new Error('应用加载项标识无效。')
     return linkedComponents.toggleApplication(payload.id, Boolean(payload.enabled))
   })
   ipcMain.handle(IPC.applicationsUninstall, async (_event, id: string) => {
+    assertProfileMutationAvailable()
     if (typeof id !== 'string') throw new Error('应用加载项标识无效。')
     return applicationAddons.uninstall(id)
   })
 
   ipcMain.handle(IPC.presetsInstall, async (_event, request: PresetInstallRequest) => {
-    if (packManager.isBusy()) throw new Error('整合包操作进行中')
+    assertProfileMutationAvailable()
     if (!request || typeof request !== 'object') throw new Error('请求格式无效。')
     if (!isSafeRepositoryName(request.repository)) throw new Error('GitHub 仓库名称无效。')
     if (typeof request.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(request.name)) {
@@ -300,6 +309,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
   ipcMain.handle(IPC.presetsReadInstalled, () => installer.readInstalledPresets())
   ipcMain.handle(IPC.presetsToggle, async (_event, payload: { name: string; enabled: boolean }) => {
+    assertProfileMutationAvailable()
     if (!payload || typeof payload.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.name)) {
       throw new Error('预设名称无效。')
     }
@@ -309,9 +319,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.aiStatus, () => aiInstaller.status())
   ipcMain.handle(IPC.aiHasSnapshot, () => aiInstaller.hasSnapshot())
   ipcMain.handle(IPC.aiInstall, async (_event, input: { repository: string; defaultBranch: string }) => {
-    if (packManager.isBusy()) throw new Error('整合包操作进行中')
-    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
-    if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中')
+    assertProfileMutationAvailable()
     if (!input || !isSafeRepositoryName(input.repository)) throw new Error('GitHub 仓库名称无效。')
     if (typeof input.defaultBranch !== 'string' || input.defaultBranch.length === 0 || input.defaultBranch.length > 200) {
       throw new Error('分支无效。')
@@ -320,10 +328,9 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     return aiInstaller.start({ repository: input.repository, defaultBranch: input.defaultBranch })
   })
   ipcMain.handle(IPC.aiAdaptPlugin, async (_event, input: { packageName: string; profileName?: string }) => {
+    assertProfileMutationAvailable()
     if (!input || !isSafePackageName(input.packageName)) throw new Error('插件名称无效。')
     if (input.profileName !== undefined && !isSafeProfileName(input.profileName)) throw new Error('Profile 名称无效。')
-    if (packManager.isBusy()) throw new Error('整合包操作进行中')
-    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
     const failure = await pluginTrial.latestFailure(input.packageName, input.profileName)
     return aiInstaller.adaptPlugin({
       packageName: failure.packageName,
@@ -332,8 +339,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     })
   })
   ipcMain.handle(IPC.aiRepairRuntime, async () => {
-    if (packManager.isBusy()) throw new Error('整合包操作进行中')
-    if (pluginTrial.isBusy()) throw new Error('插件试运行进行中')
+    assertProfileMutationAvailable()
     const failure = runtime.failure()
     if (!failure) throw new Error('没有找到最近一次 DSH 启动失败诊断。')
     return aiInstaller.repairRuntime(failure)
@@ -441,13 +447,18 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
 
   ipcMain.handle(IPC.packsActivate, async (_event, packId: string) => {
+    assertProfileMutationAvailable()
     if (!isSafeProfileName(packId)) throw new Error('整合包标识无效。')
     return packManager.activatePack(packId)
   })
 
-  ipcMain.handle(IPC.packsDeactivate, () => packManager.deactivatePack())
+  ipcMain.handle(IPC.packsDeactivate, () => {
+    assertProfileMutationAvailable()
+    return packManager.deactivatePack()
+  })
 
   ipcMain.handle(IPC.packsRemove, async (_event, packId: string) => {
+    assertProfileMutationAvailable()
     if (!isSafeProfileName(packId)) throw new Error('整合包标识无效。')
     return packManager.removePack(packId)
   })
@@ -518,9 +529,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
 
   ipcMain.handle(IPC.runtimeState, () => runtime.state())
   ipcMain.handle(IPC.runtimeStart, async () => {
-    if (pluginTrial.isBusy()) throw new Error('请先等待插件试运行结束。')
-    if (aiInstaller.isBusy()) throw new Error('请先等待 AI 任务结束。')
-    if (applicationAddons.isBusy()) throw new Error('请先等待应用加载项操作结束。')
+    assertProfileMutationAvailable()
     await catalogSync.flushPending()
     return runtime.start()
   })

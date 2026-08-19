@@ -346,10 +346,10 @@ export function useLauncherStore() {
         ? enabled ? '协同 Plugin 与应用加载项已激活。' : '协同 Plugin 与应用加载项已停用。'
         : enabled ? '插件将在下次启动时加载。' : '插件已停用，但仍保留在本机。',
     })
-    if (next) {
-      adoptProfile(next.profile)
-      setInstalledApplications(next.installedApplications)
-    }
+    if (!next) return false
+    adoptProfile(next.profile)
+    setInstalledApplications(next.installedApplications)
+    return true
   }, [adoptProfile, api, installedApplications, run])
 
   const toggleSkill = useCallback(async (skill: InstalledSkill, enabled: boolean) => {

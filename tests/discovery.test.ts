@@ -3,8 +3,11 @@ import {
   buildSearchQuery,
   buildSearchUrl,
   CATALOG_MAX_PAGE,
+  CATALOG_PAGE_SIZE,
   CATALOG_SOURCE_PAGE_SIZE,
   describeSearchFailure,
+  GITHUB_SEARCH_RESULT_LIMIT,
+  GITHUB_SOURCE_MAX_PAGE,
   mapCatalogRepository,
   searchCatalogRepositories,
   type GitHubRepositoryItem,
@@ -79,7 +82,7 @@ describe('buildSearchUrl', () => {
 
   it('clamps pages to each topic search window', () => {
     expect(buildSearchUrl('', 'stars', 0, 'dsh-plugin').searchParams.get('page')).toBe('1')
-    expect(buildSearchUrl('', 'stars', 999, 'dsh-plugin').searchParams.get('page')).toBe(String(CATALOG_MAX_PAGE))
+    expect(buildSearchUrl('', 'stars', 999, 'dsh-plugin').searchParams.get('page')).toBe(String(GITHUB_SOURCE_MAX_PAGE))
   })
 })
 
@@ -104,14 +107,13 @@ describe('catalog repository mapping', () => {
 })
 
 describe('unified catalog search', () => {
-  it('merges all topics, deduplicates hybrid repositories, and sorts the page', async () => {
+  it('reads plugin/application sources, deduplicates repositories, and sorts the page', async () => {
     const core = { ...item, id: 1, full_name: 'deepseek-ai/deepseek-harness', stargazers_count: 100 }
     const plugin = { ...item, id: 2, full_name: 'demo/plugin', stargazers_count: 20 }
     const hybrid = { ...item, id: 3, full_name: 'demo/hybrid', stargazers_count: 30, topics: ['dsh-plugin', 'dsh-skill'] }
-    const skill = { ...item, id: 4, full_name: 'demo/skill', stargazers_count: 10, topics: ['dsh-skill'] }
     const result = await searchCatalogRepositories('', 'stars', 1, searchFetch(
       searchResponse([plugin, hybrid, core], 3, 7),
-      searchResponse([skill, hybrid], 2, 5),
+      searchResponse([], 2, 5),
     ))
 
     expect(result.repositories.map(repo => repo.fullName)).toEqual([
@@ -119,33 +121,34 @@ describe('unified catalog search', () => {
       'deepseek-ai/deepseek-harness',
       'demo/hybrid',
       'demo/plugin',
-      'demo/skill',
     ])
-    expect(result.repositories.find(repo => repo.fullName === 'demo/hybrid')?.candidateTypes).toEqual(['skill', 'plugin'])
-    expect(result.topicTotals).toEqual({ plugin: 3, skill: 2, application: 0 })
-    expect(result.rateRemaining).toBe(5)
+    expect(result.repositories.find(repo => repo.fullName === 'demo/hybrid')?.candidateTypes).toEqual(['plugin'])
+    expect(result.topicTotals).toEqual({ plugin: 3, skill: 0, application: 0 })
+    expect(result.rateRemaining).toBe(7)
     expect(result.warnings).toEqual([])
   })
 
-  it('calculates page count from the larger capped topic', async () => {
+  it('calculates page count from the capped enabled sources', async () => {
     const result = await searchCatalogRepositories('', 'stars', 1, searchFetch(
       searchResponse([], 3_257),
       searchResponse([], 15),
     ))
-    expect(result.pageCount).toBe(CATALOG_MAX_PAGE)
+    expect(result.pageCount).toBe(Math.ceil(GITHUB_SEARCH_RESULT_LIMIT / CATALOG_PAGE_SIZE))
+    expect(result.pageCount).toBeLessThan(CATALOG_MAX_PAGE)
   })
 
   it('keeps the working source when the other source fails', async () => {
-    const skill = { ...item, topics: ['dsh-skill'] }
+    const application = { ...item, topics: ['dsh-app'] }
     const result = await searchCatalogRepositories('', 'stars', 1, searchFetch(
       new Response('failed', { status: 500 }),
-      searchResponse([skill], 1),
+      searchResponse([], 1),
+      searchResponse([application], 1),
     ))
-    // 内置 featured 条目恒在顶部，所以除 skill 源结果外还多一条内置行。
+    // 内置 featured 条目恒在第一页顶部，所以除应用来源外还多一条内置行。
     expect(result.repositories).toHaveLength(2)
     expect(result.repositories.some(repo => repo.fullName === 'someone/dsh-example')).toBe(true)
     expect(result.repositories[0].featured).toBe(true)
-    expect(result.topicTotals).toEqual({ plugin: 0, skill: 1, application: 0 })
+    expect(result.topicTotals).toEqual({ plugin: 0, skill: 0, application: 1 })
     expect(result.warnings[0]).toMatch(/Plugin 来源检索失败/)
   })
 
@@ -163,17 +166,57 @@ describe('unified catalog search', () => {
     ))
 
     expect(result.repositories).toHaveLength(2)
-    expect(result.repositories.find(repo => repo.fullName === 'demo/desktop-host')?.candidateTypes).toEqual(['application', 'plugin', 'skill'])
-    expect(result.topicTotals).toEqual({ plugin: 1, skill: 1, application: 1 })
+    expect(result.repositories.find(repo => repo.fullName === 'demo/desktop-host')?.candidateTypes).toEqual(['plugin', 'application'])
+    expect(result.topicTotals).toEqual({ plugin: 1, skill: 0, application: 1 })
     expect(result.rateRemaining).toBe(6)
   })
 
-  it('fails only when all topic searches fail', async () => {
+  it('fails only when all enabled topic searches fail', async () => {
     await expect(searchCatalogRepositories('', 'stars', 1, searchFetch(
       new Response('failed', { status: 500 }),
       new Response('limited', { status: 403 }),
       new Response('unavailable', { status: 502 }),
-    ))).rejects.toThrow(/Plugin 来源检索失败.*Skill 来源检索失败.*应用加载项来源检索失败/)
+    ))).rejects.toThrow(/Plugin 来源检索失败.*应用加载项来源检索失败/)
+  })
+
+  it('does not request the dsh-skill topic', async () => {
+    const queries: string[] = []
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url)
+      if (url.pathname === '/search/repositories') queries.push(url.searchParams.get('q') ?? '')
+      return searchResponse([], 0)
+    }) as typeof fetch
+
+    await searchCatalogRepositories('', 'stars', 1, fetchImpl)
+    expect(queries.some(query => query.includes('topic:dsh-skill'))).toBe(false)
+    expect(queries.some(query => query.includes('topic:dsh-plugin'))).toBe(true)
+    expect(queries.some(query => query.includes('topic:dsh-app'))).toBe(true)
+  })
+
+  it('globally fills the popular page before lower-star application candidates', async () => {
+    const plugins = Array.from({ length: CATALOG_PAGE_SIZE + 1 }, (_, index) => ({
+      ...item,
+      id: 100 + index,
+      full_name: `demo/plugin-${index}`,
+      name: `plugin-${index}`,
+      stargazers_count: 10_000 - index,
+    }))
+    const lowStarApplication = {
+      ...item,
+      id: 999,
+      full_name: 'demo/low-star-application',
+      stargazers_count: 187,
+      topics: ['dsh-app'],
+    }
+    const result = await searchCatalogRepositories('', 'stars', 1, searchFetch(
+      searchResponse(plugins, plugins.length),
+      searchResponse([], 0),
+      searchResponse([lowStarApplication], 1),
+    ))
+    const ordinaryRows = result.repositories.filter(repository => !repository.featured)
+    expect(ordinaryRows).toHaveLength(CATALOG_PAGE_SIZE)
+    expect(ordinaryRows.every(repository => repository.stars > lowStarApplication.stargazers_count)).toBe(true)
+    expect(ordinaryRows.some(repository => repository.fullName === lowStarApplication.full_name)).toBe(false)
   })
 })
 
