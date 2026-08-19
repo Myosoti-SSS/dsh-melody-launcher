@@ -407,15 +407,18 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             skippedFailures.push({ packageName, reason: '插件名称非法。' })
             continue
           }
+          const installedPlugin = currentProfile.plugins.find(item => item.packageName === packageName)
+          // 核心内置 Bundle 不属于用户可导出资源，直接跳过，不报失败。
+          if (installedPlugin?.builtin) continue
           const receipt = receipts.find(item => item.profileName === profileName && item.packageName === packageName)
-          if (!receipt) {
-            skippedFailures.push({ packageName, reason: '无来源记录，无法重新安装' })
-            continue
+          if (receipt || installedPlugin) {
+            installedPluginNames.push(packageName)
+          } else {
+            skippedFailures.push({ packageName, reason: '未找到已安装插件本体' })
           }
-          installedPluginNames.push(packageName)
         }
 
-        // 预设是全局资源，创建自建包时它们已经安装；这里只把有来源记录的可导出预设纳入包。
+        // 预设是全局资源：即使没有来源记录，也可以把本地本体打进整合包离线导出。
         const installedPresets: string[] = []
         const presetReceiptsForPack: PresetInstallReceipt[] = []
         for (const presetName of request.presetNames ?? []) {
@@ -423,13 +426,14 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             skippedFailures.push({ packageName: presetName, reason: '预设名称非法。' })
             continue
           }
-          const receipt = presetReceipts.find(item => item.name === presetName)
-          if (!receipt) {
-            skippedFailures.push({ packageName: presetName, reason: '预设无来源记录，无法加入整合包' })
-            continue
+          const presetDir = path.join(dshHome, '.agent-presets', presetName)
+          if (existsSync(presetDir)) {
+            installedPresets.push(presetName)
+            const receipt = presetReceipts.find(item => item.name === presetName)
+            if (receipt) presetReceiptsForPack.push(receipt)
+          } else {
+            skippedFailures.push({ packageName: presetName, reason: '未找到已安装预设' })
           }
-          installedPresets.push(presetName)
-          presetReceiptsForPack.push(receipt)
         }
 
         // Skill 与 Application 同样只纳入已存在且有来源/安装记录的资源。
@@ -1022,6 +1026,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         const record = await findRecord(packId)
         const dshHome = await getDshHome()
         const settings = await options.readSettings()
+        const currentProfile = await options.installer.readProfile(dshHome, settings.profileName)
         const receipts = (await readPluginReceipts(options.pluginReceiptsPath))
           .filter(item => item.profileName === settings.profileName && record.plugins.some(plugin => plugin.packageName === item.packageName))
         const presetNames = new Set((record.presets ?? []).map(preset => preset.name))
@@ -1037,8 +1042,38 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           .map(plugin => receipts.find(receipt => receipt.packageName === plugin.packageName))
           .filter((receipt): receipt is PluginInstallReceipt => receipt !== undefined)
         const manifest = buildManifestFromReceipts(packId, orderedReceipts, presetReceipts, skillReceipts, applicationAddons)
-        manifest.plugins = manifest.plugins.map((entry, index) => ({ ...entry, enabled: record.plugins[index]?.enabled ?? true }))
-        // 只收集 manifest 引用的插件本体：profile 里可能混入无来源记录的手动安装插件，不应进包。
+        manifest.plugins = manifest.plugins.map((entry) => {
+          const recordPlugin = record.plugins.find(plugin => plugin.packageName === entry.packageName)
+          return { ...entry, enabled: recordPlugin?.enabled ?? true }
+        })
+        // 把没有来源记录、但已安装在本机 Profile 的非内置插件也纳入导出：它们以 local 源 + 本地本体形式离线携带。
+        const manifestPluginNames = new Set(manifest.plugins.map(entry => entry.packageName))
+        const installedPluginsByPackage = new Map(
+          currentProfile.plugins
+            .filter(plugin => !plugin.builtin)
+            .map(plugin => [plugin.packageName, plugin]),
+        )
+        for (const plugin of record.plugins) {
+          if (manifestPluginNames.has(plugin.packageName)) continue
+          const installed = installedPluginsByPackage.get(plugin.packageName)
+          if (!installed) continue
+          manifest.plugins.push({
+            packageName: plugin.packageName,
+            source: 'local',
+            version: installed.version,
+            enabled: plugin.enabled,
+          })
+          manifestPluginNames.add(plugin.packageName)
+        }
+        // 预设即使没有来源记录，只要本地本体存在，就纳入 manifest（配合 presetDirs 离线导入）。
+        const manifestPresetNames = new Set((manifest.presets ?? []).map(entry => entry.name))
+        for (const preset of record.presets ?? []) {
+          if (!manifestPresetNames.has(preset.name)) {
+            manifest.presets = [...(manifest.presets ?? []), { name: preset.name }]
+            manifestPresetNames.add(preset.name)
+          }
+        }
+        // 只收集 manifest 引用的插件本体：profile 里可能混入未被选入包的手动安装插件，不应进包。
         const packageNames = manifest.plugins.map(entry => entry.packageName)
         // 预设本体也打进 zip：换机导入时可完全离线安装。
         const presetDirs = new Map<string, string>()
@@ -1156,9 +1191,10 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         if (!isSafePackageName(packageName)) throw new Error('插件名称无效。')
 
         const settings = await options.readSettings()
-        const receipts = await readPluginReceipts(options.pluginReceiptsPath)
-        const receipt = receipts.find(item => item.profileName === settings.profileName && item.packageName === packageName)
-        if (!receipt) throw new Error('当前 Profile 中找不到该插件的来源记录。')
+        const dshHome = await getDshHome()
+        const currentProfile = await options.installer.readProfile(dshHome, settings.profileName)
+        const installedPlugin = currentProfile.plugins.find(item => item.packageName === packageName)
+        if (!installedPlugin || installedPlugin.builtin) throw new Error('当前 Profile 中找不到可打包的非内置插件。')
         options.emitEvent({ kind: 'status', message: `正在向整合包添加插件 ${packageName}…` })
         const record = await findRecord(packId)
         const plugins = [...record.plugins.filter(item => item.packageName !== packageName), { packageName, enabled: true }]
@@ -1183,9 +1219,8 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         assertSafePackId(packId)
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(presetName)) throw new Error('预设名称无效。')
         const settings = await options.readSettings()
-        const receipts = await readPresetReceipts(options.presetReceiptsPath)
-        const receipt = receipts.find(item => item.name === presetName)
-        if (!receipt) throw new Error('当前环境找不到该预设的来源记录。')
+        const dshHome = await getDshHome()
+        if (!existsSync(path.join(dshHome, '.agent-presets', presetName))) throw new Error('当前环境找不到已安装的该预设。')
         const record = await findRecord(packId)
         if (record.presets?.some(item => item.name === presetName)) {
           return toPackStatus(record, settings.activePackId)

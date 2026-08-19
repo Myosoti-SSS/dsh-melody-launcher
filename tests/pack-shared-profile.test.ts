@@ -4,7 +4,8 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, ManagedPlugin, PackStatus, ProfileState } from '../src/types'
 import { createPackManager, type PackInstallTarget } from '../electron/pack'
-import { upsertPackRecord, type PackRecord } from '../electron/pack-registry'
+import { inspectPackZip } from '../electron/pack-zip'
+import { readPackRegistry, upsertPackRecord, type PackRecord } from '../electron/pack-registry'
 import { recordPluginInstall } from '../electron/plugin-receipts'
 import { defaultSettings } from '../electron/settings'
 
@@ -27,6 +28,7 @@ async function fixture() {
   const dshHome = path.join(root, 'dsh-home')
   await mkdir(path.join(dshHome, 'profiles', 'web'), { recursive: true })
   const paths = {
+    dshHome,
     registryPath: path.join(root, 'packs.json'),
     manifestRoot: path.join(root, 'pack-manifests'),
     snapshotRoot: path.join(root, 'snapshots'),
@@ -97,6 +99,54 @@ describe('shared Profile Pack switching', () => {
     await expect(readFile(path.join(env.paths.manifestRoot, 'pack-alpha-pack.yaml'), 'utf8')).resolves.toContain('alpha')
     await expect(readFile(path.join(env.paths.manifestRoot, 'pack-alpha-pack.yaml'), 'utf8')).resolves.toContain('beta')
     await expect(readFile(path.join(env.paths.manifestRoot, 'pack-alpha-pack.yaml'), 'utf8')).resolves.toBeTruthy()
+  })
+
+  it('creates a pack from installed plugins even without receipts and skips builtin bundles', async () => {
+    const env = await fixture()
+    const result = await env.manager.createPack({ name: 'Offline Plugins', packageNames: ['core', 'gamma'] })
+    expect(result.installed).toEqual(['gamma'])
+    expect(result.failures).toEqual([])
+    const records = await readPackRegistry(env.paths.registryPath)
+    expect(records).toHaveLength(1)
+    expect(records[0].plugins).toEqual([{ packageName: 'gamma', enabled: true }])
+  })
+
+  it('creates a pack from an installed preset even without a source receipt', async () => {
+    const env = await fixture()
+    const presetDir = path.join(env.paths.dshHome, '.agent-presets', 'my-preset')
+    await mkdir(presetDir, { recursive: true })
+    await writeFile(path.join(presetDir, 'preset.yml'), 'name: my-preset\n', 'utf8')
+
+    const result = await env.manager.createPack({ name: 'Offline Preset', packageNames: [], presetNames: ['my-preset'] })
+    expect(result.installed).toEqual(['my-preset'])
+    expect(result.failures).toEqual([])
+    const records = await readPackRegistry(env.paths.registryPath)
+    expect(records[0].presets).toEqual([{ name: 'my-preset', enabled: true }])
+  })
+
+  it('exports plugins and presets without receipts as offline local bodies', async () => {
+    const env = await fixture()
+    const dshHome = env.paths.dshHome
+    const profileDir = path.join(dshHome, 'profiles', 'web')
+    const pluginDir = path.join(profileDir, 'node_modules', 'gamma')
+    await mkdir(pluginDir, { recursive: true })
+    await writeFile(path.join(pluginDir, 'package.json'), JSON.stringify({ name: 'gamma', version: '1.0.0' }), 'utf8')
+    const presetDir = path.join(dshHome, '.agent-presets', 'my-preset')
+    await mkdir(presetDir, { recursive: true })
+    await writeFile(path.join(presetDir, 'preset.yml'), 'name: my-preset\n', 'utf8')
+    await upsertPackRecord(env.paths.registryPath, {
+      ...record('pack-local', [
+        { packageName: 'gamma', enabled: true },
+      ]),
+      presets: [{ name: 'my-preset', enabled: true }],
+    })
+
+    const { zipPath } = await env.manager.exportPack('pack-local')
+    const inspection = inspectPackZip(await readFile(zipPath))
+    expect(inspection.manifest.plugins).toContainEqual({ packageName: 'gamma', source: 'local', version: '1.0.0', enabled: true })
+    expect(inspection.manifest.presets).toContainEqual({ name: 'my-preset' })
+    expect(inspection.bodyPackageNames).toEqual(['gamma'])
+    expect(inspection.presetBodyNames).toEqual(['my-preset'])
   })
 
   it('activates in the shared Profile, applies manifest order, and restores the baseline', async () => {
