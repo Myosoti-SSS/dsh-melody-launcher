@@ -20,9 +20,6 @@
   "engines": {
     "node": ">=20"
   },
-  "os": [
-    "win32"
-  ],
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {

@@ -37,8 +37,7 @@ jobs:
           cache: npm
 
       - name: 安装依赖
-        # package.json 明确声明应用只发布 Windows；Linux runner 仍需安装依赖来执行跨平台单元测试。
-        run: npm ci --force
+        run: npm ci
 
       - name: 运行测试
         run: npm test
