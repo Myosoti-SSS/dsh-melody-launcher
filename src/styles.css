@@ -25,6 +25,17 @@
   --shadow: 0 14px 34px rgba(25, 35, 29, 0.14);
 }
 
+/* Keep long-running resource checks mounted while another manager view is visible. */
+.surface-host {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+
+.view-hidden {
+  display: none !important;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -88,13 +99,15 @@ input:focus-visible {
   position: absolute;
   z-index: 4;
   top: 0;
-  right: 42px;
+  right: 126px;
   left: 0;
   height: 36px;
   -webkit-app-region: drag;
 }
 
+.launcher-window-button,
 .launcher-window-close,
+.manager-window-button,
 .manager-window-close {
   display: grid;
   width: 42px;
@@ -117,10 +130,32 @@ input:focus-visible {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.58);
 }
 
+.launcher-window-button {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  color: rgba(255, 255, 255, 0.86);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.58);
+}
+
+.launcher-window-button.minimize {
+  right: 84px;
+}
+
+.launcher-window-button.maximize {
+  right: 42px;
+}
+
 .launcher-window-close:hover,
 .manager-window-close:hover {
   color: #fff;
   background: #c93636;
+}
+
+.launcher-window-button:hover,
+.manager-window-button:hover {
+  color: var(--ink);
+  background: rgba(127, 137, 130, 0.16);
 }
 
 .launcher-stage {
@@ -493,9 +528,11 @@ input:focus-visible {
   -webkit-app-region: no-drag;
 }
 
+.manager-window-button,
 .manager-window-close {
   flex: 0 0 36px;
   width: 36px;
+  height: 62px;
   color: var(--muted);
 }
 
@@ -2772,6 +2809,14 @@ input:focus-visible {
   gap: 16px;
 }
 
+.catalog-pagination-bottom {
+  margin-top: 10px;
+}
+
+.catalog-pagination-bottom .catalog-pagination {
+  margin-bottom: 0;
+}
+
 .catalog-pagination p {
   min-width: 0;
   margin: 0;
@@ -3386,6 +3431,30 @@ input:focus-visible {
 
 .install-progress.error > div:first-child {
   color: var(--danger);
+}
+
+.catalog-install-error {
+  display: flex;
+  max-width: 680px;
+  align-items: flex-start;
+  margin-top: 7px;
+  gap: 6px;
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.catalog-install-error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.catalog-install-error span {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: pre-line;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .progress-track {

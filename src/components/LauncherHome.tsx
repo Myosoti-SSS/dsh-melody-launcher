@@ -1,4 +1,4 @@
-import { AppWindow, Box, CircleStop, Download, ExternalLink, GitFork, KeyRound, LoaderCircle, Play, RefreshCw, Settings, X } from 'lucide-react'
+import { AppWindow, Box, CircleStop, Download, ExternalLink, GitFork, KeyRound, LoaderCircle, Maximize2, Minus, Play, RefreshCw, Settings, X } from 'lucide-react'
 import packageMetadata from '../../package.json'
 import type { AppSettings, DshInstallationStatus, DshUpdateStatus, GitHubAuthStatus, InstallProgress, InstalledApplicationAddon, ProfileState, RuntimeState } from '../types'
 
@@ -21,6 +21,8 @@ interface LauncherHomeProps {
   onToggleRuntime: () => void
   onUpdateDsh: () => void
   onOpenHarness: () => void
+  onMinimize: () => void
+  onToggleMaximize: () => void
   onClose: () => void
 }
 
@@ -41,6 +43,8 @@ export function LauncherHome({
   onToggleRuntime,
   onUpdateDsh,
   onOpenHarness,
+  onMinimize,
+  onToggleMaximize,
   onClose,
 }: LauncherHomeProps) {
   const needsInstallation = !dshInstallation.installed && !activeRuntimeReplacement
@@ -52,6 +56,12 @@ export function LauncherHome({
   return (
     <div className="launcher-home">
       <div className="launcher-drag-region" aria-hidden="true" />
+      <button className="launcher-window-button minimize" type="button" title="最小化" aria-label="最小化" onClick={onMinimize}>
+        <Minus size={17} />
+      </button>
+      <button className="launcher-window-button maximize" type="button" title="最大化或还原" aria-label="最大化或还原" onClick={onToggleMaximize}>
+        <Maximize2 size={15} />
+      </button>
       <button className="launcher-window-close" type="button" title="关闭" aria-label="关闭" onClick={onClose}>
         <X size={18} />
       </button>

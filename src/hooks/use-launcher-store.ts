@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useLauncherApi } from '../api/client'
 import { DSH_REPOSITORY, EMPTY_DSH_INSTALLATION, EMPTY_RUNTIME_STATE, MAX_LOG_LINES } from '../constants'
 import { errorText } from '../lib/format'
+import { finalizeInstallProgress } from '../lib/install-progress'
 import { reorderProfilePlugins } from '../lib/profile-order'
 import type {
   ApplicationInstallResult,
@@ -236,8 +237,8 @@ export function useLauncherStore() {
     setInstallProgress(progress)
   }, [])
 
-  const finishInstall = useCallback((repository: string) => {
-    setInstallProgress(current => current?.repository === repository ? null : current)
+  const finishInstall = useCallback((repository: string, succeeded = false, message = '安装失败') => {
+    setInstallProgress(current => finalizeInstallProgress(current, repository, succeeded, message))
   }, [])
 
   const installDsh = useCallback(async (): Promise<RepositoryInstallResult | undefined> => {

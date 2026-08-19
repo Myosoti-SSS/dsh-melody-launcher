@@ -1,5 +1,5 @@
 import { Layers3, LoaderCircle } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { LauncherApiProvider, resolveLauncherApi, useLauncherApi } from './api/client'
 import { AppHeader } from './components/AppHeader'
 import { LauncherHome } from './components/LauncherHome'
@@ -67,6 +67,8 @@ function LauncherShell() {
     }
   })
   const [confirmingRemoval, setConfirmingRemoval] = useState<ManagedPlugin | null>(null)
+  const managerVisited = useRef(false)
+  const discoverVisited = useRef(false)
   // 仓库结构检测结果由各视图发起，App 统一持有，避免切页后丢失。
   const [repositoryAnalyses, setRepositoryAnalyses] = useState<Record<string, CatalogRepositoryAnalysis>>({})
 
@@ -88,6 +90,8 @@ function LauncherShell() {
   }
 
   const closeWindow = () => void api.closeWindow()
+  const minimizeWindow = () => void api.minimizeWindow()
+  const toggleMaximizeWindow = () => void api.toggleMaximizeWindow()
 
   const openApiConfig = () => {
     setCredentialOpen(true)
@@ -112,10 +116,12 @@ function LauncherShell() {
   }
 
   const { settings, profile } = store
+  if (navigation.surface === 'manager') managerVisited.current = true
+  if (navigation.surface === 'manager' && navigation.view === 'discover') discoverVisited.current = true
 
   return (
     <>
-      {navigation.surface === 'launcher' ? (
+      <div className={`surface-host ${navigation.surface === 'launcher' ? '' : 'view-hidden'}`}>
         <LauncherHome
           settings={settings}
           profile={profile}
@@ -133,9 +139,12 @@ function LauncherShell() {
           onToggleRuntime={toggleRuntime}
           onUpdateDsh={() => { void store.updateDsh() }}
           onOpenHarness={openHarness}
+          onMinimize={minimizeWindow}
+          onToggleMaximize={toggleMaximizeWindow}
           onClose={closeWindow}
         />
-      ) : (
+      </div>
+      {managerVisited.current && <div className={`surface-host ${navigation.surface === 'manager' ? '' : 'view-hidden'}`}>
         <div className="app-shell">
           <AppHeader
             runtime={store.runtime}
@@ -154,6 +163,8 @@ function LauncherShell() {
             onSettings={() => setSettingsOpen(true)}
             onToggleRuntime={toggleRuntime}
             onUpdate={() => setUpdateOpen(true)}
+            onMinimize={minimizeWindow}
+            onToggleMaximize={toggleMaximizeWindow}
             onClose={closeWindow}
           />
           <div className={`app-body ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -224,7 +235,7 @@ function LauncherShell() {
                   aiSubject={ai.status.subject}
                 />
               )}
-              {navigation.view === 'discover' && (
+              {discoverVisited.current && <div className={navigation.view === 'discover' ? undefined : 'view-hidden'}>
                 <DiscoverView
                   profile={profile}
                   analyses={repositoryAnalyses}
@@ -273,7 +284,7 @@ function LauncherShell() {
                   aiSubject={ai.active ? ai.status.subject : null}
                   aiActive={ai.active}
                 />
-              )}
+              </div>}
               {navigation.view === 'runtime' && (
                 <RuntimeView
                   runtime={store.runtime}
@@ -329,7 +340,7 @@ function LauncherShell() {
             </main>
           </div>
         </div>
-      )}
+      </div>}
 
       {settingsOpen && (
         <SettingsDialog

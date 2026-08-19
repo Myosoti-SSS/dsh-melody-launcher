@@ -111,6 +111,8 @@ export const IPC = {
   openExternal: 'shell:open-external',
   openPath: 'shell:open-path',
   windowSetMode: 'window:set-mode',
+  windowMinimize: 'window:minimize',
+  windowToggleMaximize: 'window:toggle-maximize',
   windowClose: 'window:close',
 } as const
 
