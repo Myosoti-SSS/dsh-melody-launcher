@@ -73,11 +73,13 @@ export function attachWindowShadow(window: BrowserWindow): void {
       if (window.isDestroyed() || shadow.isDestroyed() || window.isMinimized() || !window.isVisible()) return
       this.sync()
       shadow.showInactive()
-      try {
-        window.moveAbove(shadow.getMediaSourceId())
-      } catch {
-        // The next focus/show event retries if Windows is still creating the surface.
-      }
+      // Raise both windows as a pair. Moving only the main window leaves the
+      // shadow behind other applications; moveAbove(shadow) can instead demote
+      // the main window to the shadow's previous Z-order position. The shadow
+      // cannot take focus or mouse input, so moving it first and the main window
+      // second keeps the pair together without changing keyboard focus.
+      shadow.moveTop()
+      window.moveTop()
     },
   }
   controllers.set(window, controller)
