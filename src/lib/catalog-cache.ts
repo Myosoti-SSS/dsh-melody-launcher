@@ -1,7 +1,8 @@
-import type { CatalogRepositoryAnalysis } from '../types'
+import type { CatalogIndexEntry, CatalogRepositoryAnalysis } from '../types'
 
 // v6：聚合仓库会合并根目录的应用加载项与子模块组件；淘汰旧的覆盖式分类缓存。
 const STORAGE_KEY = 'dsh-launcher.catalog-analysis.v6'
+const INDEX_STORAGE_KEY = 'dsh-launcher.catalog-index.v1'
 const memoryCache = new Map<string, CatalogCacheEntry>()
 
 export interface CatalogCacheEntry {
@@ -67,5 +68,34 @@ export function clearCatalogAnalysisCache(): void {
     if (typeof localStorage !== 'undefined') localStorage.removeItem(STORAGE_KEY)
   } catch {
     // Ignore unavailable storage.
+  }
+}
+
+/** 只保存远端共享索引中的最终标签，供市场在未做本地深度检测前显示类型。 */
+export function readCatalogIndexCache(): CatalogIndexEntry[] {
+  try {
+    if (typeof localStorage === 'undefined') return []
+    const raw = localStorage.getItem(INDEX_STORAGE_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(entry => {
+      if (!entry || typeof entry !== 'object') return false
+      const value = entry as Partial<CatalogIndexEntry>
+      return typeof value.repository === 'string'
+        && typeof value.defaultBranch === 'string'
+        && Array.isArray(value.tags)
+    }) as CatalogIndexEntry[]
+  } catch {
+    return []
+  }
+}
+
+export function writeCatalogIndexCache(entries: CatalogIndexEntry[]): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(INDEX_STORAGE_KEY, JSON.stringify(entries))
+  } catch {
+    // Private browsing and quota errors do not affect the actual catalog detection.
   }
 }

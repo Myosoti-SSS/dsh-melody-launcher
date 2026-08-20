@@ -40,6 +40,9 @@ describe('defaultSettings', () => {
     expect(settings.dshHome).toBe('/home/tester/.dsh')
     expect(settings.launchExecutable).toBe('npx')
     expect(settings.webPort).toBe(3080)
+    expect(settings.uiTheme).toBe('forest')
+    expect(settings.aiDeveloperMode).toBe(false)
+    expect(settings.aiPrompt).toBe('')
   })
 
   it('uses the detected system npx when available', () => {
@@ -104,6 +107,17 @@ describe('validateSettings', () => {
   it('coerces openAfterLaunch to a boolean', () => {
     expect(validateSettings({ ...baseSettings, openAfterLaunch: 1 as unknown as boolean }).openAfterLaunch).toBe(true)
   })
+
+  it('normalizes Copilot developer settings and limits prompt size', () => {
+    const validated = validateSettings({ ...baseSettings, aiDeveloperMode: true, aiPrompt: 'x'.repeat(25_000) })
+    expect(validated.aiDeveloperMode).toBe(true)
+    expect(validated.aiPrompt).toHaveLength(20_000)
+  })
+
+  it('accepts known UI themes and falls back for invalid values', () => {
+    expect(validateSettings({ ...baseSettings, uiTheme: 'ocean' }).uiTheme).toBe('ocean')
+    expect(validateSettings({ ...baseSettings, uiTheme: 'neon' as never }).uiTheme).toBe('forest')
+  })
 })
 
 describe('mergeStoredSettings', () => {
@@ -134,6 +148,18 @@ describe('mergeStoredSettings', () => {
       launchArgs: ['--yes', '@deepseek-ai/dsh', 'web', '--port', '4090'],
     })
     expect(merged.webPort).toBe(4090)
+  })
+
+  it('adds safe Copilot defaults to legacy settings', () => {
+    const merged = mergeStoredSettings(baseSettings, { profileName: 'web' })
+    expect(merged.aiDeveloperMode).toBe(false)
+    expect(merged.aiPrompt).toBe('')
+    expect(merged.uiTheme).toBe('forest')
+  })
+
+  it('keeps a supported stored theme and discards an unknown one', () => {
+    expect(mergeStoredSettings(baseSettings, { uiTheme: 'berry' }).uiTheme).toBe('berry')
+    expect(mergeStoredSettings(baseSettings, { uiTheme: 'neon' as never }).uiTheme).toBe('forest')
   })
 })
 

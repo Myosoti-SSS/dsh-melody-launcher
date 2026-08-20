@@ -1,4 +1,4 @@
-import { Box, GitFork, Layers3, Package, PanelLeftClose, PanelLeftOpen, Sparkles, SquareTerminal } from 'lucide-react'
+import { GitFork, Layers3, Package, PanelLeftClose, PanelLeftOpen, Settings, ShoppingBag, Sparkles, SquareTerminal } from 'lucide-react'
 import type { PackStatus, ProfileState, RuntimeState, ViewName } from '../types'
 
 /** 管理界面左侧导航与当前 Profile 摘要。 */
@@ -6,7 +6,7 @@ import type { PackStatus, ProfileState, RuntimeState, ViewName } from '../types'
 interface NavigationEntry {
   id: ViewName
   label: string
-  icon: typeof Box
+  icon: typeof Settings
   count?: number
 }
 
@@ -21,13 +21,15 @@ interface SideNavigationProps {
   profileMutationLocked: boolean
   onPackChange: (packId: string) => void
   onToggleCollapsed: () => void
+  onSettings: () => void
   onChange: (view: ViewName) => void
 }
 
-export function SideNavigation({ view, profile, runtime, profileName, packs, activePackId, collapsed, profileMutationLocked, onPackChange, onToggleCollapsed, onChange }: SideNavigationProps) {
+export function SideNavigation({ view, profile, runtime, profileName, packs, activePackId, collapsed, profileMutationLocked, onPackChange, onToggleCollapsed, onSettings, onChange }: SideNavigationProps) {
   const entries: NavigationEntry[] = [
     { id: 'plugins', label: '启动项管理', icon: Layers3, count: profile.plugins.length },
     { id: 'discover', label: '资源市场', icon: Sparkles },
+    { id: 'dsh-market', label: 'DSH Market', icon: ShoppingBag },
     { id: 'packs', label: '整合包', icon: Package },
     { id: 'github', label: 'GitHub', icon: GitFork },
     { id: 'runtime', label: '运行与日志', icon: SquareTerminal },
@@ -66,11 +68,12 @@ export function SideNavigation({ view, profile, runtime, profileName, packs, act
           <span>{collapsed ? '展开侧边栏' : '收起侧边栏'}</span>
         </button>
         <div className="profile-summary">
-          <div className="profile-icon"><Box size={17} /></div>
+          <button className="profile-icon settings-profile-button" type="button" title="启动器设置" aria-label="启动器设置" onClick={onSettings}>
+            <Settings size={17} />
+          </button>
           <div className="profile-copy">
             <strong>{profileName}</strong>
-            <span>{profile.initialized ? `${profile.activeBundles.length} 层已激活` : '等待初始化'}</span>
-            {packs.length > 0 && view !== 'plugins' && (
+            {packs.length > 0 && view !== 'plugins' ? (
               <select
                 className="pack-switcher"
                 aria-label="切换整合包"
@@ -81,7 +84,7 @@ export function SideNavigation({ view, profile, runtime, profileName, packs, act
                 <option value="">默认配置</option>
                 {packs.map(pack => <option key={pack.id} value={pack.id}>{pack.name}</option>)}
               </select>
-            )}
+            ) : <span>{profile.initialized ? `${profile.activeBundles.length} 层已激活` : '等待初始化'}</span>}
           </div>
           <span className={`mini-status ${runtime.running ? 'running' : ''}`} title={runtime.running ? 'DSH 正在运行' : 'DSH 未运行'} />
         </div>

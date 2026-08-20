@@ -6,15 +6,12 @@ import {
   Boxes,
   CircleAlert,
   CircleCheck,
-  ChevronRight,
   Download,
   ExternalLink,
-  Folder,
   FolderGit2,
   GripVertical,
   Link2,
   LoaderCircle,
-  Package,
   PackageCheck,
   Play,
   RefreshCw,
@@ -26,7 +23,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { activeOrderFromDisplay, movePackage, movePackageTo } from '../lib/profile-order'
-import type { AppSettings, InstalledApplicationAddon, InstalledPreset, InstalledSkill, ManagedPlugin, PackStatus, PluginTrialResult, ProfileState, RuntimeState } from '../types'
+import type { AppSettings, InstalledApplicationAddon, InstalledPreset, InstalledSkill, ManagedPlugin, PluginTrialResult, ProfileState, RuntimeState } from '../types'
 
 /** 插件加载顺序页：列表、排序、启停与详情。 */
 
@@ -47,8 +44,6 @@ interface PluginsViewProps {
   busy: string | null
   settings: AppSettings
   runtime: RuntimeState
-  packs: PackStatus[]
-  activePackId: string | null | undefined
   activeRuntimeReplacement: InstalledApplicationAddon | null
   runtimeBusy: boolean
   /** 资源安装会写入 Profile 或本地资源目录；只锁定这些写操作。 */
@@ -62,9 +57,7 @@ interface PluginsViewProps {
   onReorder: (names: string[]) => Promise<void> | void
   onRefresh: () => void
   onBrowse: () => void
-  onOpenPath: (path: string) => void
   onOpenRepository: (url: string) => void
-  onPackChange: (packId: string) => void
   onToggleRuntime: () => void
   onOpenHarness: () => void
   onOpenRuntimeSettings: () => void
@@ -87,8 +80,6 @@ export function PluginsView({
   profileLocked,
   settings,
   runtime,
-  packs,
-  activePackId,
   activeRuntimeReplacement,
   runtimeBusy,
   onSelect,
@@ -100,9 +91,7 @@ export function PluginsView({
   onReorder,
   onRefresh,
   onBrowse,
-  onOpenPath,
   onOpenRepository,
-  onPackChange,
   onToggleRuntime,
   onOpenHarness,
   onOpenRuntimeSettings,
@@ -207,30 +196,6 @@ export function PluginsView({
         <>
           <div className="management-surface">
           <div className="management-primary-panel">
-            <div className="management-pack-bar">
-              <label className="management-pack-control">
-                <Package size={18} />
-                <span>整合包</span>
-                <ChevronRight size={15} className="management-control-chevron" />
-                <select
-                  aria-label="加载整合包"
-                  value={activePackId ?? ''}
-                  disabled={profileLocked}
-                  onChange={event => onPackChange(event.target.value)}
-                >
-                  <option value="">默认配置</option>
-                  {packs.map(pack => <option key={pack.id} value={pack.id}>{pack.name}</option>)}
-                </select>
-              </label>
-              <div className="management-stats" aria-label="配置概况">
-                <span><strong>{profile.activeBundles.length}</strong> 激活</span>
-                <span><strong>{profile.disabledCount}</strong> 停用</span>
-                <span><strong>{installedSkills.length}</strong> Skill</span>
-                <button type="button" onClick={() => onOpenPath(profile.profileDir)} title="在资源管理器中打开配置目录">
-                  <Folder size={15} /><span className="path-clip">{profile.profileDir}</span>
-                </button>
-              </div>
-            </div>
           <section className="plugin-list-panel management-plugin-panel" aria-label="插件管理">
             <div className="plugin-pane-toolbar">
               <div className="management-pane-heading"><span>Plugin</span><small>{profile.plugins.length} 个插件</small></div>

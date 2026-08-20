@@ -28,7 +28,7 @@ import { CatalogPagination } from '../components/CatalogPagination'
 import { PageHeading } from '../components/PageHeading'
 import { AI_INSTALL_ENABLED, EMPTY_DSH_INSTALLATION } from '../constants'
 import { errorText, formatBytes, formatRelativeTime, formatStars } from '../lib/format'
-import { readCatalogAnalysisCache, writeCatalogAnalysisCache } from '../lib/catalog-cache'
+import { readCatalogAnalysisCache, readCatalogIndexCache, writeCatalogAnalysisCache, writeCatalogIndexCache } from '../lib/catalog-cache'
 import { analyzeCatalogPageInParallel } from '../lib/catalog-batch'
 import { isInstallProgressActive } from '../lib/install-progress'
 import type {
@@ -36,6 +36,8 @@ import type {
   ApplicationInstallTarget,
   CatalogAnalysisCheck,
   CatalogAnalysisProgress,
+  CatalogIndexEntry,
+  CatalogIndexTag,
   CatalogRepositoryAnalysis,
   CatalogRepositoryResult,
   DshInstallationStatus,
@@ -146,6 +148,37 @@ function analysisBadge(analysis: CatalogRepositoryAnalysis): { className: string
   return { className: 'invalid', label: '无效' }
 }
 
+function catalogIndexBadge(entry: CatalogIndexEntry): { className: string; label: string } {
+  if (entry.tags.includes('dsh')) return { className: 'dsh', label: 'DSH 本体' }
+  if (entry.tags.includes('invalid')) return { className: 'invalid', label: '无效' }
+  const labels = entry.tags.map((tag: CatalogIndexTag) => {
+    if (tag === 'plugin') return 'Plugin'
+    if (tag === 'skill') return 'Skill'
+    if (tag === 'runtime') return '应用加载项'
+    if (tag === 'preset') return 'Agent 预设'
+    return tag
+  })
+  if (labels.length > 1) return { className: 'hybrid', label: labels.join(' + ') }
+  if (entry.tags[0] === 'skill') return { className: 'skill', label: 'Skill' }
+  if (entry.tags[0] === 'runtime') return { className: 'application', label: '应用加载项' }
+  if (entry.tags[0] === 'preset') return { className: 'preset', label: 'Agent 预设' }
+  return { className: 'plugin', label: 'Plugin' }
+}
+
+function catalogIndexEntryFromAnalysis(
+  repository: string,
+  defaultBranch: string,
+  repositoryUpdatedAt: string | undefined,
+  analysis: CatalogRepositoryAnalysis,
+): CatalogIndexEntry {
+  const tags: CatalogIndexTag[] = analysis.kind === 'dsh'
+    ? ['dsh']
+    : analysis.kind === 'invalid'
+      ? ['invalid']
+      : analysis.componentKinds.map(kind => kind === 'application' ? 'runtime' : kind)
+  return { repository, defaultBranch, repositoryUpdatedAt: repositoryUpdatedAt ?? null, tags }
+}
+
 const ANALYSIS_CHECK_LABELS: Record<CatalogAnalysisCheck, string> = {
   plugin: 'Plugin',
   skill: 'Skill',
@@ -227,6 +260,8 @@ export function DiscoverView({
   const [page, setPage] = useState(1)
   const [pageCount, setPageCount] = useState(1)
   const [warnings, setWarnings] = useState<string[]>([])
+  const [catalogIndex, setCatalogIndex] = useState<CatalogIndexEntry[]>(() => readCatalogIndexCache())
+  const [refreshingIndex, setRefreshingIndex] = useState(false)
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState<InstallingState | null>(null)
   const [checkingRepositories, setCheckingRepositories] = useState<Set<string>>(() => new Set())
@@ -269,6 +304,7 @@ export function DiscoverView({
     setTargetDialog(null)
     setAnalysisProgress({})
     setCheckingRepositories(new Set())
+    setCatalogIndex(readCatalogIndexCache())
     setLoading(true)
     try {
       const result = await api.discoverCatalog(searchQuery, searchSort, searchPage)
@@ -344,6 +380,7 @@ export function DiscoverView({
     try {
       const analysis = await api.analyzeCatalogRepository(repo.fullName, repo.defaultBranch, repo.updatedAt)
       writeCatalogAnalysisCache(repo.fullName, repo.defaultBranch, analysis)
+      adoptCatalogIndexEntry(repo, analysis)
       onAnalysis(repo.fullName, analysis)
       if (analysis.kind === 'hybrid'
         || pluginTargets(analysis).length + skillTargets(analysis).length + applicationTargets(analysis).length + presetTargets(analysis).length > 1) {
@@ -403,6 +440,7 @@ export function DiscoverView({
         if (outcome.status === 'fulfilled') {
           const analysis = outcome.analysis
           writeCatalogAnalysisCache(outcome.repository.fullName, outcome.repository.defaultBranch, analysis)
+          adoptCatalogIndexEntry(outcome.repository, analysis)
           onAnalysis(outcome.repository.fullName, analysis)
           if (analysis.kind !== 'invalid') available += 1
         } else {
@@ -423,6 +461,29 @@ export function DiscoverView({
     })
   }
 
+  const refreshCatalogIndex = async () => {
+    if (refreshingIndex) return
+    setRefreshingIndex(true)
+    try {
+      const entries = await api.refreshCatalogIndex()
+      writeCatalogIndexCache(entries)
+      setCatalogIndex(entries)
+    } catch (error) {
+      onError(errorText(error))
+    } finally {
+      setRefreshingIndex(false)
+    }
+  }
+
+  const adoptCatalogIndexEntry = (repo: CatalogRepositoryResult, analysis: CatalogRepositoryAnalysis) => {
+    const entry = catalogIndexEntryFromAnalysis(repo.fullName, repo.defaultBranch, repo.updatedAt, analysis)
+    setCatalogIndex(current => {
+      const next = [...current.filter(item => item.repository.toLowerCase() !== repo.fullName.toLowerCase()), entry]
+      writeCatalogIndexCache(next)
+      return next
+    })
+  }
+
   const importFromUrl = async (url: string) => {
     setImportOpen(false)
     setImporting(true)
@@ -431,6 +492,7 @@ export function DiscoverView({
       if (analysis.warnings.length === 0) {
         writeCatalogAnalysisCache(repository.fullName, repository.defaultBranch, analysis)
       }
+      adoptCatalogIndexEntry(repository, analysis)
       onAnalysis(repository.fullName, analysis)
       // 去重（忽略大小写）并移到列表顶部，与搜索结果同生命周期。
       setRepositories(current => {
@@ -624,12 +686,22 @@ export function DiscoverView({
           <button
             type="button"
             className="secondary-button catalog-scan-button"
-            disabled={loading || importing}
+            disabled={loading || importing || refreshingIndex}
             onClick={() => setImportOpen(true)}
             title="从 GitHub 链接导入仓库，加入市场并复用检测 / 安装流程"
           >
             {importing ? <LoaderCircle className="spin" size={15} /> : <Link2 size={15} />}
             从链接导入
+          </button>
+          <button
+            type="button"
+            className="secondary-button catalog-scan-button"
+            disabled={loading || importing || refreshingIndex || batchRunning || hasActiveChecks}
+            onClick={() => void refreshCatalogIndex()}
+            title="从 GitHub 下载最新共享 index.xml，并更新本地资源标签"
+          >
+            {refreshingIndex ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}
+            {refreshingIndex ? '更新中' : '更新标签'}
           </button>
         </div>
       </div>
@@ -665,6 +737,7 @@ export function DiscoverView({
           <div className="list-loading"><Search size={21} />没有找到匹配的仓库</div>
         ) : repositories.map(repo => {
           const analysis = analyses[repo.fullName]
+          const remoteIndexEntry = catalogIndex.find(entry => entry.repository.toLowerCase() === repo.fullName.toLowerCase())
           const plugins = pluginTargets(analysis)
           const skills = skillTargets(analysis)
           const applications = applicationTargets(analysis)
@@ -733,7 +806,7 @@ export function DiscoverView({
             if (singleApplication) void installApplication(repo, singleApplication)
             if (singlePreset) void installPreset(repo, singlePreset)
           }
-          const badge = analysis ? analysisBadge(analysis) : null
+          const badge = remoteIndexEntry ? catalogIndexBadge(remoteIndexEntry) : analysis ? analysisBadge(analysis) : null
           const iconKind = analysis?.kind === 'skill'
             ? 'skill'
             : analysis?.kind === 'application'

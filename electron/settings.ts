@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { DEFAULT_PROFILE_NAME, DSH_PACKAGE_NAME } from '../src/constants'
-import type { AppSettings, DshInstallationStatus } from '../src/types'
+import type { AppSettings, DshInstallationStatus, UiTheme } from '../src/types'
 import { managedDshExecutable } from './dsh-install'
 import { isSafeProfileName } from './profile'
 
@@ -39,7 +39,16 @@ export function defaultSettings(input: DefaultSettingsInput): AppSettings {
     launchArgs: ['--yes', DSH_PACKAGE_NAME, 'web'],
     webPort: 3080,
     openAfterLaunch: true,
+    uiTheme: 'forest',
+    aiDeveloperMode: false,
+    aiPrompt: '',
   }
+}
+
+const UI_THEMES = new Set<UiTheme>(['forest', 'ocean', 'berry', 'graphite'])
+
+function validUiTheme(value: unknown): value is UiTheme {
+  return typeof value === 'string' && UI_THEMES.has(value as UiTheme)
 }
 
 function validWebPort(value: unknown): value is number {
@@ -95,6 +104,9 @@ export function validateSettings(input: AppSettings): AppSettings {
     launchArgs: input.launchArgs,
     webPort: input.webPort,
     openAfterLaunch: Boolean(input.openAfterLaunch),
+    uiTheme: validUiTheme(input.uiTheme) ? input.uiTheme : 'forest',
+    aiDeveloperMode: Boolean(input.aiDeveloperMode),
+    aiPrompt: typeof input.aiPrompt === 'string' ? input.aiPrompt.slice(0, 20_000) : '',
   }
 }
 
@@ -115,6 +127,9 @@ export function mergeStoredSettings(defaults: AppSettings, stored: Partial<AppSe
       ? stored.launchArgs.filter(value => typeof value === 'string')
       : defaults.launchArgs,
     webPort: storedPort,
+    uiTheme: validUiTheme(stored.uiTheme) ? stored.uiTheme : defaults.uiTheme ?? 'forest',
+    aiDeveloperMode: Boolean(stored.aiDeveloperMode),
+    aiPrompt: typeof stored.aiPrompt === 'string' ? stored.aiPrompt.slice(0, 20_000) : '',
   }
 }
 

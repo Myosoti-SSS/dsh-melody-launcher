@@ -124,6 +124,7 @@ describe('GitHub shared catalog XML', () => {
     let branchRefReads = 0
     let patchCalls = 0
     let uploadedXml = ''
+    let uploadedTreeBody: { tree?: Array<{ path?: string; sha?: string | null }> } | null = null
     const requestLog: string[] = []
     const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
@@ -144,12 +145,19 @@ describe('GitHub shared catalog XML', () => {
       }
       if (method === 'GET' && pathname === '/repos/rirko/dsh-melody-launcher/contents/catalog/index.xml') return json({ content: Buffer.from(mainEntries).toString('base64') })
       if (method === 'GET' && pathname.startsWith('/repos/alice/dsh-melody-launcher/git/commits/')) return json({ tree: { sha: 'tree-sha' } })
+      if (method === 'GET' && pathname === '/repos/alice/dsh-melody-launcher/git/trees/tree-sha') return json({ tree: [
+        { path: 'catalog/analysis/legacy.json', type: 'blob' },
+        { path: 'catalog/analysis/.gitkeep', type: 'blob' },
+      ] })
       if (method === 'POST' && pathname === '/repos/alice/dsh-melody-launcher/git/blobs') {
         const body = JSON.parse(String(init?.body)) as { content?: string }
         uploadedXml = Buffer.from(body.content ?? '', 'base64').toString('utf8')
         return json({ sha: 'blob-sha' })
       }
-      if (method === 'POST' && pathname === '/repos/alice/dsh-melody-launcher/git/trees') return json({ sha: 'new-tree-sha' })
+      if (method === 'POST' && pathname === '/repos/alice/dsh-melody-launcher/git/trees') {
+        uploadedTreeBody = JSON.parse(String(init?.body)) as typeof uploadedTreeBody
+        return json({ sha: 'new-tree-sha' })
+      }
       if (method === 'POST' && pathname === '/repos/alice/dsh-melody-launcher/git/commits') return json({ sha: `commit-${patchCalls + 1}` })
       if (method === 'PATCH' && pathname === '/repos/alice/dsh-melody-launcher/git/refs/heads/plugin-update') {
         patchCalls += 1
@@ -172,6 +180,10 @@ describe('GitHub shared catalog XML', () => {
       expect(uploadedXml).toContain('demo/main')
       expect(uploadedXml).toContain('demo/branch')
       expect(uploadedXml).toContain('demo/local')
+      expect((uploadedTreeBody as { tree?: Array<{ path?: string; sha?: string | null }> } | null)?.tree).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: 'catalog/index.xml', sha: 'blob-sha' }),
+        expect.objectContaining({ path: 'catalog/analysis/legacy.json', sha: null }),
+      ]))
       expect(requestLog.filter(entry => entry.includes('/git/ref/heads/plugin-update')).length).toBeGreaterThanOrEqual(2)
       const commitRequest = requestLog.find(entry => entry === 'POST https://api.github.com/repos/alice/dsh-melody-launcher/git/commits')
       expect(commitRequest).toBeDefined()

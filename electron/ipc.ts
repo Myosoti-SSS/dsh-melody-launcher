@@ -2,7 +2,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { copyFile, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC, IPC_EVENTS } from '../src/constants'
-import type { ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, PresetInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
+import type { AiSessionCreateInput, ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, PresetInstallRequest, SkillInstallRequest, WindowMode } from '../src/types'
 import type { ApplicationAddonManager } from './application-addons'
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
@@ -17,6 +17,8 @@ import { MAX_RAW_ARCHIVE_BYTES } from './pack-scan'
 import type { PackManager } from './pack'
 import type { PluginTrialManager } from './plugin-trial'
 import type { CatalogSyncService } from './catalog-sync'
+import type { DshMarketService } from './dsh-market'
+import type { CopilotSessionManager } from './copilot-sessions'
 import {
   isSafePackageName,
   isSafeProfileName,
@@ -43,16 +45,18 @@ export interface IpcDependencies {
   launcherUpdater: LauncherUpdater
   pluginTrial: PluginTrialManager
   aiInstaller: AiInstaller
+  copilot: CopilotSessionManager
   packManager: PackManager
   githubAuth: GitHubAuthService
   applicationAddons: ApplicationAddonManager
   catalogSync: CatalogSyncService
+  dshMarket: DshMarketService
   getWindow: () => BrowserWindow | null
   setWindowMode: (mode: WindowMode) => void
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons, catalogSync } = deps
+  const { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager, githubAuth, applicationAddons, catalogSync, dshMarket } = deps
   const linkedComponents = createLinkedComponentController({
     readSettings: () => settings.read(),
     readProfile,
@@ -68,7 +72,9 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     if (packManager.isBusy()) throw new Error('整合包操作进行中，请等待完成。')
     if (pluginTrial.isBusy()) throw new Error('插件试运行进行中，请等待完成。')
     if (aiInstaller.isBusy()) throw new Error('AI 任务进行中，请等待完成。')
+    if (copilot.isMutationBusy()) throw new Error('DSH Copilot 修改任务进行中，请等待完成。')
     if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中，请等待完成。')
+    if (dshMarket.isBusy()) throw new Error('DSH Market 插件操作进行中，请等待完成。')
   }
 
   ipcMain.handle(IPC.settingsGet, () => settings.read())
@@ -180,6 +186,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       installedPresets,
     }
   })
+  ipcMain.handle(IPC.catalogRefreshIndex, () => catalogSync.refreshIndex())
   ipcMain.handle(IPC.catalogAnalyze, async (event, payload: { fullName: string; defaultBranch: string; repositoryUpdatedAt?: string }) => {
     if (!isSafeRepositoryName(payload.fullName)) throw new Error('GitHub 仓库名称无效。')
     if (payload.repositoryUpdatedAt !== undefined && !Number.isFinite(Date.parse(payload.repositoryUpdatedAt))) {
@@ -233,6 +240,29 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       githubAuth.fetch,
     )
   })
+  ipcMain.handle(IPC.dshMarketLoad, () => dshMarket.load())
+  ipcMain.handle(IPC.dshMarketInstall, async (_event, name: string) => {
+    assertProfileMutationAvailable()
+    if (typeof name !== 'string' || name.length === 0 || name.length > 200) throw new Error('dsh-market 插件名称无效。')
+    return dshMarket.install(name)
+  })
+  ipcMain.handle(IPC.dshMarketUpdate, async (_event, name: string) => {
+    assertProfileMutationAvailable()
+    if (typeof name !== 'string' || name.length === 0 || name.length > 200) throw new Error('dsh-market 插件名称无效。')
+    return dshMarket.update(name)
+  })
+  ipcMain.handle(IPC.dshMarketUninstall, async (_event, name: string) => {
+    assertProfileMutationAvailable()
+    if (typeof name !== 'string' || name.length === 0 || name.length > 200) throw new Error('dsh-market 插件名称无效。')
+    return dshMarket.uninstall(name)
+  })
+  ipcMain.handle(IPC.dshMarketToggle, async (_event, payload: { name: string; enabled: boolean }) => {
+    assertProfileMutationAvailable()
+    if (!payload || typeof payload.name !== 'string' || payload.name.length === 0 || payload.name.length > 200) throw new Error('dsh-market 插件名称无效。')
+    return dshMarket.toggle(payload.name, Boolean(payload.enabled))
+  })
+  ipcMain.handle(IPC.dshMarketUpdates, (_event, force?: boolean) => dshMarket.updates(Boolean(force)))
+
   ipcMain.handle(IPC.pluginsInstall, async (_event, request: string | PluginInstallRequest) => {
     assertProfileMutationAvailable()
     const fullName = typeof request === 'string' ? request : request.repository
@@ -319,37 +349,77 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.aiStatus, () => aiInstaller.status())
   ipcMain.handle(IPC.aiHasSnapshot, () => aiInstaller.hasSnapshot())
   ipcMain.handle(IPC.aiInstall, async (_event, input: { repository: string; defaultBranch: string }) => {
-    assertProfileMutationAvailable()
     if (!input || !isSafeRepositoryName(input.repository)) throw new Error('GitHub 仓库名称无效。')
     if (typeof input.defaultBranch !== 'string' || input.defaultBranch.length === 0 || input.defaultBranch.length > 200) {
       throw new Error('分支无效。')
     }
     // 主进程内 aiInstaller.start 会重算 analysis，不信任渲染层传入的分类。
-    return aiInstaller.start({ repository: input.repository, defaultBranch: input.defaultBranch })
+    const session = await copilot.beginLegacy('repository-install', 'AI 尝试安装', input.repository)
+    copilot.bindLegacy(session.id)
+    try {
+      return await copilot.runLegacy(session.id, () => aiInstaller.start({ repository: input.repository, defaultBranch: input.defaultBranch }))
+    } finally {
+      copilot.bindLegacy(null)
+    }
   })
   ipcMain.handle(IPC.aiAdaptPlugin, async (_event, input: { packageName: string; profileName?: string }) => {
-    assertProfileMutationAvailable()
     if (!input || !isSafePackageName(input.packageName)) throw new Error('插件名称无效。')
     if (input.profileName !== undefined && !isSafeProfileName(input.profileName)) throw new Error('Profile 名称无效。')
     const failure = await pluginTrial.latestFailure(input.packageName, input.profileName)
-    return aiInstaller.adaptPlugin({
-      packageName: failure.packageName,
-      profileName: failure.profileName,
-      diagnostics: failure.diagnostics,
-    })
+    const session = await copilot.beginLegacy('plugin-adaptation', 'DSH 安装适配', failure.packageName)
+    copilot.bindLegacy(session.id)
+    try {
+      return await copilot.runLegacy(session.id, () => aiInstaller.adaptPlugin({
+        packageName: failure.packageName,
+        profileName: failure.profileName,
+        diagnostics: failure.diagnostics,
+      }))
+    } finally {
+      copilot.bindLegacy(null)
+    }
   })
   ipcMain.handle(IPC.aiRepairRuntime, async () => {
-    assertProfileMutationAvailable()
     const failure = runtime.failure()
     if (!failure) throw new Error('没有找到最近一次 DSH 启动失败诊断。')
-    return aiInstaller.repairRuntime(failure)
+    const session = await copilot.beginLegacy('runtime-repair', 'DSH 启动修复', failure.profileName)
+    copilot.bindLegacy(session.id)
+    try {
+      return await copilot.runLegacy(session.id, () => aiInstaller.repairRuntime(failure))
+    } finally {
+      copilot.bindLegacy(null)
+    }
   })
   ipcMain.handle(IPC.aiApprove, async (_event, requestId: string, allow: boolean) => {
     if (typeof requestId !== 'string' || requestId.length === 0) throw new Error('审批请求无效。')
-    return aiInstaller.approve(requestId, Boolean(allow))
+    const result = await aiInstaller.approve(requestId, Boolean(allow))
+    if (result) await copilot.clearLegacyApproval(requestId)
+    return result
   })
   ipcMain.handle(IPC.aiCancel, () => aiInstaller.cancel())
   ipcMain.handle(IPC.aiRollback, () => aiInstaller.rollback())
+
+  ipcMain.handle(IPC.aiSessionsList, () => copilot.list())
+  ipcMain.handle(IPC.aiSessionsCreate, (_event, input?: AiSessionCreateInput) => copilot.create(input))
+  ipcMain.handle(IPC.aiSessionsSend, (_event, payload: { sessionId: string; text: string }) => {
+    if (!payload || typeof payload.sessionId !== 'string' || typeof payload.text !== 'string') throw new Error('Copilot 消息格式无效。')
+    return copilot.send(payload.sessionId, payload.text)
+  })
+  ipcMain.handle(IPC.aiSessionsCancel, (_event, sessionId: string) => {
+    if (typeof sessionId !== 'string') throw new Error('Copilot 会话无效。')
+    return copilot.cancel(sessionId)
+  })
+  ipcMain.handle(IPC.aiSessionsApprove, (_event, payload: { sessionId: string; requestId: string; allow: boolean }) => {
+    if (!payload || typeof payload.sessionId !== 'string' || typeof payload.requestId !== 'string') throw new Error('Copilot 审批请求无效。')
+    return copilot.approve(payload.sessionId, payload.requestId, Boolean(payload.allow))
+  })
+  ipcMain.handle(IPC.aiSessionsRollback, (_event, sessionId: string) => {
+    if (typeof sessionId !== 'string') throw new Error('Copilot 会话无效。')
+    return copilot.rollback(sessionId)
+  })
+  ipcMain.handle(IPC.aiSessionsDelete, (_event, sessionId: string) => {
+    if (typeof sessionId !== 'string') throw new Error('Copilot 会话无效。')
+    return copilot.remove(sessionId)
+  })
 
   /**
    * 校验文件存在、为绝对路径，且文件体积不超过整合包上限（未读入前的第一道闸门）。
@@ -530,8 +600,11 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   ipcMain.handle(IPC.runtimeState, () => runtime.state())
   ipcMain.handle(IPC.runtimeStart, async () => {
     assertProfileMutationAvailable()
-    await catalogSync.flushPending()
-    return runtime.start()
+    // 先启动 DSH，避免网络或 GitHub PR 操作阻塞用户进入本地运行环境。
+    const state = await runtime.start()
+    // 共享索引提交只作为后台任务执行；失败不会影响本次 DSH 启动。
+    void catalogSync.flushPending().catch(() => undefined)
+    return state
   })
   ipcMain.handle(IPC.runtimeStop, () => runtime.stop())
 

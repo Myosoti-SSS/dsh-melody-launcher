@@ -1,17 +1,8 @@
 import { DOMImplementation, DOMParser, XMLSerializer } from '@xmldom/xmldom'
-import type { CatalogComponentKind, CatalogRepositoryAnalysis } from '../src/types'
+import type { CatalogComponentKind, CatalogIndexEntry, CatalogIndexTag, CatalogRepositoryAnalysis } from '../src/types'
 
 export const CATALOG_INDEX_SCHEMA = '1'
 export const CATALOG_INDEX_PATH = 'catalog/index.xml'
-
-export type CatalogIndexTag = 'plugin' | 'skill' | 'runtime' | 'preset' | 'dsh' | 'invalid'
-
-export interface CatalogIndexEntry {
-  repository: string
-  defaultBranch: string
-  repositoryUpdatedAt: string | null
-  tags: CatalogIndexTag[]
-}
 
 const TAG_ORDER: CatalogIndexTag[] = ['plugin', 'skill', 'runtime', 'preset', 'dsh', 'invalid']
 const TAG_SET = new Set<CatalogIndexTag>(TAG_ORDER)

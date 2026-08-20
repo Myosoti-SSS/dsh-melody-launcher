@@ -1,5 +1,6 @@
-export type ViewName = 'plugins' | 'discover' | 'runtime' | 'packs' | 'github'
+export type ViewName = 'plugins' | 'discover' | 'dsh-market' | 'runtime' | 'packs' | 'github'
 export type WindowMode = 'launcher' | 'manager'
+export type UiTheme = 'forest' | 'ocean' | 'berry' | 'graphite'
 
 export interface AppSettings {
   dshInstallPath: string
@@ -12,6 +13,12 @@ export interface AppSettings {
   launchArgs: string[]
   webPort: number
   openAfterLaunch: boolean
+  /** 启动器界面配色；主表面由同一基色的明暗层级构成。 */
+  uiTheme?: UiTheme
+  /** DSH Copilot 是否允许用户替换基础 persona。 */
+  aiDeveloperMode?: boolean
+  /** DSH Copilot 的用户提示词覆盖/追加内容。 */
+  aiPrompt?: string
 }
 
 export interface CredentialStatus {
@@ -382,6 +389,17 @@ export interface CatalogRepositoryAnalysis {
   sync?: CatalogSyncInfo
 }
 
+/** 共享目录 XML 中保存的最小分类标签。 */
+export type CatalogIndexTag = 'plugin' | 'skill' | 'runtime' | 'preset' | 'dsh' | 'invalid'
+
+/** 共享目录 XML 的一行；不包含检测过程、摘要或本地路径。 */
+export interface CatalogIndexEntry {
+  repository: string
+  defaultBranch: string
+  repositoryUpdatedAt: string | null
+  tags: CatalogIndexTag[]
+}
+
 export type CatalogSyncState = 'remote' | 'queued' | 'published' | 'not-authenticated' | 'unavailable' | 'stale-fallback'
 
 export interface CatalogSyncInfo {
@@ -500,6 +518,7 @@ export interface PluginTrialResult {
 /** 渲染层看到的待审批请求（args 已脱敏截断）。 */
 export interface AiApprovalRequest {
   id: string
+  sessionId?: string
   toolName: string
   toolKind: string | null
   args: string
@@ -537,6 +556,57 @@ export interface PackPluginEntry {
   /** 清单声明的精确 pnpm 构建许可策略。 */
   allowBuilds?: string[]
   denyBuilds?: string[]
+}
+
+export type AiSessionKind = 'chat' | 'repository-install' | 'plugin-adaptation' | 'runtime-repair'
+export type AiSessionPhase = 'idle' | 'queued' | 'preparing' | 'running' | 'done' | 'cancelled' | 'error' | 'interrupted'
+
+export interface AiMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system' | 'tool'
+  text: string
+  createdAt: string
+  streaming?: boolean
+}
+
+export interface AiQueueState {
+  position: number | null
+  total: number
+  running: boolean
+  mutating: boolean
+  reason?: string | null
+}
+
+export interface AiSessionSummary {
+  id: string
+  kind: AiSessionKind
+  title: string
+  subject: string | null
+  phase: AiSessionPhase
+  createdAt: string
+  updatedAt: string
+  queue: AiQueueState
+  messageCount: number
+  pendingApproval: AiApprovalRequest | null
+  hasSnapshot: boolean
+}
+
+export interface AiSession extends AiSessionSummary {
+  messages: AiMessage[]
+}
+
+export type AiSessionEvent =
+  | { kind: 'session-created'; session: AiSession }
+  | { kind: 'session-updated'; session: AiSession }
+  | { kind: 'message'; sessionId: string; message: AiMessage }
+  | { kind: 'approval'; sessionId: string; request: AiApprovalRequest }
+  | { kind: 'snapshot'; sessionId: string; snapshotId: string }
+  | { kind: 'deleted'; sessionId: string }
+
+export interface AiSessionCreateInput {
+  kind?: AiSessionKind
+  title?: string
+  subject?: string | null
 }
 
 export interface PackPresetEntry {
@@ -679,6 +749,48 @@ export type PackProgressEvent =
   | { kind: 'cancelled' }
   | { kind: 'error'; message: string }
 
+export interface DshMarketPlugin {
+  name: string
+  owner: string
+  url: string
+  category: string
+  description: Record<string, string | undefined>
+  npm: string | null
+  stars: number
+  added: string
+  install: string
+  installed: boolean
+  enabled: boolean
+  version: string | null
+  updateAvailable: boolean
+  updateVersion: string | null
+}
+
+export type DshMarketInstalledPlugin = DshMarketPlugin
+
+export interface DshMarketCatalog {
+  updated: string
+  count: number
+  categories: Record<string, Record<string, string>>
+  plugins: DshMarketPlugin[]
+}
+
+export interface DshMarketUpdateStatus {
+  kind: 'npm' | 'github' | 'linked'
+  current: string | null
+  latest: string | null
+  updateAvailable: boolean
+}
+
+export interface DshMarketProgress {
+  name: string
+  phase: 'loading' | 'checking' | 'resolving' | 'downloading' | 'building' | 'verifying' | 'complete' | 'error'
+  percent: number | null
+  message: string
+  downloadedBytes?: number | null
+  totalBytes?: number | null
+}
+
 export interface LauncherApi {
   getSettings(): Promise<AppSettings>
   saveSettings(settings: AppSettings): Promise<AppSettings>
@@ -708,8 +820,15 @@ export interface LauncherApi {
   togglePlugin(packageName: string, enabled: boolean, profileName?: string): Promise<LinkedComponentToggleResult>
   reorderPlugins(packageNames: string[]): Promise<ProfileState>
   discoverCatalog(query: string, sort: 'stars' | 'updated', page: number): Promise<CatalogDiscoveryResult>
+  refreshCatalogIndex(): Promise<CatalogIndexEntry[]>
   analyzeCatalogRepository(fullName: string, defaultBranch: string, repositoryUpdatedAt?: string): Promise<CatalogRepositoryAnalysis>
   importCatalogUrl(url: string): Promise<CatalogImportResult>
+  loadDshMarket(): Promise<DshMarketCatalog>
+  installDshMarketPlugin(name: string): Promise<DshMarketInstalledPlugin[]>
+  updateDshMarketPlugin(name: string): Promise<DshMarketInstalledPlugin[]>
+  uninstallDshMarketPlugin(name: string): Promise<DshMarketInstalledPlugin[]>
+  toggleDshMarketPlugin(name: string, enabled: boolean): Promise<DshMarketInstalledPlugin[]>
+  checkDshMarketUpdates(force?: boolean): Promise<Record<string, DshMarketUpdateStatus>>
   installPlugin(request: string | PluginInstallRequest): Promise<RepositoryInstallResult>
   uninstallPlugin(packageName: string): Promise<ProfileState>
   trialPlugin(packageName: string, profileName?: string): Promise<PluginTrialResult>
@@ -739,6 +858,13 @@ export interface LauncherApi {
   aiRollback(): Promise<{ restored: number; profileName: string }>
   aiStatus(): Promise<AiInstallStatus>
   aiHasSnapshot(): Promise<boolean>
+  listAiSessions(): Promise<AiSession[]>
+  createAiSession(input?: AiSessionCreateInput): Promise<AiSession>
+  sendAiSessionMessage(sessionId: string, text: string): Promise<AiSession>
+  cancelAiSession(sessionId: string): Promise<void>
+  approveAiSession(sessionId: string, requestId: string, allow: boolean): Promise<boolean>
+  rollbackAiSession(sessionId: string): Promise<{ restored: number; profileName: string }>
+  deleteAiSession(sessionId: string): Promise<void>
   listPacks(): Promise<PackStatus[]>
   createPack(request: PackCreateRequest): Promise<PackInstallResult>
   analyzePackImport(path: string): Promise<PackAnalysis>
@@ -763,12 +889,14 @@ export interface LauncherApi {
   removePackSkill(packId: string, skillName: string): Promise<PackStatus>
   removePackApplication(packId: string, addonId: string): Promise<PackStatus>
   onCatalogAnalysisProgress(listener: (progress: CatalogAnalysisProgress) => void): () => void
+  onDshMarketProgress(listener: (progress: DshMarketProgress) => void): () => void
   onPackProgress(listener: (event: PackProgressEvent) => void): () => void
   onRuntimeOutput(listener: (output: RuntimeOutput) => void): () => void
   onRuntimeState(listener: (state: RuntimeState) => void): () => void
   onInstallProgress(listener: (progress: InstallProgress) => void): () => void
   onPluginTrialEvent(listener: (result: PluginTrialResult) => void): () => void
   onAiInstallEvent(listener: (event: AiInstallEvent) => void): () => void
+  onAiSessionEvent(listener: (event: AiSessionEvent) => void): () => void
 }
 
 declare global {
