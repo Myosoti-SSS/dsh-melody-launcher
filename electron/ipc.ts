@@ -612,6 +612,14 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     if (!isWindowMode(mode)) throw new Error('窗口模式无效。')
     deps.setWindowMode(mode)
   })
+  ipcMain.handle(IPC.windowMinimize, () => deps.getWindow()?.minimize())
+  ipcMain.handle(IPC.windowToggleMaximize, () => {
+    const window = deps.getWindow()
+    if (!window || window.isDestroyed()) return false
+    if (window.isMaximized()) window.unmaximize()
+    else window.maximize()
+    return window.isMaximized()
+  })
   ipcMain.handle(IPC.windowClose, () => deps.getWindow()?.close())
 
   ipcMain.handle(IPC.openExternal, (_event, url: string) => {

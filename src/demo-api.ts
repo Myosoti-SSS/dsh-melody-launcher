@@ -1099,6 +1099,8 @@ export const demoApi: LauncherApi = {
   openExternal: async () => undefined,
   openPath: async () => undefined,
   setWindowMode: async () => undefined,
+  minimizeWindow: async () => undefined,
+  toggleMaximizeWindow: async () => false,
   closeWindow: async () => undefined,
   onRuntimeOutput: listener => {
     outputListeners.add(listener)

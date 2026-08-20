@@ -57,6 +57,7 @@ import type {
 
 interface BatchScanState {
   phase: 'running' | 'complete' | 'partial'
+  sourcePage: number
   total: number
   completed: number
   available: number
@@ -80,7 +81,7 @@ interface DiscoverViewProps {
   onAnalysis: (repository: string, analysis: CatalogRepositoryAnalysis) => void
   onInstallationState: (repositories: string[], skills: InstalledSkill[], applications: InstalledApplicationAddon[], presets: InstalledPreset[]) => void
   onInstallStarted: (progress: InstallProgress) => void
-  onInstallFinished: (repository: string) => void
+  onInstallFinished: (repository: string, succeeded?: boolean, message?: string) => void
   onPluginInstalled: (repository: string, result: RepositoryInstallResult) => void
   onSkillInstalled: (result: SkillInstallResult) => void
   onApplicationInstalled: (result: ApplicationInstallResult) => void
@@ -299,12 +300,9 @@ export function DiscoverView({
   const batchRunRef = useRef(0)
 
   const search = useCallback(async (searchQuery = query, searchSort = sort, searchPage = page) => {
-    batchRunRef.current += 1
-    setBatchScan(null)
+    // 翻页和重新搜索只替换当前可见仓库，不能取消后台检测。
+    // 检测状态按仓库名持有；返回原页时会继续显示进度或最终结果。
     setTargetDialog(null)
-    setAnalysisProgress({})
-    setCheckingRepositories(new Set())
-    setCatalogIndex(readCatalogIndexCache())
     setLoading(true)
     try {
       const result = await api.discoverCatalog(searchQuery, searchSort, searchPage)
@@ -414,7 +412,8 @@ export function DiscoverView({
       return next
     })
     setCheckingRepositories(new Set(candidates.map(repo => repo.fullName)))
-    setBatchScan({ phase: 'running', total: candidates.length, completed, available, failed })
+    const sourcePage = page
+    setBatchScan({ phase: 'running', sourcePage, total: candidates.length, completed, available, failed })
 
     await analyzeCatalogPageInParallel(
       candidates,
@@ -447,13 +446,18 @@ export function DiscoverView({
           failed += 1
         }
         setRepositoryChecking(outcome.repository.fullName, false)
-        setBatchScan({ phase: 'running', total: candidates.length, completed, available, failed })
+        setBatchScan({ phase: 'running', sourcePage, total: candidates.length, completed, available, failed })
       },
     )
     if (batchRunRef.current !== runId) return
-    setCheckingRepositories(new Set())
+    setCheckingRepositories(current => {
+      const next = new Set(current)
+      for (const repo of candidates) next.delete(repo.fullName)
+      return next
+    })
     setBatchScan({
       phase: failed > 0 ? 'partial' : 'complete',
+      sourcePage,
       total: candidates.length,
       completed,
       available,
@@ -523,6 +527,8 @@ export function DiscoverView({
       percent: 0,
       message: kind === 'dsh' ? '正在准备本地 DSH' : '正在检查 Plugin 组件',
     })
+    let succeeded = false
+    let failureMessage = '插件安装失败。'
     try {
       const result = await api.installPlugin(repo.kind === 'dsh'
         ? repo.fullName
@@ -533,12 +539,15 @@ export function DiscoverView({
           })
       setDshInstallation(result.dshInstallation)
       onPluginInstalled(repo.fullName, result)
+      succeeded = true
     } catch (error) {
-      onError(errorText(error))
+      failureMessage = errorText(error)
+      onError(failureMessage)
     } finally {
       setInstalling(null)
-      onInstallFinished(repo.fullName)
+      onInstallFinished(repo.fullName, succeeded, failureMessage)
     }
+    return succeeded
   }
 
   const installSkill = async (repo: CatalogRepositoryResult, target: SkillInstallTarget, keepDialog = false) => {
@@ -551,6 +560,8 @@ export function DiscoverView({
       percent: 0,
       message: '正在准备本地 Skill 目录',
     })
+    let succeeded = false
+    let failureMessage = 'Skill 安装失败。'
     try {
       const result = await api.installSkill({
         repository: target.sourceRepository ?? repo.fullName,
@@ -558,12 +569,15 @@ export function DiscoverView({
         targetId: target.id,
       })
       onSkillInstalled(result)
+      succeeded = true
     } catch (error) {
-      onError(errorText(error))
+      failureMessage = errorText(error)
+      onError(failureMessage)
     } finally {
       setInstalling(null)
-      onInstallFinished(repo.fullName)
+      onInstallFinished(repo.fullName, succeeded, failureMessage)
     }
+    return succeeded
   }
 
   const installApplication = async (repo: CatalogRepositoryResult, target: ApplicationInstallTarget) => {
@@ -576,6 +590,8 @@ export function DiscoverView({
       percent: 0,
       message: '正在准备应用加载项运行目录',
     })
+    let succeeded = false
+    let failureMessage = '应用加载项安装失败。'
     try {
       const result = await api.installApplication({
         repository: repo.fullName,
@@ -583,12 +599,15 @@ export function DiscoverView({
         targetId: target.id,
       })
       onApplicationInstalled(result)
+      succeeded = true
     } catch (error) {
-      onError(errorText(error))
+      failureMessage = errorText(error)
+      onError(failureMessage)
     } finally {
       setInstalling(null)
-      onInstallFinished(repo.fullName)
+      onInstallFinished(repo.fullName, succeeded, failureMessage)
     }
+    return succeeded
   }
 
   const installPreset = async (repo: CatalogRepositoryResult, target: PresetInstallTarget, keepDialog = false) => {
@@ -601,6 +620,8 @@ export function DiscoverView({
       percent: 0,
       message: '正在准备 Agent 预设目录',
     })
+    let succeeded = false
+    let failureMessage = 'Agent 预设安装失败。'
     try {
       // 预设来自 meta-repo 子模块，revision 已钉死，直接指向子模块仓库安装。
       const result = await api.installPreset({
@@ -611,12 +632,15 @@ export function DiscoverView({
         revision: target.revision,
       })
       onPresetInstalled(result)
+      succeeded = true
     } catch (error) {
-      onError(errorText(error))
+      failureMessage = errorText(error)
+      onError(failureMessage)
     } finally {
       setInstalling(null)
-      onInstallFinished(repo.fullName)
+      onInstallFinished(repo.fullName, succeeded, failureMessage)
     }
+    return succeeded
   }
 
   /** 「一键安装全部」：按顺序装完未安装的组件，对话框保持打开、逐个刷新状态。
@@ -629,18 +653,15 @@ export function DiscoverView({
       const installedPresetSet = new Set(installedPresets.map(preset => preset.name.toLowerCase()))
       for (const target of pluginTargets(analysis)) {
         if (installedPlugins.has(target.packageName.toLowerCase())) continue
-        await installPlugin(repo, target, true)
-        installedPlugins.add(target.packageName.toLowerCase())
+        if (await installPlugin(repo, target, true)) installedPlugins.add(target.packageName.toLowerCase())
       }
       for (const target of skillTargets(analysis)) {
         if (installedSkillSet.has(target.name.toLowerCase())) continue
-        await installSkill(repo, target, true)
-        installedSkillSet.add(target.name.toLowerCase())
+        if (await installSkill(repo, target, true)) installedSkillSet.add(target.name.toLowerCase())
       }
       for (const target of presetTargets(analysis)) {
         if (installedPresetSet.has(target.name.toLowerCase())) continue
-        await installPreset(repo, target, true)
-        installedPresetSet.add(target.name.toLowerCase())
+        if (await installPreset(repo, target, true)) installedPresetSet.add(target.name.toLowerCase())
       }
     } finally {
       setInstallingAll(false)
@@ -681,7 +702,9 @@ export function DiscoverView({
             title="并行检测当前页中的全部 Plugin、Skill、应用加载项与 Agent 预设候选"
           >
             {batchRunning ? <LoaderCircle className="spin" size={15} /> : <ScanSearch size={15} />}
-            {batchRunning ? `检测 ${batchScan.completed}/${batchScan.total}` : batchScan ? '再次检测当前页' : '检测当前页'}
+            {batchRunning
+              ? `${batchScan.sourcePage === page ? '检测' : `后台检测第 ${batchScan.sourcePage} 页`} ${batchScan.completed}/${batchScan.total}`
+              : batchScan?.sourcePage === page ? '再次检测当前页' : '检测当前页'}
           </button>
           <button
             type="button"
@@ -710,7 +733,7 @@ export function DiscoverView({
         <div className={`batch-scan-status ${batchScan.phase}`} role="status" aria-live="polite">
           {batchRunning ? <LoaderCircle className="spin" size={15} /> : batchScan.phase === 'complete' ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
           <span>{batchRunning
-            ? `正在并行检测当前页：${checkingCount} 个仓库进行中，已完成 ${batchScan.completed}/${batchScan.total}；详细步骤显示在对应仓库行中`
+            ? `正在${batchScan.sourcePage === page ? '并行检测当前页' : `后台检测第 ${batchScan.sourcePage} 页`}：${batchScan.total - batchScan.completed} 个仓库进行中，已完成 ${batchScan.completed}/${batchScan.total}；返回该页可查看各仓库详细步骤`
             : batchScan.phase === 'complete'
               ? `检测完成：${batchScan.total} 个候选中有 ${batchScan.available} 个 DSH 资源${batchScan.failed ? `，${batchScan.failed} 个检测失败` : ''}`
               : `并行检测结束：完成 ${batchScan.completed}/${batchScan.total}，发现 ${batchScan.available} 个资源，${batchScan.failed} 个检测失败`}</span>
@@ -755,9 +778,13 @@ export function DiscoverView({
           const anyInstalled = repo.kind === 'dsh'
             ? dshInstallation.installed
             : pluginInstalled || installedSkillCount > 0 || applicationInstalled || installedPresetCount > 0
-          const progress = activeInstalling?.repository === repo.fullName
-            && installProgress?.repository === repo.fullName
+          const progress = isInstallProgressActive(installProgress)
+            && installProgress.repository === repo.fullName
+            && activeInstalling?.repository === repo.fullName
             && installProgress.kind === activeInstalling.kind
+            ? installProgress
+            : null
+          const installFailure = installProgress?.repository === repo.fullName && installProgress.phase === 'error'
             ? installProgress
             : null
           const indeterminate = progress?.indeterminate === true && progress.phase !== 'error'
@@ -858,6 +885,12 @@ export function DiscoverView({
                       </span>
                     )}
                   </div>}
+                  {installFailure && (
+                    <div className="catalog-install-error" role="alert" title={installFailure.message}>
+                      <CircleAlert size={13} />
+                      <span>{installFailure.message}</span>
+                    </div>
+                  )}
                   <div className="topic-list">
                     {repo.candidateTypes.map(type => <span className="candidate-topic" key={type}>{type === 'plugin' ? 'dsh-plugin 候选' : type === 'skill' ? 'dsh-skill 候选' : 'dsh-app 候选'}</span>)}
                     {repo.topics.filter(topic => !['dsh-plugin', 'dsh-skill', 'dsh-app'].includes(topic.toLowerCase())).slice(0, 2).map(topic => <span key={topic}>{topic}</span>)}
@@ -883,7 +916,7 @@ export function DiscoverView({
               <div className="install-cell">
                 {progress ? (
                   <div className={`install-progress ${progress.phase === 'error' ? 'error' : ''} ${indeterminate ? 'indeterminate' : ''}`}>
-                    <div><LoaderCircle className="spin" size={14} /><span>{progress.message}</span><strong>{indeterminate ? '进行中' : `${progress.percent}%`}</strong></div>
+                    <div>{progress.phase === 'error' ? <CircleAlert size={14} /> : <LoaderCircle className="spin" size={14} />}<span>{progress.message}</span><strong>{progress.phase === 'error' ? '失败' : indeterminate ? '进行中' : `${progress.percent}%`}</strong></div>
                     {progress.downloadedBytes != null && (
                       <small className="install-progress-size">
                         已下载 {formatBytes(progress.downloadedBytes)}
@@ -940,6 +973,17 @@ export function DiscoverView({
           )
         })}
       </section>
+
+      <div className="catalog-pagination-bottom">
+        <CatalogPagination
+          page={page}
+          pageCount={pageCount}
+          visibleCount={repositories.length}
+          loading={loading}
+          disabled={loading}
+          onPageChange={nextPage => void search(query, sort, nextPage)}
+        />
+      </div>
 
       {targetDialog && (
         <CatalogTargetDialog

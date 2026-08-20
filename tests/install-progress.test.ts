@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isInstallProgressActive } from '../src/lib/install-progress'
+import { finalizeInstallProgress, isInstallProgressActive } from '../src/lib/install-progress'
 import type { InstallProgress } from '../src/types'
 
 function progress(phase: InstallProgress['phase']): InstallProgress {
@@ -23,5 +23,20 @@ describe('install progress lifecycle', () => {
     expect(isInstallProgressActive(progress('complete'))).toBe(false)
     expect(isInstallProgressActive(progress('error'))).toBe(false)
     expect(isInstallProgressActive(null)).toBe(false)
+  })
+
+  it('clears successful tasks but preserves a visible failure for retry', () => {
+    expect(finalizeInstallProgress(progress('downloading'), 'demo/plugin', true, '')).toBeNull()
+    expect(finalizeInstallProgress(progress('downloading'), 'demo/plugin', false, '下载失败')).toEqual({
+      ...progress('downloading'),
+      phase: 'error',
+      message: '下载失败',
+      indeterminate: false,
+    })
+  })
+
+  it('does not finish a different repository task', () => {
+    const current = progress('verifying')
+    expect(finalizeInstallProgress(current, 'other/plugin', false, '失败')).toBe(current)
   })
 })

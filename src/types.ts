@@ -849,6 +849,8 @@ export interface LauncherApi {
   openExternal(url: string): Promise<void>
   openPath(path: string): Promise<void>
   setWindowMode(mode: WindowMode): Promise<void>
+  minimizeWindow(): Promise<void>
+  toggleMaximizeWindow(): Promise<boolean>
   closeWindow(): Promise<void>
   aiInstall(input: { repository: string; defaultBranch: string }): Promise<AiInstallResult>
   aiAdaptPlugin(input: { packageName: string; profileName?: string }): Promise<AiInstallResult>
