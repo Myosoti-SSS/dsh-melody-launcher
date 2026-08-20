@@ -9,9 +9,8 @@ import {
   parseCatalogIndex,
   serializeCatalogIndex,
   catalogEntryOrder,
-  type CatalogIndexEntry,
-  type CatalogIndexTag,
 } from './catalog-index'
+import type { CatalogIndexEntry, CatalogIndexTag } from '../src/types'
 
 const GITHUB_API_ROOT = 'https://api.github.com'
 const CATALOG_BRANCH = 'main'
@@ -50,11 +49,18 @@ interface GitHubTreeResponse {
   sha?: unknown
 }
 
+interface GitHubTreeListResponse {
+  tree?: unknown
+  truncated?: unknown
+}
+
 interface GitHubCommitCreateResponse {
   sha?: unknown
 }
 
 export interface CatalogSyncService {
+  /** 强制读取最新 main/catalog/index.xml，供界面手动刷新本地标签。 */
+  refreshIndex(): Promise<CatalogIndexEntry[]>
   resolve(
     repository: string,
     defaultBranch: string,
@@ -273,11 +279,11 @@ export function createCatalogSyncService(options: {
   }
 
   const queueEntry = (entry: CatalogIndexEntry): Promise<boolean> => enqueuePending(async () => {
-    const entries = await readPendingNow()
-    const index = entries.findIndex(candidate => candidate.repository.toLowerCase() === entry.repository.toLowerCase())
-    if (index >= 0 && sameEntry(entries[index]!, entry)) return false
-    if (index >= 0) entries[index] = entry
-    else entries.push(entry)
+    // 每次检测完成时把远端完整索引、已有本地结果和本次结果先合并，
+    // 这样本地待提交文件本身就是完整且按仓库名排序的 index.xml。
+    const previous = mergeCatalogEntries(remoteCache?.entries ?? [], await readPendingNow())
+    const entries = mergeCatalogEntries(previous, [entry])
+    if (serializeCatalogIndex(entries) === serializeCatalogIndex(previous)) return false
     await writePendingNow(entries)
     return true
   })
@@ -395,6 +401,22 @@ export function createCatalogSyncService(options: {
       throw new Error(`无法读取共享检测分支树（HTTP ${commitResponse.response.status}）。`)
     }
 
+    // 清理旧版本曾经上传到 plugin-update 的逐仓库检测报告，
+    // 让共享 PR 的唯一业务文件始终是 catalog/index.xml。
+    const branchTree = await request(apiUrl(`/repos/${targetRepository}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`))
+    const branchTreeBody = branchTree.body as GitHubTreeListResponse | null
+    if (!branchTree.response.ok || !branchTreeBody || branchTreeBody.truncated === true || !Array.isArray(branchTreeBody.tree)) {
+      throw new Error(`无法读取共享检测分支文件列表（HTTP ${branchTree.response.status}）。`)
+    }
+    const reportDeletes = branchTreeBody.tree
+      .filter((item): item is { path?: unknown; type?: unknown } => Boolean(item && typeof item === 'object'))
+      .map(item => ({ path: item.path, type: item.type }))
+      .filter(item => typeof item.path === 'string'
+        && item.type === 'blob'
+        && /^(?:catalog\/(?:analysis|reports)\/)/i.test(item.path)
+        && !/\/\.gitkeep$/i.test(item.path))
+      .map(item => ({ path: item.path as string, mode: '100644', type: 'blob', sha: null }))
+
     const blob = await request(apiUrl(`/repos/${targetRepository}/git/blobs`), {
       method: 'POST',
       body: JSON.stringify({ content: encodeContent(xml), encoding: 'base64' }),
@@ -408,7 +430,10 @@ export function createCatalogSyncService(options: {
       method: 'POST',
       body: JSON.stringify({
         base_tree: treeSha,
-        tree: [{ path: CATALOG_INDEX_PATH, mode: '100644', type: 'blob', sha: blobSha }],
+        tree: [
+          { path: CATALOG_INDEX_PATH, mode: '100644', type: 'blob', sha: blobSha },
+          ...reportDeletes,
+        ],
       }),
     })
     const newTreeSha = tree.body && typeof tree.body === 'object' ? (tree.body as GitHubTreeResponse).sha : undefined
@@ -519,6 +544,9 @@ export function createCatalogSyncService(options: {
   }
 
   return {
+    async refreshIndex() {
+      return readRemoteIndex(true)
+    },
     async resolve(repository, defaultBranch, repositoryUpdatedAt, analyzeLocal, onRemoteProgress) {
       let remote: CatalogIndexEntry | null = null
       onRemoteProgress?.('正在读取 GitHub 共享标签索引')

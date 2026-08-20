@@ -32,6 +32,7 @@
   "dependencies": {
     "@xmldom/xmldom": "^0.8.14",
     "adm-zip": "^0.6.0",
+    "koffi": "^3.1.5",
     "lucide-react": "^1.31.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -69,6 +70,12 @@
       "dist/**/*",
       "dist-electron/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/@koromix/koffi-win32-x64/win32_x64",
+        "to": "koffi/win32_x64"
+      }
     ],
     "win": {
       "icon": "build/icon.ico",

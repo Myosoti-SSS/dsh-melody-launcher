@@ -1,11 +1,11 @@
-import { Layers3, LoaderCircle } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { Layers3, LoaderCircle, PanelRight } from 'lucide-react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { LauncherApiProvider, resolveLauncherApi, useLauncherApi } from './api/client'
 import { AppHeader } from './components/AppHeader'
 import { LauncherHome } from './components/LauncherHome'
 import { SideNavigation } from './components/SideNavigation'
+import { DSHCopilotPanel } from './components/DSHCopilotPanel'
 import { Toast } from './components/Toast'
-import { AiInstallDialog } from './components/dialogs/AiInstallDialog'
 import { ConfirmDialog } from './components/dialogs/ConfirmDialog'
 import { CredentialDialog } from './components/dialogs/CredentialDialog'
 import { GitHubAccountDialog } from './components/dialogs/GitHubAccountDialog'
@@ -15,6 +15,7 @@ import { SettingsDialog } from './components/dialogs/SettingsDialog'
 import { UpdateDialog } from './components/dialogs/UpdateDialog'
 import { DSH_REPOSITORY } from './constants'
 import { useAiInstall } from './hooks/use-ai-install'
+import { useCopilotSessions } from './hooks/use-copilot-sessions'
 import { BUSY } from './hooks/use-async-action'
 import { useLauncherStore } from './hooks/use-launcher-store'
 import { useNavigation } from './hooks/use-navigation'
@@ -26,6 +27,7 @@ import { PacksView } from './views/PacksView'
 import { PluginsView } from './views/PluginsView'
 import { RuntimeView } from './views/RuntimeView'
 import { GitHubView } from './views/GitHubView'
+import { DshMarketView } from './views/DshMarketView'
 
 /**
  * 应用根。
@@ -47,6 +49,7 @@ function LauncherShell() {
   const navigation = useNavigation(message => store.showToast({ kind: 'error', message }))
   // AI 可能改 profile（安装组件），任务结束时刷新一次；toast 复用 store 的唯一实例。
   const ai = useAiInstall(() => { void store.refreshProfile() }, store.showToast)
+  const copilot = useCopilotSessions()
   // 整合包创建/导入是流式任务；结算后刷新包列表与快照状态。
   const packInstall = usePackInstall(() => {
     void store.refreshPacks()
@@ -59,6 +62,16 @@ function LauncherShell() {
   const [githubAccountOpen, setGitHubAccountOpen] = useState(false)
   const [createPackOpen, setCreatePackOpen] = useState(false)
   const [updateOpen, setUpdateOpen] = useState(false)
+  const [copilotOpen, setCopilotOpen] = useState(false)
+  const [copilotResizing, setCopilotResizing] = useState(false)
+  const [copilotWidth, setCopilotWidth] = useState(() => {
+    try {
+      const value = Number(localStorage.getItem('dsh-launcher:copilot-width'))
+      return Number.isFinite(value) && value >= 320 && value <= 720 ? value : 420
+    } catch {
+      return 420
+    }
+  })
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
       return localStorage.getItem('dsh-launcher:sidebar-collapsed') === 'true'
@@ -69,6 +82,10 @@ function LauncherShell() {
   const [confirmingRemoval, setConfirmingRemoval] = useState<ManagedPlugin | null>(null)
   // 仓库结构检测结果由各视图发起，App 统一持有，避免切页后丢失。
   const [repositoryAnalyses, setRepositoryAnalyses] = useState<Record<string, CatalogRepositoryAnalysis>>({})
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = store.settings?.uiTheme ?? 'forest'
+  }, [store.settings?.uiTheme])
 
   const installingResource = isInstallProgressActive(store.installProgress)
   const installingDsh = store.busy === BUSY.dshInstall
@@ -115,28 +132,33 @@ function LauncherShell() {
 
   return (
     <>
-      {navigation.surface === 'launcher' ? (
-        <LauncherHome
-          settings={settings}
-          profile={profile}
-          runtime={store.runtime}
-          dshInstallation={store.dshInstallation}
-          dshUpdate={store.dshUpdate}
-          installProgress={store.installProgress?.repository === DSH_REPOSITORY ? store.installProgress : null}
-          busy={runtimeBusy}
-          installingDsh={installingDsh}
-          onCredential={openApiConfig}
-          githubAuthStatus={store.githubAuthStatus}
-          activeRuntimeReplacement={store.activeRuntimeReplacement}
-          onGitHubAccount={() => setGitHubAccountOpen(true)}
-          onManage={navigation.showManager}
-          onToggleRuntime={toggleRuntime}
-          onUpdateDsh={() => { void store.updateDsh() }}
-          onOpenHarness={openHarness}
-          onClose={closeWindow}
-        />
-      ) : (
-        <div className="app-shell">
+      <div
+        className={`surface-stage surface-${navigation.surface}${navigation.transitionPhase === 'idle' ? '' : ` is-${navigation.transitionPhase}`}`}
+        aria-busy={navigation.transitionPhase !== 'idle'}
+      >
+        {navigation.surface === 'launcher' ? (
+          <LauncherHome
+            settings={settings}
+            profile={profile}
+            runtime={store.runtime}
+            dshInstallation={store.dshInstallation}
+            dshUpdate={store.dshUpdate}
+            installProgress={store.installProgress?.repository === DSH_REPOSITORY ? store.installProgress : null}
+            busy={runtimeBusy}
+            installingDsh={installingDsh}
+            onCredential={openApiConfig}
+            githubAuthStatus={store.githubAuthStatus}
+            activeRuntimeReplacement={store.activeRuntimeReplacement}
+            onGitHubAccount={() => setGitHubAccountOpen(true)}
+            onManage={navigation.showManager}
+            onToggleRuntime={toggleRuntime}
+            onUpdateDsh={() => { void store.updateDsh() }}
+            onOpenHarness={openHarness}
+            onClose={closeWindow}
+          />
+        ) : (
+          <>
+          <div className="app-shell">
           <AppHeader
             runtime={store.runtime}
             busy={runtimeBusy}
@@ -148,15 +170,25 @@ function LauncherShell() {
             githubAuthStatus={store.githubAuthStatus}
             activeRuntimeReplacement={store.activeRuntimeReplacement}
             launcherUpdate={store.launcherUpdate}
-            onBack={navigation.showLauncher}
+            showPackSwitcher={navigation.view === 'plugins'}
+            packs={store.packs}
+            activePackId={settings.activePackId}
+            packSwitcherDisabled={profileMutationLocked}
+            profileActiveCount={profile.activeBundles.length}
+            profileDisabledCount={profile.disabledCount}
+            installedSkillCount={store.installedSkills.length}
+            profileDirectory={profile.profileDir}
             onCredential={openApiConfig}
             onGitHubAccount={() => setGitHubAccountOpen(true)}
-            onSettings={() => setSettingsOpen(true)}
             onToggleRuntime={toggleRuntime}
             onUpdate={() => setUpdateOpen(true)}
+            onPackChange={packId => {
+              void (packId ? store.activatePack(packId) : store.deactivatePack())
+            }}
+            onOpenProfileDirectory={() => { void api.openPath(profile.profileDir) }}
             onClose={closeWindow}
           />
-          <div className={`app-body ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+          <div className={`app-body ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${copilotOpen ? 'copilot-open' : ''} ${copilotResizing ? 'copilot-resizing' : ''}`} style={{ '--copilot-width': `${copilotWidth}px` } as CSSProperties}>
             <SideNavigation
               view={navigation.view}
               profile={profile}
@@ -180,6 +212,7 @@ function LauncherShell() {
                   return next
                 })
               }}
+              onSettings={() => setSettingsOpen(true)}
               onChange={navigation.setView}
             />
             <main className="workspace">
@@ -196,8 +229,6 @@ function LauncherShell() {
                   profileLocked={profileMutationLocked}
                   settings={settings}
                   runtime={store.runtime}
-                  packs={store.packs}
-                  activePackId={settings.activePackId}
                   activeRuntimeReplacement={store.activeRuntimeReplacement}
                   runtimeBusy={runtimeBusy}
                   onSelect={plugin => store.selectPlugin(plugin.packageName)}
@@ -209,17 +240,13 @@ function LauncherShell() {
                   onReorder={store.reorderPlugins}
                   onRefresh={store.refreshProfile}
                   onBrowse={() => navigation.setView('discover')}
-                  onOpenPath={path => void api.openPath(path)}
                   onOpenRepository={url => void api.openExternal(url)}
-                  onPackChange={packId => {
-                    void (packId ? store.activatePack(packId) : store.deactivatePack())
-                  }}
                   onToggleRuntime={toggleRuntime}
                   onOpenHarness={openHarness}
                   onOpenRuntimeSettings={() => navigation.setView('runtime')}
                   onUninstall={setConfirmingRemoval}
                   onTrialPlugin={(packageName, profileName) => { void store.trialPlugin(packageName, profileName) }}
-                  onAdaptPlugin={(packageName, profileName) => { void ai.adaptPlugin(packageName, profileName) }}
+                  onAdaptPlugin={(packageName, profileName) => { setCopilotOpen(true); void ai.adaptPlugin(packageName, profileName) }}
                   aiActive={ai.active}
                   aiSubject={ai.status.subject}
                 />
@@ -266,14 +293,15 @@ function LauncherShell() {
                   }}
                   onError={message => store.showToast({ kind: 'error', message })}
                   onOpenRepository={url => void api.openExternal(url)}
-                  onAiInstall={repo => { void ai.start(repo.fullName, repo.defaultBranch) }}
+                  onAiInstall={repo => { setCopilotOpen(true); void ai.start(repo.fullName, repo.defaultBranch) }}
                   onTrialPlugin={(packageName, profileName) => { void store.trialPlugin(packageName, profileName) }}
-                  onAdaptPlugin={(packageName, profileName) => { void ai.adaptPlugin(packageName, profileName) }}
+                  onAdaptPlugin={(packageName, profileName) => { setCopilotOpen(true); void ai.adaptPlugin(packageName, profileName) }}
                   aiRepository={ai.active ? ai.status.repository : null}
                   aiSubject={ai.active ? ai.status.subject : null}
                   aiActive={ai.active}
                 />
               )}
+              {navigation.view === 'dsh-market' && <DshMarketView onProfileChanged={store.refreshProfile} />}
               {navigation.view === 'runtime' && (
                 <RuntimeView
                   runtime={store.runtime}
@@ -284,7 +312,7 @@ function LauncherShell() {
                   onOpenHarness={openHarness}
                   onClearLogs={store.clearLogs}
                   onOpenSettings={() => setSettingsOpen(true)}
-                  onRepairRuntime={() => { void ai.repairRuntime(settings.profileName) }}
+                  onRepairRuntime={() => { setCopilotOpen(true); void ai.repairRuntime(settings.profileName) }}
                   aiActive={ai.active}
                   activeRuntimeReplacement={store.activeRuntimeReplacement}
                 />
@@ -327,9 +355,37 @@ function LauncherShell() {
                 />
               )}
             </main>
+            <DSHCopilotPanel
+              state={copilot}
+              legacyAi={ai}
+              onLegacyApprove={ai.approve}
+              onLegacyCancel={ai.cancel}
+              onLegacyRollback={() => { void ai.rollback() }}
+              open={copilotOpen}
+              width={copilotWidth}
+              onResizeStateChange={setCopilotResizing}
+              onWidthChange={width => {
+                const next = Math.max(320, Math.min(720, width))
+                setCopilotWidth(next)
+                try { localStorage.setItem('dsh-launcher:copilot-width', String(next)) } catch { /* storage is optional */ }
+              }}
+            />
+            <div className="manager-edge-actions" aria-label="管理界面快捷操作">
+              <button className={`icon-button copilot-toggle ${copilotOpen ? 'active' : ''} ${ai.active || copilot.sessions.some(session => ['queued', 'preparing', 'running'].includes(session.phase)) ? 'busy' : ''}`} type="button" title={copilotOpen ? '收起 DSH Copilot' : '打开 DSH Copilot'} aria-label={copilotOpen ? '收起 DSH Copilot' : '打开 DSH Copilot'} onClick={() => setCopilotOpen(current => !current)}>
+                <PanelRight size={19} />
+                {(ai.active || copilot.sessions.some(session => ['queued', 'preparing', 'running'].includes(session.phase))) && <span className="copilot-toggle-dot" />}
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+          </div>
+          <button className="icon-button manager-back" type="button" title="返回启动页" aria-label="返回启动页" onClick={navigation.showLauncher}>
+            <svg className="manager-corner-mark" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+              <path d="M36 0V29.5A6.5 6.5 0 0 1 29.5 36H0Z" />
+            </svg>
+          </button>
+          </>
+        )}
+      </div>
 
       {settingsOpen && (
         <SettingsDialog
@@ -369,20 +425,6 @@ function LauncherShell() {
             setConfirmingRemoval(null)
             void store.uninstallPlugin(plugin)
           }}
-        />
-      )}
-      {(ai.active || ai.settled) && (
-        <AiInstallDialog
-          status={ai.status}
-          logs={ai.logs}
-          pendingApproval={ai.pendingApproval}
-          hasSnapshot={ai.hasSnapshot}
-          busy={ai.busy !== null}
-          cancelling={ai.cancelling}
-          onApprove={ai.approve}
-          onCancel={ai.cancel}
-          onRollback={() => void ai.rollback()}
-          onClose={ai.reset}
         />
       )}
       {createPackOpen && packInstall.phase === 'idle' && (

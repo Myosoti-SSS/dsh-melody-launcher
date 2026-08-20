@@ -1,9 +1,14 @@
 import type {
   ApplicationRepositoryAnalysis,
   AiInstallEvent,
+  AiMessage,
+  AiSession,
+  AiSessionCreateInput,
+  AiSessionEvent,
   AiInstallStatus,
   AppSettings,
   CatalogAnalysisProgress,
+  CatalogIndexEntry,
   CatalogDiscoveryResult,
   CatalogImportResult,
   CatalogRepositoryAnalysis,
@@ -11,6 +16,8 @@ import type {
   CredentialStatus,
   CustomApiProvider,
   DshInstallationStatus,
+  DshMarketCatalog,
+  DshMarketProgress,
   DshUpdateStatus,
   GitHubAuthStatus,
   GitHubPullRequestSummary,
@@ -47,6 +54,7 @@ let demoSettings: AppSettings = {
   launchArgs: ['--yes', '@deepseek-ai/dsh', 'web'],
   webPort: 3080,
   openAfterLaunch: true,
+  uiTheme: 'forest',
 }
 
 let demoPlugins: ManagedPlugin[] = [
@@ -151,6 +159,11 @@ let demoInstalledApplications: InstalledApplicationAddon[] = [{
   updatedAt: '2026-08-17T00:00:00.000Z',
 }]
 let demoInstalledPresets: InstalledPreset[] = []
+let demoDshMarketPlugins: DshMarketCatalog['plugins'] = [
+  { name: 'dsh-explorer', owner: 'No-PRM', url: 'https://github.com/No-PRM/dsh-explorer', category: 'ui', description: { zh: 'Git 优先的文件树侧栏。', en: 'Git-first file tree sidebar.' }, npm: null, stars: 2, added: '2026-08-16', install: 'dsh plugin --profile web add github:No-PRM/dsh-explorer', installed: false, enabled: false, version: null, updateAvailable: false, updateVersion: null },
+  { name: 'dsh-message-rail', owner: 'wx-yss', url: 'https://github.com/wx-yss/dsh-message-rail', category: 'ui', description: { zh: '会话消息导航栏。', en: 'Session message navigation rail.' }, npm: 'dsh-message-rail', stars: 2, added: '2026-08-15', install: 'dsh plugin --profile web add dsh-message-rail', installed: false, enabled: false, version: null, updateAvailable: false, updateVersion: null },
+  { name: 'dsh-web-mobile', owner: 'mexiaosqwq', url: 'https://github.com/mexiaosqwq/dsh-web-mobile', category: 'ui', description: { zh: '移动端 Web UI 适配。', en: 'Mobile-adaptive Web UI.' }, npm: null, stars: 15, added: '2026-08-15', install: 'dsh plugin --profile web add github:mexiaosqwq/dsh-web-mobile', installed: false, enabled: false, version: null, updateAvailable: false, updateVersion: null },
+]
 
 let demoRuntime: RuntimeState = { running: false, pid: null, startedAt: null, url: null, port: null }
 let demoCredential: CredentialStatus = { configured: false }
@@ -186,7 +199,74 @@ const installProgressListeners = new Set<(progress: InstallProgress) => void>()
 const catalogAnalysisProgressListeners = new Set<(progress: CatalogAnalysisProgress) => void>()
 const pluginTrialListeners = new Set<(result: PluginTrialResult) => void>()
 const aiEventListeners = new Set<(event: AiInstallEvent) => void>()
+const aiSessionEventListeners = new Set<(event: AiSessionEvent) => void>()
 const packProgressListeners = new Set<(event: PackProgressEvent) => void>()
+const dshMarketProgressListeners = new Set<(progress: DshMarketProgress) => void>()
+
+function demoDshMarketCatalog(): DshMarketCatalog {
+  return {
+    updated: '2026-08-16',
+    count: demoDshMarketPlugins.length,
+    categories: { ui: { zh: 'UI 增强', en: 'UI Enhancements' } },
+    plugins: demoDshMarketPlugins.map(plugin => ({ ...plugin, description: { ...plugin.description } })),
+  }
+}
+
+function dshMarketRepository(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    if (parsed.hostname.toLowerCase() !== 'github.com') return null
+    const parts = parsed.pathname.split('/').filter(Boolean)
+    if (parts.length < 2) return null
+    return `${parts[0]}/${parts[1]}`.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+function marketMatchesDemoPlugin(market: DshMarketCatalog['plugins'][number], plugin: ManagedPlugin): boolean {
+  const repository = dshMarketRepository(market.url)
+  return (repository !== null && plugin.repositoryFullName?.toLowerCase() === repository)
+    || (market.npm !== null && plugin.packageName.toLowerCase() === market.npm.toLowerCase())
+    || plugin.packageName.toLowerCase() === market.name.toLowerCase()
+}
+
+function syncDemoMarketPluginState(plugin: ManagedPlugin): void {
+  const market = demoDshMarketPlugins.find(item => marketMatchesDemoPlugin(item, plugin))
+  if (market?.installed) market.enabled = plugin.enabled
+}
+
+function syncDemoPluginStateFromMarket(market: DshMarketCatalog['plugins'][number]): void {
+  demoPlugins = renumber(demoPlugins.map(plugin => marketMatchesDemoPlugin(market, plugin)
+    ? { ...plugin, enabled: market.enabled }
+    : plugin))
+}
+
+function upsertDemoPluginFromMarket(market: DshMarketCatalog['plugins'][number]): void {
+  const repository = dshMarketRepository(market.url)
+  const packageName = market.npm ?? market.name
+  const existing = demoPlugins.findIndex(plugin => marketMatchesDemoPlugin(market, plugin))
+  const next: ManagedPlugin = {
+    packageName,
+    displayName: market.name,
+    version: market.version ?? '1.0.0',
+    description: market.description.zh ?? market.description.en ?? '来自 DSH Market 的插件。',
+    repository: market.url,
+    repositoryFullName: repository ?? undefined,
+    enabled: market.enabled,
+    builtin: false,
+    locked: false,
+    compatible: true,
+    order: null,
+  }
+  demoPlugins = existing >= 0
+    ? demoPlugins.map((plugin, index) => index === existing ? { ...plugin, ...next } : plugin)
+    : renumber([...demoPlugins, next])
+}
+
+function removeDemoPluginFromMarket(market: DshMarketCatalog['plugins'][number]): void {
+  demoPlugins = renumber(demoPlugins.filter(plugin => !marketMatchesDemoPlugin(market, plugin)))
+}
 
 let demoPacks: PackStatus[] = [
   {
@@ -225,6 +305,32 @@ let demoAiStatus: AiInstallStatus = { phase: 'idle', repository: null, taskKind:
 const demoPluginTrials = new Map<string, PluginTrialResult>()
 let demoAiResolve: ((allow: boolean) => void) | null = null
 let demoAiCancelled = false
+let demoAiSessions: AiSession[] = []
+
+function emitDemoSession(event: AiSessionEvent): void {
+  aiSessionEventListeners.forEach(listener => listener(event))
+}
+
+function demoSession(input: AiSessionCreateInput = {}): AiSession {
+  const timestamp = new Date().toISOString()
+  const session: AiSession = {
+    id: `demo-copilot-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    kind: input.kind ?? 'chat',
+    title: input.title ?? (input.kind === 'repository-install' ? 'AI 尝试安装' : '新对话'),
+    subject: input.subject ?? null,
+    phase: 'idle',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    queue: { position: null, total: 0, running: false, mutating: false },
+    messageCount: 0,
+    pendingApproval: null,
+    hasSnapshot: false,
+    messages: [],
+  }
+  demoAiSessions = [session, ...demoAiSessions]
+  emitDemoSession({ kind: 'session-created', session })
+  return session
+}
 
 function emitAiEvent(event: AiInstallEvent): void {
   aiEventListeners.forEach(listener => listener(event))
@@ -693,6 +799,7 @@ export const demoApi: LauncherApi = {
           : application,
       )
     }
+    if (selected) syncDemoMarketPluginState({ ...selected, enabled })
     return { profile: profile(), installedApplications: demoInstalledApplications, linked }
   },
   reorderPlugins: async packageNames => {
@@ -725,6 +832,20 @@ export const demoApi: LauncherApi = {
       installedPresets: demoInstalledPresets,
     }
   },
+  refreshCatalogIndex: async (): Promise<CatalogIndexEntry[]> => demoRepositories.map(repository => {
+    const analysis = demoCatalogAnalysis(repository.fullName, repository.defaultBranch)
+    const tags = analysis.kind === 'dsh'
+      ? ['dsh']
+      : analysis.kind === 'invalid'
+        ? ['invalid']
+        : analysis.componentKinds.map(kind => kind === 'application' ? 'runtime' : kind)
+    return {
+      repository: repository.fullName,
+      defaultBranch: repository.defaultBranch,
+      repositoryUpdatedAt: repository.updatedAt,
+      tags: tags as CatalogIndexEntry['tags'],
+    }
+  }),
   analyzeCatalogRepository: demoAnalyzeCatalogRepository,
   importCatalogUrl: async (url): Promise<CatalogImportResult> => {
     const parsed = parseGitHubImportUrl(url)
@@ -750,6 +871,45 @@ export const demoApi: LauncherApi = {
     const analysis = demoCatalogAnalysis(parsed.fullName, branch ?? repository.defaultBranch)
     return { repository, analysis }
   },
+  loadDshMarket: async (): Promise<DshMarketCatalog> => {
+    dshMarketProgressListeners.forEach(listener => listener({ name: '', phase: 'loading', percent: null, message: '正在读取 dsh-market 精选目录' }))
+    await wait(180)
+    return demoDshMarketCatalog()
+  },
+  installDshMarketPlugin: async name => {
+    const plugin = demoDshMarketPlugins.find(item => item.name === name)
+    if (!plugin) throw new Error('插件不在 dsh-market 精选目录中。')
+    dshMarketProgressListeners.forEach(listener => listener({ name, phase: 'downloading', percent: 52, message: '正在下载插件及依赖' }))
+    await wait(500)
+    plugin.installed = true; plugin.enabled = true; plugin.version = '1.0.0'
+    upsertDemoPluginFromMarket(plugin)
+    return demoDshMarketPlugins.filter(item => item.installed)
+  },
+  updateDshMarketPlugin: async name => {
+    const plugin = demoDshMarketPlugins.find(item => item.name === name)
+    if (!plugin?.installed) throw new Error('插件尚未安装，不能更新。')
+    dshMarketProgressListeners.forEach(listener => listener({ name, phase: 'verifying', percent: 86, message: '正在检查插件更新' }))
+    await wait(450)
+    plugin.updateAvailable = false; plugin.updateVersion = null
+    upsertDemoPluginFromMarket(plugin)
+    return demoDshMarketPlugins.filter(item => item.installed)
+  },
+  uninstallDshMarketPlugin: async name => {
+    const plugin = demoDshMarketPlugins.find(item => item.name === name)
+    if (!plugin?.installed) throw new Error('插件尚未安装。')
+    await wait(300)
+    plugin.installed = false; plugin.enabled = false; plugin.version = null
+    removeDemoPluginFromMarket(plugin)
+    return demoDshMarketPlugins.filter(item => item.installed)
+  },
+  toggleDshMarketPlugin: async (name, enabled) => {
+    const plugin = demoDshMarketPlugins.find(item => item.name === name)
+    if (!plugin?.installed) throw new Error('插件尚未安装。')
+    plugin.enabled = enabled
+    syncDemoPluginStateFromMarket(plugin)
+    return demoDshMarketPlugins.filter(item => item.installed)
+  },
+  checkDshMarketUpdates: async (): Promise<Record<string, { kind: 'npm'; current: string | null; latest: string | null; updateAvailable: boolean }>> => ({}),
   installPlugin: async request => {
     const fullName = typeof request === 'string' ? request : request.repository
     const repo = demoRepositories.find(item => item.fullName === fullName)
@@ -1030,6 +1190,47 @@ export const demoApi: LauncherApi = {
   },
   aiStatus: async () => demoAiStatus,
   aiHasSnapshot: async () => demoAiStatus.phase !== 'idle',
+  listAiSessions: async () => demoAiSessions.map(session => ({ ...session, messages: session.messages.map(message => ({ ...message })) })),
+  createAiSession: async input => demoSession(input),
+  sendAiSessionMessage: async (sessionId, text) => {
+    const session = demoAiSessions.find(item => item.id === sessionId)
+    if (!session) throw new Error('DSH Copilot 会话不存在。')
+    const userMessage: AiMessage = { id: `user-${Date.now()}`, role: 'user', text, createdAt: new Date().toISOString() }
+    session.messages.push(userMessage)
+    session.phase = 'running'
+    session.updatedAt = new Date().toISOString()
+    session.messageCount = session.messages.length
+    emitDemoSession({ kind: 'message', sessionId, message: userMessage })
+    emitDemoSession({ kind: 'session-updated', session })
+    window.setTimeout(() => {
+      const message: AiMessage = {
+        id: `assistant-${Date.now()}`,
+        role: 'assistant',
+        text: `已收到：${text}\n\n这是浏览器演示模式中的 DSH Copilot 回复。`,
+        createdAt: new Date().toISOString(),
+      }
+      session.messages.push(message)
+      session.phase = 'done'
+      session.updatedAt = new Date().toISOString()
+      session.messageCount = session.messages.length
+      emitDemoSession({ kind: 'message', sessionId, message })
+      emitDemoSession({ kind: 'session-updated', session })
+    }, 600)
+    return session
+  },
+  cancelAiSession: async sessionId => {
+    const session = demoAiSessions.find(item => item.id === sessionId)
+    if (session) {
+      session.phase = 'cancelled'
+      emitDemoSession({ kind: 'session-updated', session })
+    }
+  },
+  approveAiSession: async () => true,
+  rollbackAiSession: async () => ({ restored: 2, profileName: demoSettings.profileName }),
+  deleteAiSession: async sessionId => {
+    demoAiSessions = demoAiSessions.filter(item => item.id !== sessionId)
+    emitDemoSession({ kind: 'deleted', sessionId })
+  },
   listPacks: async () => demoPacks.map(pack => ({ ...pack, plugins: pack.plugins.map(plugin => ({ ...plugin })) })),
   createPack: async request => {
     const now = new Date().toISOString()
@@ -1217,6 +1418,10 @@ export const demoApi: LauncherApi = {
     catalogAnalysisProgressListeners.add(listener)
     return () => catalogAnalysisProgressListeners.delete(listener)
   },
+  onDshMarketProgress: listener => {
+    dshMarketProgressListeners.add(listener)
+    return () => dshMarketProgressListeners.delete(listener)
+  },
   onPackProgress: listener => {
     packProgressListeners.add(listener)
     return () => packProgressListeners.delete(listener)
@@ -1224,5 +1429,9 @@ export const demoApi: LauncherApi = {
   onAiInstallEvent: listener => {
     aiEventListeners.add(listener)
     return () => aiEventListeners.delete(listener)
+  },
+  onAiSessionEvent: listener => {
+    aiSessionEventListeners.add(listener)
+    return () => aiSessionEventListeners.delete(listener)
   },
 }

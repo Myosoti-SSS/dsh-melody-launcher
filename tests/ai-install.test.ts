@@ -15,6 +15,7 @@ import {
   createAiInstaller,
   createProfileSnapshot,
   decideApproval,
+  formatAcpRuntimeInstallFailure,
   healCredentialsLock,
   isAcpRuntimeReady,
   isReadOnlyPermission,
@@ -22,6 +23,7 @@ import {
   isWorkspaceFileRequest,
   lockCredentialsOut,
   renderAcpComposition,
+  resolveAcpPersona,
   restoreCredentialsLock,
   restoreProfileSnapshot,
 } from '../electron/ai-install'
@@ -330,6 +332,22 @@ describe('aiInfrastructureFailure', () => {
   })
 })
 
+describe('resolveAcpPersona', () => {
+  it('安全模式把用户提示作为附加指引', () => {
+    const persona = resolveAcpPersona({ aiDeveloperMode: false, aiPrompt: '优先解释插件依赖。' }, 'linux')
+    expect(persona).toContain('coding assistant')
+    expect(persona).toContain('优先解释插件依赖。')
+    expect(persona).toContain('Never read, reveal, copy, or modify credentials')
+  })
+
+  it('开发者模式替换基础 persona 但不能移除固定安全段', () => {
+    const persona = resolveAcpPersona({ aiDeveloperMode: true, aiPrompt: '你是自定义 DSH 专家。' }, 'win32')
+    expect(persona).toContain('你是自定义 DSH 专家。')
+    expect(persona).not.toContain('Use the pwsh tool')
+    expect(persona).toContain('Any write, install, delete, process execution')
+  })
+})
+
 describe('AI task cancellation', () => {
   it('cancels a runtime repair while the managed runtime is still preparing', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'ai-cancel-preparing-'))
@@ -412,6 +430,16 @@ describe('renderAcpComposition', () => {
     }
   })
 
+  it('Copilot 极简模式只挂载受控 Shell 依赖与 str_replace_editor', () => {
+    const yaml = renderAcpComposition({ persistenceRoot: '/x', workspaceRoot: '/workspace', platform: 'linux', agentMode: 'minimal' })
+    const value = parseDocument(yaml).toJS() as Array<Record<string, unknown>>
+    expect(value.find(entry => entry.id === 'str-replace-editor')?.name).toBe('@deepseek-ai/dsh-tool-str-replace-editor')
+    expect(value.find(entry => entry.id === 'tool-fs')).toBeUndefined()
+    expect(value.find(entry => entry.id === 'tool-todo')).toBeUndefined()
+    expect(value.find(entry => entry.id === 'compaction-basic')).toBeUndefined()
+    expect(value.find(entry => entry.id === 'acp-agent')?.config).toMatchObject({ workspaceContext: false })
+  })
+
   it('强制 workspace-write 与单次审批', () => {
     const yaml = renderAcpComposition({ persistenceRoot: '/x', workspaceRoot: '/workspace', platform: 'linux' })
     const value = parseDocument(yaml).toJS() as Array<Record<string, unknown>>
@@ -488,6 +516,24 @@ describe('isAcpRuntimeReady', () => {
     } finally {
       await rm(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('formatAcpRuntimeInstallFailure', () => {
+  it('保留 ERESOLVE 的冲突包，而不是只显示日志尾部残片', () => {
+    const message = formatAcpRuntimeInstallFailure(1, [
+      'npm error ERESOLVE unable to resolve dependency tree',
+      'npm error Found: @deepseek-ai/dsh-user-approval@0.1.0-rc.6',
+      'npm error Could not resolve dependency:',
+      'npm error peer @deepseek-ai/dsh-user-approval@"^0.1.0-rc.8" from @deepseek-ai/dsh-acp@0.1.0-rc.8',
+    ].join('\n'))
+    expect(message).toContain('peer 依赖版本冲突')
+    expect(message).toContain('@deepseek-ai/dsh-user-approval@0.1.0-rc.6')
+    expect(message).toContain('@deepseek-ai/dsh-user-approval@"^0.1.0-rc.8"')
+  })
+
+  it('普通失败保留最后一段 npm 输出', () => {
+    expect(formatAcpRuntimeInstallFailure(1, 'npm error network timeout')).toContain('network timeout')
   })
 })
 

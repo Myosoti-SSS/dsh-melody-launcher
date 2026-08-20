@@ -8,6 +8,8 @@ import { ACP_RUNTIME_DIRNAME, CREDENTIALS_LOCK_DIRNAME, createAiInstaller, healC
 import { createApplicationAddonManager, type ApplicationAddonManager } from './application-addons'
 import { applyWindowMode, createMainWindow, createRendererChannel } from './app-window'
 import { createCatalogSyncService, type CatalogSyncService } from './catalog-sync'
+import { createCopilotSessionManager, type CopilotSessionManager } from './copilot-sessions'
+import { createDshMarketService, type DshMarketService } from './dsh-market'
 import { runCommand } from './command'
 import { readDeepSeekApiKey } from './credentials'
 import { findInstalledDsh } from './dsh-install'
@@ -59,11 +61,13 @@ interface Services {
   installer: Installer
   pluginTrial: PluginTrialManager
   aiInstaller: AiInstaller
+  copilot: CopilotSessionManager
   packManager: PackManager
   launcherUpdater: LauncherUpdater
   githubAuth: GitHubAuthService
   applicationAddons: ApplicationAddonManager
   catalogSync: CatalogSyncService
+  dshMarket: DshMarketService
 }
 
 // app.getPath 依赖 app 就绪，因此服务在 whenReady 之后才装配。
@@ -187,6 +191,18 @@ function createServices(): Services {
     githubFetch: githubAuth.fetch,
   })
 
+  // This service deliberately does not use the unified resource-market
+  // analyzers or installers. It mirrors dsh-market's curated registry and
+  // package command rules behind a separate API surface.
+  const dshMarket = createDshMarketService({
+    readSettings: () => settings.read(),
+    prepareNodeRuntime: () => prepareNodeRuntime('plugin'),
+    preparePnpmRuntime: node => preparePnpmRuntime('plugin', node),
+    fetchImpl: githubAuth.fetch,
+    emitProgress: progress => events.dshMarketProgress(progress),
+    emitOutput: (level, text) => events.output('plugin', level, text),
+  })
+
   const pluginTrial = createPluginTrialManager({
     readSettings: () => settings.read(),
     prepareNodeRuntime: () => prepareNodeRuntime('plugin'),
@@ -199,6 +215,28 @@ function createServices(): Services {
     isInstallerBusy: () => installer.isBusy(),
   })
 
+  let packManager: PackManager | null = null
+  const copilot = createCopilotSessionManager({
+    filePath: path.join(userData, 'copilot-sessions.json'),
+    runtimeRoot: path.join(userData, ACP_RUNTIME_DIRNAME),
+    snapshotRoot: path.join(userData, 'ai-snapshots'),
+    readSettings: () => settings.read(),
+    readApiKey: dshHome => readDeepSeekApiKey(dshHome),
+    prepareNodeRuntime: () => prepareNodeRuntime('ai'),
+    preparePnpmRuntime: nodeRuntime => preparePnpmRuntime('ai', nodeRuntime),
+    emitEvent: event => events.aiSessionEvent(event),
+    emitOutput: (level, text) => events.output('ai', level, text),
+    mutationBlockReason: () => {
+      if (runtime.isRunning()) return '请先停止 DSH 运行时'
+      if (installer.isBusy()) return '资源安装正在进行'
+      if (pluginTrial.isBusy()) return '插件试运行正在进行'
+      if (applicationAddons.isBusy()) return '应用加载项操作正在进行'
+      if (dshMarket.isBusy()) return 'DSH Market 操作正在进行'
+      if (packManager?.isBusy()) return '整合包操作正在进行'
+      return null
+    },
+  })
+
   const aiInstaller = createAiInstaller({
     readSettings: () => settings.read(),
     prepareNodeRuntime: () => prepareNodeRuntime('ai'),
@@ -206,7 +244,10 @@ function createServices(): Services {
     acpRuntimeRoot: path.join(userData, ACP_RUNTIME_DIRNAME),
     snapshotRoot: path.join(userData, 'ai-snapshots'),
     emitOutput: (level, text) => events.output('ai', level, text),
-    emitEvent: event => events.aiInstallEvent(event),
+    emitEvent: event => {
+      events.aiInstallEvent(event)
+      void copilot.updateLegacy(event)
+    },
     isRuntimeRunning: () => runtime.isRunning(),
     isInstallerBusy: () => installer.isBusy(),
     analyzePlugin: (repository, defaultBranch) => installer.analyzePlugin(repository, defaultBranch),
@@ -293,7 +334,7 @@ function createServices(): Services {
     togglePreset: (name, enabled) => installer.togglePreset(name, enabled),
   }
 
-  const packManager = createPackManager({
+  packManager = createPackManager({
     readSettings: () => settings.read(),
     saveSettings: next => settings.save(next),
     registryPath: path.join(userData, 'packs.json'),
@@ -324,7 +365,7 @@ function createServices(): Services {
     .then(current => healCredentialsLock(current.dshHome, path.join(userData, CREDENTIALS_LOCK_DIRNAME)))
     .catch(() => { /* 设置未就绪可忽略，锁会在下次 AI 会话前置处理 */ })
 
-  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, packManager, githubAuth, applicationAddons, catalogSync }
+  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager: packManager!, githubAuth, applicationAddons, catalogSync, dshMarket }
 }
 
 function openMainWindow(): void {
@@ -390,6 +431,7 @@ async function shutdownLauncherProcesses(): Promise<void> {
   if (current?.runtime.isRunning()) gracefulTasks.push(current.runtime.stop())
   if (current?.pluginTrial.isBusy()) gracefulTasks.push(current.pluginTrial.cancel())
   if (current?.aiInstaller.isBusy()) gracefulTasks.push(current.aiInstaller.cancel())
+  if (current?.copilot.isBusy()) gracefulTasks.push(current.copilot.shutdown())
   if (current?.packManager.isBusy()) gracefulTasks.push(waitForIdle(() => current.packManager.isBusy()))
   if (current?.installer.isBusy()) gracefulTasks.push(waitForIdle(() => current.installer.isBusy()))
   if (current?.applicationAddons.isBusy()) gracefulTasks.push(waitForIdle(() => current.applicationAddons.isBusy()))

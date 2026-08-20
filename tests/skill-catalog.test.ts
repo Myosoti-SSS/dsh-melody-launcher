@@ -1,38 +1,41 @@
-import AdmZip from 'adm-zip'
 import { describe, expect, it } from 'vitest'
 import { analyzeSkillRepository } from '../electron/skill-catalog'
 
-function archiveResponse(files: Record<string, string>, root = 'skill-pack-main'): Response {
-  const zip = new AdmZip()
-  for (const [filePath, contents] of Object.entries(files)) {
-    zip.addFile(`${root}/${filePath}`, Buffer.from(contents))
-  }
-  const archive = zip.toBuffer()
-  // Response 只接受 BodyInit；较新的 @types/node 把 Buffer 变成了泛型
-  // Buffer<ArrayBufferLike>，不再匹配该联合类型。转成 Uint8Array 后
-  // 字节完全一致，且无需类型断言。
-  return new Response(new Uint8Array(archive), {
-    status: 200,
-    headers: { 'content-length': String(archive.byteLength) },
-  })
-}
-
-function mockFetch(response: Response, expectedUrl: string): typeof fetch {
+function mockFetch(repository: string, files: Record<string, string>, oversized: string[] = []): typeof fetch {
+  const commit = 'a'.repeat(40)
   return (async (input: string | URL | Request) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
-    expect(url).toBe(expectedUrl)
-    return response.clone()
+    const parsed = new URL(url)
+    if (parsed.hostname === 'api.github.com' && parsed.pathname.includes(`/repos/${repository}/commits/`)) {
+      return new Response(JSON.stringify({ sha: commit }), { status: 200 })
+    }
+    if (parsed.hostname === 'api.github.com' && parsed.pathname.endsWith(`/repos/${repository}/git/trees/${commit}`)) {
+      return new Response(JSON.stringify({
+        tree: Object.entries(files).map(([path, content]) => ({
+          path,
+          type: 'blob',
+          size: oversized.includes(path) ? 3 * 1024 * 1024 : Buffer.byteLength(content),
+        })),
+      }), { status: 200 })
+    }
+    if (parsed.hostname === 'raw.githubusercontent.com') {
+      const path = decodeURIComponent(parsed.pathname.split('/').slice(4).join('/'))
+      if (files[path] === undefined) return new Response('', { status: 404 })
+      const content = files[path]
+      return new Response(content, { status: 200, headers: { 'content-length': String(Buffer.byteLength(content)) } })
+    }
+    throw new Error(`未模拟的请求：${url}`)
   }) as typeof fetch
 }
 
 describe('GitHub skill analysis', () => {
   it('finds multiple valid skill bundles and ignores ordinary markdown', async () => {
     const repository = 'demo/skill-pack'
-    const analysis = await analyzeSkillRepository(repository, 'main', mockFetch(archiveResponse({
+    const analysis = await analyzeSkillRepository(repository, 'main', mockFetch(repository, {
       'README.md': '# Readme',
       'academic/SKILL.md': '---\nname: academic\ndescription: Academic workflow.\n---\nBody',
       'skills/release/SKILL.md': '---\nname: release-check\ndescription: Release workflow.\n---\nBody',
-    }), 'https://codeload.github.com/demo/skill-pack/zip/refs/heads/main'))
+    }))
 
     expect(analysis.installability).toBe('choice')
     expect(analysis.targets.map(target => target.name)).toEqual(['academic', 'release-check'])
@@ -42,10 +45,10 @@ describe('GitHub skill analysis', () => {
 
   it('marks a topic repository without valid frontmatter as invalid', async () => {
     const repository = 'demo/not-a-skill'
-    const analysis = await analyzeSkillRepository(repository, 'main', mockFetch(archiveResponse({
+    const analysis = await analyzeSkillRepository(repository, 'main', mockFetch(repository, {
       'README.md': '# Index',
       'SKILL.md': '# Missing frontmatter',
-    }, 'not-a-skill-main'), 'https://codeload.github.com/demo/not-a-skill/zip/refs/heads/main'))
+    }))
 
     expect(analysis.installability).toBe('invalid')
     expect(analysis.targets).toEqual([])
@@ -53,9 +56,9 @@ describe('GitHub skill analysis', () => {
 
   it('supports a flat markdown skill in the repository root', async () => {
     const repository = 'demo/flat-skill'
-    const analysis = await analyzeSkillRepository(repository, 'feature/skills', mockFetch(archiveResponse({
+    const analysis = await analyzeSkillRepository(repository, 'feature/skills', mockFetch(repository, {
       'quick-review.md': '---\nname: quick-review\ndescription: Review a change.\nuser-invocable: false\n---\nBody',
-    }, 'flat-skill-feature-skills'), 'https://codeload.github.com/demo/flat-skill/zip/refs/heads/feature/skills'))
+    }))
 
     expect(analysis.installability).toBe('ready')
     expect(analysis.targets[0]).toMatchObject({
@@ -67,15 +70,22 @@ describe('GitHub skill analysis', () => {
     })
   })
 
-  it('rejects an oversized archive before reading it', async () => {
-    const response = new Response('small body', {
-      status: 200,
-      headers: { 'content-length': String(65 * 1024 * 1024) },
-    })
-    await expect(analyzeSkillRepository(
+  it('skips oversized candidate documents without downloading the full repository', async () => {
+    const analysis = await analyzeSkillRepository(
       'demo/too-large',
       'main',
-      mockFetch(response, 'https://codeload.github.com/demo/too-large/zip/refs/heads/main'),
-    )).rejects.toThrow('压缩包过大')
+      mockFetch('demo/too-large', { 'SKILL.md': 'too large' }, ['SKILL.md']),
+    )
+    expect(analysis.installability).toBe('invalid')
+    expect(analysis.targets).toEqual([])
+  })
+
+  it('stops clearly when GitHub truncates the directory tree', async () => {
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('/commits/main')) return new Response(JSON.stringify({ sha: 'b'.repeat(40) }))
+      return new Response(JSON.stringify({ truncated: true, tree: [] }))
+    }) as typeof fetch
+    await expect(analyzeSkillRepository('demo/truncated', 'main', fetchImpl)).rejects.toThrow('目录过大')
   })
 })
