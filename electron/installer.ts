@@ -499,7 +499,10 @@ export function createInstaller(options: InstallerOptions): Installer {
       }
     }
 
-    if (result.exitCode !== 0) throw new Error(`插件操作失败（代码 ${result.exitCode}），请查看运行日志。`)
+    if (result.exitCode !== 0) {
+      const diagnostics = result.output.slice(-4_000).trim()
+      throw new Error(`插件操作失败（代码 ${result.exitCode}）。${diagnostics ? `\n${diagnostics}` : ' 请查看运行日志。'}`)
+    }
     options.emitOutput('success', '插件操作完成。')
   }
 

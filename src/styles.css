@@ -91,6 +91,20 @@
   --chrome-shadow: 0 5px 16px rgba(35, 42, 39, 0.1);
 }
 
+/* Keep long-running resource checks mounted while another manager view is visible. */
+.surface-host {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  border-radius: inherit;
+}
+
+.view-hidden {
+  display: none !important;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -139,8 +153,9 @@ body {
   pointer-events: none;
 }
 
-.surface-stage > .launcher-home,
-.surface-stage > .app-shell {
+.surface-stage > .surface-host,
+.surface-stage > .surface-host > .launcher-home,
+.surface-stage > .surface-host > .app-shell {
   width: 100%;
   height: 100%;
   border-radius: inherit;
@@ -153,18 +168,16 @@ body {
   pointer-events: none;
 }
 
-.surface-stage.is-exiting > .launcher-home,
-.surface-stage.is-exiting > .app-shell,
-.surface-stage.is-entering > .launcher-home,
-.surface-stage.is-entering > .app-shell {
+.surface-stage.is-exiting > .surface-host:not(.view-hidden),
+.surface-stage.is-entering > .surface-host:not(.view-hidden) {
   will-change: transform, opacity;
 }
 
-.surface-launcher.is-exiting > .launcher-home {
+.surface-launcher.is-exiting > .launcher-surface-host {
   animation: launcher-surface-exit 28ms cubic-bezier(.32, .72, .35, 1) both;
 }
 
-.surface-manager.is-entering > .app-shell {
+.surface-manager.is-entering > .manager-surface-host {
   animation: manager-surface-enter 100ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
@@ -181,11 +194,11 @@ body {
   animation: surface-manager-cover 132ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
-.surface-manager.is-exiting > .app-shell {
+.surface-manager.is-exiting > .manager-surface-host {
   animation: manager-surface-exit 28ms cubic-bezier(.32, .72, .35, 1) both;
 }
 
-.surface-launcher.is-entering > .launcher-home {
+.surface-launcher.is-entering > .launcher-surface-host {
   animation: launcher-surface-enter 100ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
@@ -240,10 +253,10 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .surface-launcher.is-exiting > .launcher-home,
-  .surface-manager.is-entering > .app-shell,
-  .surface-manager.is-exiting > .app-shell,
-  .surface-launcher.is-entering > .launcher-home {
+  .surface-launcher.is-exiting > .launcher-surface-host,
+  .surface-manager.is-entering > .manager-surface-host,
+  .surface-manager.is-exiting > .manager-surface-host,
+  .surface-launcher.is-entering > .launcher-surface-host {
     animation-duration: 1ms;
   }
 }
@@ -292,13 +305,15 @@ input:focus-visible {
   position: absolute;
   z-index: 4;
   top: 0;
-  right: 42px;
+  right: 126px;
   left: 0;
   height: 36px;
   -webkit-app-region: drag;
 }
 
+.launcher-window-button,
 .launcher-window-close,
+.manager-window-button,
 .manager-window-close {
   display: grid;
   width: 42px;
@@ -321,10 +336,32 @@ input:focus-visible {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.58);
 }
 
+.launcher-window-button {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  color: rgba(255, 255, 255, 0.86);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.58);
+}
+
+.launcher-window-button.minimize {
+  right: 84px;
+}
+
+.launcher-window-button.maximize {
+  right: 42px;
+}
+
 .launcher-window-close:hover,
 .manager-window-close:hover {
   color: #fff;
   background: #c93636;
+}
+
+.launcher-window-button:hover,
+.manager-window-button:hover {
+  color: var(--ink);
+  background: rgba(127, 137, 130, 0.16);
 }
 
 .launcher-stage {
@@ -698,9 +735,11 @@ input:focus-visible {
   -webkit-app-region: no-drag;
 }
 
+.manager-window-button,
 .manager-window-close {
   flex: 0 0 36px;
   width: 36px;
+  height: 62px;
   color: var(--muted);
 }
 
@@ -3466,6 +3505,14 @@ input:focus-visible {
   gap: 16px;
 }
 
+.catalog-pagination-bottom {
+  margin-top: 10px;
+}
+
+.catalog-pagination-bottom .catalog-pagination {
+  margin-bottom: 0;
+}
+
 .catalog-pagination p {
   min-width: 0;
   margin: 0;
@@ -4080,6 +4127,30 @@ input:focus-visible {
 
 .install-progress.error > div:first-child {
   color: var(--danger);
+}
+
+.catalog-install-error {
+  display: flex;
+  max-width: 680px;
+  align-items: flex-start;
+  margin-top: 7px;
+  gap: 6px;
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.catalog-install-error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.catalog-install-error span {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: pre-line;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .progress-track {
