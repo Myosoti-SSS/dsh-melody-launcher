@@ -1,7 +1,7 @@
 :root {
   font-family: Inter, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   color: #202722;
-  background: var(--app-bg);
+  background: transparent;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   letter-spacing: 0;
@@ -143,6 +143,7 @@ body {
 .surface-stage > .app-shell {
   width: 100%;
   height: 100%;
+  border-radius: inherit;
   transform-origin: center;
   backface-visibility: hidden;
 }
@@ -152,12 +153,19 @@ body {
   pointer-events: none;
 }
 
+.surface-stage.is-exiting > .launcher-home,
+.surface-stage.is-exiting > .app-shell,
+.surface-stage.is-entering > .launcher-home,
+.surface-stage.is-entering > .app-shell {
+  will-change: transform, opacity;
+}
+
 .surface-launcher.is-exiting > .launcher-home {
-  animation: launcher-surface-exit 23ms cubic-bezier(.32, .72, .35, 1) both;
+  animation: launcher-surface-exit 28ms cubic-bezier(.32, .72, .35, 1) both;
 }
 
 .surface-manager.is-entering > .app-shell {
-  animation: manager-surface-enter 68ms cubic-bezier(.22, .61, .36, 1) both;
+  animation: manager-surface-enter 100ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
 /* Keep the native resize fallback opaque until the newly mounted manager has
@@ -170,15 +178,15 @@ body {
   content: '';
   background: var(--chrome);
   pointer-events: none;
-  animation: surface-manager-cover 93ms cubic-bezier(.22, .61, .36, 1) both;
+  animation: surface-manager-cover 132ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
 .surface-manager.is-exiting > .app-shell {
-  animation: manager-surface-exit 23ms cubic-bezier(.32, .72, .35, 1) both;
+  animation: manager-surface-exit 28ms cubic-bezier(.32, .72, .35, 1) both;
 }
 
 .surface-launcher.is-entering > .launcher-home {
-  animation: launcher-surface-enter 68ms cubic-bezier(.22, .61, .36, 1) both;
+  animation: launcher-surface-enter 100ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
 @keyframes launcher-surface-exit {

@@ -210,28 +210,40 @@ export function createGitHubAuthService(options: GitHubAuthOptions): GitHubAuthS
   const now = options.now ?? Date.now
   const delay = options.delay ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)))
   let loaded = false
+  let loading: Promise<GitHubStoredSession | null> | null = null
   let session: GitHubStoredSession | null = null
   let lastRateLimit: GitHubAuthStatus['rateLimit'] = null
   let pending: PendingDeviceAuthorization | null = null
 
   const load = async (): Promise<GitHubStoredSession | null> => {
     if (loaded) return session
-    loaded = true
+    if (loading) return loading
+    loading = (async () => {
+      try {
+        if (!options.cipher.isAvailable()) return null
+        const encrypted = await readFile(options.filePath)
+        session = validateStoredSession(JSON.parse(options.cipher.decrypt(encrypted)))
+        if (!session) await rm(options.filePath, { force: true })
+      } catch {
+        session = null
+      } finally {
+        loaded = true
+      }
+      return session
+    })()
     try {
-      if (!options.cipher.isAvailable()) return null
-      const encrypted = await readFile(options.filePath)
-      session = validateStoredSession(JSON.parse(options.cipher.decrypt(encrypted)))
-      if (!session) await rm(options.filePath, { force: true })
-    } catch {
-      session = null
+      return await loading
+    } finally {
+      loading = null
     }
-    return session
   }
 
   const save = async (next: GitHubStoredSession): Promise<void> => {
     if (!options.cipher.isAvailable()) {
       throw new Error('当前系统无法使用安全凭据存储，GitHub 登录信息不会以明文保存。')
     }
+    // Wait for an in-flight read so it cannot overwrite the newly saved session.
+    if (loading) await loading
     const encrypted = options.cipher.encrypt(JSON.stringify(next))
     await atomicWrite(options.filePath, encrypted)
     loaded = true
@@ -239,6 +251,7 @@ export function createGitHubAuthService(options: GitHubAuthOptions): GitHubAuthS
   }
 
   const clear = async (): Promise<void> => {
+    if (loading) await loading
     loaded = true
     session = null
     lastRateLimit = null

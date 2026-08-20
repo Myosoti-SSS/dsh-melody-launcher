@@ -5,8 +5,8 @@ import type { ViewName, WindowMode } from '../types'
 
 export type SurfaceTransitionPhase = 'idle' | 'exiting' | 'entering'
 
-const SURFACE_EXIT_DURATION = 23
-const SURFACE_ENTER_DURATION = 93
+const SURFACE_EXIT_DURATION = 28
+const SURFACE_ENTER_DURATION = 132
 
 /**
  * 界面导航。切换 surface 时窗口尺寸也要跟着变，

@@ -1,5 +1,6 @@
 import { BrowserWindow, screen, type Rectangle } from 'electron'
 import type { WindowMode } from '../src/types'
+import { attachWindowShadow, showWindowShadow, syncWindowShadow } from './window-shadow'
 
 /** 主窗口的创建、尺寸模式切换，以及发往渲染层的消息通道。 */
 
@@ -15,8 +16,10 @@ export const WINDOW_MODES: Record<WindowMode, WindowSize> = {
   manager: { width: 1380, height: 860, minWidth: 1024, minHeight: 680 },
 }
 
-const WINDOW_MODE_ANIMATION_DURATION = 75
-const WINDOW_MODE_ANIMATION_FRAME = 16
+const WINDOW_MODE_ANIMATION_DURATION = 100
+// Drive high-refresh displays more frequently than the traditional 60 Hz
+// interval. Windows still coalesces updates to the compositor refresh rate.
+const WINDOW_MODE_ANIMATION_FRAME = 8
 const WINDOW_BACKGROUND_COLOR = '#00000000'
 const WINDOW_WORK_AREA_MARGIN = 24
 
@@ -85,9 +88,8 @@ export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
     backgroundColor: WINDOW_BACKGROUND_COLOR,
     transparent: true,
     frame: false,
-    // Frameless windows with an explicit WS_THICKFRAME receive a black
-    // activation outline on Windows 11. Keep the native frame thickness at
-    // zero; the renderer owns the visible rounded corners and shadows.
+    // WS_THICKFRAME restores the native shadow but also paints an unavoidable
+    // black activation outline. A separate click-through shadow window is used.
     thickFrame: false,
     // Keep the Windows compositor's corner clipping. This is independent of
     // thickFrame: the latter stays disabled to avoid the black activation
@@ -109,8 +111,10 @@ export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
   // Re-assert the compositor shadow after creating a borderless window.
   window.setHasShadow(true)
   window.once('closed', options.onClosed)
+  attachWindowShadow(window)
   window.once('ready-to-show', () => {
     window.show()
+    showWindowShadow(window)
   })
 
   if (options.devServerUrl) {
@@ -176,6 +180,7 @@ export function applyWindowMode(window: BrowserWindow | null, mode: WindowMode):
       width,
       height,
     })
+    syncWindowShadow(window)
 
     if (progress >= 1) {
       window.setMinimumSize(targetMinWidth, targetMinHeight)

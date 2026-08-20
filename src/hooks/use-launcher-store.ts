@@ -125,10 +125,22 @@ export function useLauncherStore() {
       .catch(error => showToast({ kind: 'error', message: errorText(error) }))
       .finally(() => setLoading(false))
 
-    // GitHub 凭据状态独立加载；其它启动数据失败时也不能把已登录账号显示成未登录。
-    void api.getGitHubAuthStatus()
-      .then(next => { if (!disposed) setGitHubAuthStatus(next) })
-      .catch(() => { /* 凭据读取失败时保留默认未登录状态，不阻塞启动 */ })
+    // GitHub 凭据状态独立加载；读取失败时短暂重试，避免一次 IPC/启动时序问题把已登录账号卡成未登录。
+    const refreshGitHubAuth = async (attempt = 0): Promise<void> => {
+      if (disposed) return
+      try {
+        const next = await api.getGitHubAuthStatus()
+        if (!disposed) setGitHubAuthStatus(next)
+      } catch {
+        if (disposed || attempt >= 2) return
+        const delay = attempt === 0 ? 250 : 1_000
+        await new Promise<void>(resolve => window.setTimeout(resolve, delay))
+        await refreshGitHubAuth(attempt + 1)
+      }
+    }
+    void refreshGitHubAuth()
+    const onWindowFocus = () => { void refreshGitHubAuth() }
+    window.addEventListener('focus', onWindowFocus)
 
     // 更新检查必须在后台进行，网络不可用时不能阻塞启动页。
     void api.checkDshUpdate()
@@ -162,6 +174,7 @@ export function useLauncherStore() {
     ]
     return () => {
       disposed = true
+      window.removeEventListener('focus', onWindowFocus)
       unsubscribers.forEach(unsubscribe => unsubscribe())
     }
   }, [api, showToast])

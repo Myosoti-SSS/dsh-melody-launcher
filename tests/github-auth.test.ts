@@ -78,6 +78,31 @@ describe('GitHub account service', () => {
     await expect(reloaded.getStatus()).resolves.toMatchObject({ authenticated: false })
   })
 
+  it('shares the initial session read across concurrent status and GitHub requests', async () => {
+    const filePath = path.join(temporaryRoot, 'github-auth.bin')
+    const first = createGitHubAuthService({ filePath, cipher, fetchImpl: (async () => userResponse('concurrent-user')) as typeof fetch })
+    await first.loginWithToken('github_pat_concurrent_token_1234567890')
+
+    const requests: Array<{ url: string; authorization: string | null }> = []
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input)
+      const headers = new Headers(init?.headers)
+      requests.push({ url, authorization: headers.get('authorization') })
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+    const reloaded = createGitHubAuthService({ filePath, cipher, fetchImpl })
+
+    const statusPromise = reloaded.getStatus()
+    const requestPromise = reloaded.fetch('https://api.github.com/repos/rirko/example')
+
+    await expect(statusPromise).resolves.toMatchObject({ authenticated: true, login: 'concurrent-user' })
+    await requestPromise
+    expect(requests).toEqual([{
+      url: 'https://api.github.com/repos/rirko/example',
+      authorization: 'Bearer github_pat_concurrent_token_1234567890',
+    }])
+  })
+
   it('completes OAuth Device Flow after GitHub reports authorization_pending', async () => {
     let tokenPolls = 0
     const fetchImpl = (async (input: string | URL | Request) => {
