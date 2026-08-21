@@ -300,7 +300,36 @@ export function createGitHubAuthService(options: GitHubAuthOptions): GitHubAuthS
     const response = await fetchImpl(input, { ...init, headers })
     if (isGitHubRequest(input)) {
       lastRateLimit = rateFromHeaders(response.headers) ?? lastRateLimit
-      if (current && response.status === 401) await clear()
+      if (current && response.status === 401) {
+        // A single endpoint 401 is not enough evidence that the token is dead:
+        // proxies, stale requests, and endpoint-specific authorization can all
+        // produce it. Verify the session against GitHub's canonical /user
+        // endpoint before changing the persisted login state.
+        let verified: GitHubStoredSession | null = null
+        let credentialRejected = false
+        try {
+          verified = await verifyToken(current.token, current.method, current.scopes)
+        } catch (error) {
+          credentialRejected = error instanceof Error && error.message === 'GitHub 拒绝了该凭据，请检查令牌是否有效。'
+          if (!credentialRejected) return response
+        }
+
+        if (credentialRejected) {
+          // Only a confirmed /user 401 may clear the encrypted session file.
+          await clear()
+          return response
+        }
+
+        if (!verified || session !== current) return response
+        // Keep the refreshed account metadata (name/avatar/scopes) in memory and
+        // on disk, then retry this request exactly once with the verified token.
+        await save(verified)
+        const retryHeaders = combineHeaders(input, init)
+        retryHeaders.set('Authorization', `Bearer ${verified.token}`)
+        const retryResponse = await fetchImpl(input, { ...init, headers: retryHeaders })
+        lastRateLimit = rateFromHeaders(retryResponse.headers) ?? lastRateLimit
+        return retryResponse
+      }
     }
     return response
   }

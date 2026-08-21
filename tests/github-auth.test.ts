@@ -103,6 +103,74 @@ describe('GitHub account service', () => {
     }])
   })
 
+  it('在普通 GitHub 请求收到 401 后先验证 /user，再自动重试一次', async () => {
+    const filePath = path.join(temporaryRoot, 'github-auth.bin')
+    let userChecks = 0
+    let repositoryAttempts = 0
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input)
+      if (url === 'https://api.github.com/user') {
+        userChecks += 1
+        return userResponse(userChecks === 1 ? 'initial-user' : 'refreshed-user')
+      }
+      if (url === 'https://api.github.com/repos/rirko/example') {
+        repositoryAttempts += 1
+        return new Response('{}', { status: repositoryAttempts === 1 ? 401 : 200 })
+      }
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+    const service = createGitHubAuthService({ filePath, cipher, fetchImpl })
+
+    await service.loginWithToken('github_pat_retry_token_1234567890')
+    const response = await service.fetch('https://api.github.com/repos/rirko/example')
+
+    expect(response.status).toBe(200)
+    expect(repositoryAttempts).toBe(2)
+    expect(userChecks).toBe(2)
+    await expect(service.getStatus()).resolves.toMatchObject({ authenticated: true, login: 'refreshed-user' })
+    await expect(readFile(filePath)).resolves.toBeTruthy()
+  })
+
+  it('只有 /user 确认返回 401 时才清除登录凭据', async () => {
+    const filePath = path.join(temporaryRoot, 'github-auth.bin')
+    let userChecks = 0
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input)
+      if (url === 'https://api.github.com/user') {
+        userChecks += 1
+        return userChecks === 1 ? userResponse('valid-until-request') : new Response('{}', { status: 401 })
+      }
+      if (url === 'https://api.github.com/repos/rirko/example') return new Response('{}', { status: 401 })
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+    const service = createGitHubAuthService({ filePath, cipher, fetchImpl })
+
+    await service.loginWithToken('github_pat_invalidated_token_1234567890')
+    await expect(service.fetch('https://api.github.com/repos/rirko/example')).resolves.toMatchObject({ status: 401 })
+    await expect(service.getStatus()).resolves.toMatchObject({ authenticated: false })
+    await expect(readFile(filePath)).rejects.toThrow()
+  })
+
+  it('验证 /user 遇到网络或服务器错误时保留登录状态', async () => {
+    const filePath = path.join(temporaryRoot, 'github-auth.bin')
+    let userChecks = 0
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input)
+      if (url === 'https://api.github.com/user') {
+        userChecks += 1
+        return userChecks === 1 ? userResponse('transient-user') : new Response('{}', { status: 503 })
+      }
+      if (url === 'https://api.github.com/repos/rirko/example') return new Response('{}', { status: 401 })
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+    const service = createGitHubAuthService({ filePath, cipher, fetchImpl })
+
+    await service.loginWithToken('github_pat_transient_token_1234567890')
+    await expect(service.fetch('https://api.github.com/repos/rirko/example')).resolves.toMatchObject({ status: 401 })
+    await expect(service.getStatus()).resolves.toMatchObject({ authenticated: true, login: 'transient-user' })
+    await expect(readFile(filePath)).resolves.toBeTruthy()
+  })
+
   it('completes OAuth Device Flow after GitHub reports authorization_pending', async () => {
     let tokenPolls = 0
     const fetchImpl = (async (input: string | URL | Request) => {

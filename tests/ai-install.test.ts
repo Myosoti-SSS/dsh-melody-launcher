@@ -14,6 +14,7 @@ import {
   buildRuntimeRepairPrompt,
   createAiInstaller,
   createProfileSnapshot,
+  validateDshCoreDependencies,
   decideApproval,
   formatAcpRuntimeInstallFailure,
   healCredentialsLock,
@@ -190,6 +191,15 @@ describe('AI 故障修复提示词', () => {
     expect(prompt).toContain('不要伪造服务')
     expect(prompt).toContain('不要编辑 node_modules')
     expect(prompt).toContain('dsh-plugin-desktop')
+    expect(prompt).toContain('每次助手回复最多发起一个工具调用')
+    expect(prompt).toContain('每个 tool_call_id 必须恰好等待一个对应的 tool result')
+    expect(prompt).toContain('Cannot read properties of undefined (reading prepare)')
+    expect(prompt).toContain('insufficient tool messages')
+    expect(prompt).toContain('@deepseek-ai/dsh-agent-loop')
+    expect(prompt).toContain('不要安装、升级或降级任意 DSH 包')
+    expect(prompt).toContain('禁止在 Profile 的 package.json')
+    expect(prompt).toContain('是否需要更新 DSH')
+    expect(prompt).toContain('@deepseek-ai/dsh-tools')
   })
 
   it('普通启动修复限制改动范围并要求最小修复', () => {
@@ -201,6 +211,61 @@ describe('AI 故障修复提示词', () => {
     expect(prompt).toContain('<runtime-diagnostics>')
     expect(prompt).toContain('最小修复')
     expect(prompt).toContain('禁止读取或输出任何凭据')
+    expect(prompt).toContain('严格串行调用工具')
+  })
+})
+
+describe('DSH 宿主核心依赖保护', () => {
+  it('拒绝 AI 新增核心包或使用非精确/不一致版本', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-core-validation-'))
+    const dshHome = path.join(root, 'dsh-home')
+    const profileDir = path.join(dshHome, 'profiles', 'web')
+    const runtimeRoot = path.join(root, 'runtime')
+    await mkdir(profileDir, { recursive: true })
+    await mkdir(path.join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh-tools'), { recursive: true })
+    await writeFile(path.join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh-tools', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-tools', version: '0.1.0-rc.6' }))
+    await writeFile(path.join(profileDir, 'package.json'), JSON.stringify({ name: 'web', dependencies: {} }))
+    const snapshot = await createProfileSnapshot(dshHome, 'web', path.join(root, 'snapshots'))
+
+    await writeFile(path.join(profileDir, 'package.json'), JSON.stringify({ name: 'web', dependencies: { '@deepseek-ai/dsh-tools': '0.1.0-rc.7' } }))
+    const validation = await validateDshCoreDependencies(snapshot, runtimeRoot)
+    expect(validation.ok).toBe(false)
+    expect(validation.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ packageName: '@deepseek-ai/dsh-tools', reason: 'added', afterSpec: '0.1.0-rc.7' }),
+    ]))
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('允许未被 AI 改动且与托管运行时精确一致的核心声明', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-core-validation-'))
+    const dshHome = path.join(root, 'dsh-home')
+    const profileDir = path.join(dshHome, 'profiles', 'web')
+    const runtimeRoot = path.join(root, 'runtime')
+    await mkdir(profileDir, { recursive: true })
+    await mkdir(path.join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh-tools'), { recursive: true })
+    await writeFile(path.join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh-tools', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-tools', version: '0.1.0-rc.6' }))
+    const manifest = JSON.stringify({ name: 'web', dependencies: { '@deepseek-ai/dsh-tools': '0.1.0-rc.6' } })
+    await writeFile(path.join(profileDir, 'package.json'), manifest)
+    const snapshot = await createProfileSnapshot(dshHome, 'web', path.join(root, 'snapshots'))
+    const validation = await validateDshCoreDependencies(snapshot, runtimeRoot)
+    expect(validation.ok).toBe(true)
+    await rm(root, { recursive: true, force: true })
+  })
+})
+
+describe('AI 工具调用兼容性提示', () => {
+  it('仓库安装提示词禁止同一回复并行调用工具', () => {
+    const prompt = buildInstallPrompt({
+      repository: 'acme/super-plugin',
+      defaultBranch: 'main',
+      profileName: 'web',
+      workspace: 'C:\\Users\\tester\\.dsh',
+      analysis: analysis('invalid'),
+      shell: 'pwsh',
+    })
+    expect(prompt).toContain('每次助手回复最多发起一个工具调用')
+    expect(prompt).toContain('不要在同一轮混用 PowerShell（pwsh） 和 read / glob / grep')
+    expect(prompt).toContain('立即停止继续调用工具')
   })
 })
 
@@ -338,6 +403,7 @@ describe('resolveAcpPersona', () => {
     expect(persona).toContain('coding assistant')
     expect(persona).toContain('优先解释插件依赖。')
     expect(persona).toContain('Never read, reveal, copy, or modify credentials')
+    expect(persona).toContain('Issue at most one tool call in each assistant message')
   })
 
   it('开发者模式替换基础 persona 但不能移除固定安全段', () => {
@@ -345,6 +411,9 @@ describe('resolveAcpPersona', () => {
     expect(persona).toContain('你是自定义 DSH 专家。')
     expect(persona).not.toContain('Use the pwsh tool')
     expect(persona).toContain('Any write, install, delete, process execution')
+    expect(persona).toContain('Never batch or parallelize shell and file-tool calls')
+    expect(persona).toContain('undefined.prepare')
+    expect(persona).toContain('Never install, upgrade, or downgrade random DSH packages')
   })
 })
 
