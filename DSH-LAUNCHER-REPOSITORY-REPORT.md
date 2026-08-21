@@ -7,7 +7,7 @@
 - **项目名称**：`dsh-launcher`，产品名称为 DSH Launcher，仓库名为 `dsh-melody-launcher`
 - **定位**：面向 DeepSeek Harness（DSH）的 Windows 桌面启动器、插件管理器和资源市场
 - **技术形态**：Electron + React + TypeScript + Vite 的桌面应用
-- **当前 package 版本**：`0.3.2`
+- **当前 package 版本**：`0.3.3`
 - **发布形态**：Windows portable executable，发布到 GitHub Release，不是 npm 公共包
 - **Git remote**：`https://github.com/rirko/dsh-melody-launcher.git`
 - **当前分支**：`main`
@@ -17,11 +17,11 @@
 
 截至本次分析：
 
-- 最新本地提交：`2cc1d84 docs: add repository structure report`
-- 当前 HEAD 提交数：146
-- 本地 `main` 比 `origin/main` 多 3 个提交
-- 当前可见最新 tag：`v0.3.1`
-- `package.json` 已是 `0.3.2`，因此远端 tag 与本地 package 版本尚未同步
+- 最新本地提交：`6b3eefa chore: prepare v0.3.3 release`
+- 当前 HEAD 提交数：152
+- 本地 `main` 已合并远端 `v0.3.2` 发布提交，并包含本轮待发布改动
+- 当前可见最新 tag：`v0.3.2`
+- `package.json` 与 `package-lock.json` 已同步为 `0.3.3`，准备发布 `v0.3.3`
 - 工作区当前干净。此前的 4 个未提交文件已分别整理为以下本地提交：
 
 ```text
@@ -206,7 +206,7 @@ Release 工作流 `.github/workflows/release.yml` 在 `v*` tag 上运行：
 
 ### P0：先处理本地发布状态（已完成）
 
-本地改动已经按代码修复、文档报告和此前窗口修复整理为 4 个提交，工作区干净。当前仍需在发布前将这 4 个提交推送到远端，并决定是否以 `0.3.2` 创建对应的 `v0.3.2` tag/release；本地 tag 目前仍停留在 `v0.3.1`。
+本地改动已经按代码修复、文档报告和此前窗口修复整理，并已合并远端 `v0.3.2` 发布提交。当前版本已提升为 `0.3.3`，待推送 `main` 并创建对应的 `v0.3.3` tag/release。
 
 ### P1：同步版本和 README 技术徽章
 
