@@ -17,21 +17,19 @@
 
 截至本次分析：
 
-- 最新本地提交：`25f50ba fix: keep window shadow above active applications`
-- 当前 HEAD 提交数：144
-- 本地 `main` 比 `origin/main` 多 1 个提交
+- 最新本地提交：`2cc1d84 docs: add repository structure report`
+- 当前 HEAD 提交数：146
+- 本地 `main` 比 `origin/main` 多 3 个提交
 - 当前可见最新 tag：`v0.3.1`
 - `package.json` 已是 `0.3.2`，因此远端 tag 与本地 package 版本尚未同步
-- 工作区有 4 个未提交文件：
+- 工作区当前干净。此前的 4 个未提交文件已分别整理为以下本地提交：
 
 ```text
-electron/ai-install.ts
-electron/github-auth.ts
-tests/ai-install.test.ts
-tests/github-auth.test.ts
+5817f81 fix: protect DSH core dependencies and recover GitHub auth
+2cc1d84 docs: add repository structure report
 ```
 
-这些改动分别涉及 AI 安装适配的 DSH 核心依赖保护，以及 GitHub 401 自动重新验证逻辑。
+连同此前的 `25f50ba` 窗口阴影修复，这 4 个提交构成本地待发布范围；代码改动涉及 AI 安装适配的 DSH 核心依赖保护、GitHub 401 自动重新验证和窗口阴影层级修复。
 
 ## 3. 仓库规模
 
@@ -206,9 +204,9 @@ Release 工作流 `.github/workflows/release.yml` 在 `v*` tag 上运行：
 
 ## 10. 主要问题与建议
 
-### P0：先处理本地发布状态
+### P0：先处理本地发布状态（已完成）
 
-当前 `main` 比远端多 1 个提交，同时有 4 个未提交改动；在发布或开 PR 前应明确这些改动的提交范围。
+本地改动已经按代码修复、文档报告和此前窗口修复整理为 4 个提交，工作区干净。当前仍需在发布前将这 4 个提交推送到远端，并决定是否以 `0.3.2` 创建对应的 `v0.3.2` tag/release；本地 tag 目前仍停留在 `v0.3.1`。
 
 ### P1：同步版本和 README 技术徽章
 
