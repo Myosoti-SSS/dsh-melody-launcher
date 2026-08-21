@@ -266,6 +266,7 @@ export function createDshMarketService(options: DshMarketOptions) {
       result = await execute(executable, commandArgs, {
         cwd: settings.workspace,
         env: withExecutableDirectoryOnPath(pnpm.executable, withExecutableDirectoryOnPath(node.node, { ...process.env, DSH_HOME: settings.dshHome, FORCE_COLOR: '0', CI: 'true' })),
+        onOutput: (text, level) => options.emitOutput(level, text),
       })
     }
     return result

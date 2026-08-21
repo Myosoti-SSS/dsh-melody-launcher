@@ -1,4 +1,4 @@
-import { GitFork, Layers3, Package, PanelLeftClose, PanelLeftOpen, Settings, ShoppingBag, Sparkles, SquareTerminal } from 'lucide-react'
+import { Cpu, GitFork, Layers3, Package, PanelLeftClose, PanelLeftOpen, Settings, ShoppingBag, Sparkles, SquareTerminal } from 'lucide-react'
 import type { PackStatus, ProfileState, RuntimeState, ViewName } from '../types'
 
 /** 管理界面左侧导航与当前 Profile 摘要。 */
@@ -33,6 +33,7 @@ export function SideNavigation({ view, profile, runtime, profileName, packs, act
     { id: 'packs', label: '整合包', icon: Package },
     { id: 'github', label: 'GitHub', icon: GitFork },
     { id: 'runtime', label: '运行与日志', icon: SquareTerminal },
+    { id: 'environment', label: '运行环境', icon: Cpu },
   ]
 
   return (

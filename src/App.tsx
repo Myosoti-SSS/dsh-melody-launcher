@@ -28,6 +28,7 @@ import { PluginsView } from './views/PluginsView'
 import { RuntimeView } from './views/RuntimeView'
 import { GitHubView } from './views/GitHubView'
 import { DshMarketView } from './views/DshMarketView'
+import { RuntimeEnvironmentView } from './views/RuntimeEnvironmentView'
 
 /**
  * 应用根。
@@ -318,14 +319,31 @@ function LauncherShell() {
                   runtime={store.runtime}
                   settings={settings}
                   logs={store.logs}
+                  installProgress={store.installProgress}
                   busy={runtimeBusy}
                   onToggleRuntime={toggleRuntime}
+                  onPauseDownload={() => { void store.cancelRuntimeDownload() }}
                   onOpenHarness={openHarness}
                   onClearLogs={store.clearLogs}
                   onOpenSettings={() => setSettingsOpen(true)}
                   onRepairRuntime={() => { setCopilotOpen(true); void ai.repairRuntime(settings.profileName) }}
                   aiActive={ai.active}
                   activeRuntimeReplacement={store.activeRuntimeReplacement}
+                />
+              )}
+              {navigation.view === 'environment' && (
+                <RuntimeEnvironmentView
+                  state={store.runtimeEnvironment}
+                  busy={profileMutationLocked || Boolean(store.busy)}
+                  onRefresh={() => { void store.refreshRuntimeEnvironment(true) }}
+                  onInstallDsh={store.installDshVersion}
+                  onSelectDsh={store.selectDshVersion}
+                  onRemoveDsh={store.removeDshVersion}
+                  onInstallNode={store.installNodeVersion}
+                  onSelectNode={store.selectNodeVersion}
+                  onRemoveNode={store.removeNodeVersion}
+                  onOpenDshFolder={() => { void api.openDshFolder() }}
+                  onOpenNodeFolder={() => { void api.openNodeFolder() }}
                 />
               )}
               {navigation.view === 'packs' && (

@@ -244,7 +244,7 @@ function PackRow({ pack, selected, busy, onSelect, onActivate, onDeactivate, onE
             {pack.enabled && <span className="pack-active-badge">使用中</span>}
           </div>
           <p>{pack.description || '（无描述）'}</p>
-          <small>v{pack.version} · {pack.plugins.length} 个插件{pack.presets?.length ? ` · ${pack.presets.length} 个预设` : ''} · 更新于 {formatRelativeTime(pack.updatedAt)}</small>
+          <small>v{pack.version} · DSH {pack.dshVersion ?? '未记录'} · {pack.plugins.length} 个插件{pack.presets?.length ? ` · ${pack.presets.length} 个预设` : ''} · 更新于 {formatRelativeTime(pack.updatedAt)}</small>
         </div>
       </div>
       <div className="pack-row-actions" onClick={event => event.stopPropagation()}>
@@ -324,6 +324,7 @@ function PackDetails({ pack, profile, busy, onToggleItem, onRemoveItem, onAddPlu
       </div>
       <dl className="pack-details-meta">
         <div><dt>版本</dt><dd>{pack.version}</dd></div>
+        <div><dt>要求 DSH</dt><dd>{pack.dshVersion ?? '未记录（旧整合包）'}</dd></div>
         <div><dt>来源</dt><dd>{SOURCE_LABEL[pack.source]}</dd></div>
         <div><dt>状态</dt><dd className={pack.state}>{STATE_LABEL[pack.state]}</dd></div>
       </dl>

@@ -172,6 +172,8 @@ export function createApplicationAddonManager(options: ApplicationAddonManagerOp
       phase: 'preparing',
       percent: 5 + Math.round(progress.percent * 0.08),
       message: progress.message,
+      downloadedBytes: progress.downloadedBytes,
+      totalBytes: progress.totalBytes,
     })
   })
 
@@ -182,6 +184,8 @@ export function createApplicationAddonManager(options: ApplicationAddonManagerOp
       phase: 'preparing',
       percent: 13 + Math.round(progress.percent * 0.07),
       message: progress.message,
+      downloadedBytes: progress.downloadedBytes,
+      totalBytes: progress.totalBytes,
     })
   })
 

@@ -36,7 +36,7 @@ import type {
   SkillInstallResult,
   SkillInstallTarget,
 } from '../src/types'
-import { assertMeaningfulPackName, buildManifestFromReceipts, packProfileName, parsePackManifest } from './pack-manifest'
+import { assertMeaningfulPackName, assertPackDshVersion, buildManifestFromReceipts, isValidPackDshVersion, normalizePackDshVersion, packProfileName, parsePackManifest } from './pack-manifest'
 import { extractPackBodiesFromPath, extractPresetBodiesFromPath, findManifestInArchiveFromPath, inspectPackZipFromPath } from './pack-zip'
 import { cleanPackNameHint, extractRawPluginBodiesFromPath, extractRawPresetSourcesFromPath, extractRawSkillSourcesFromPath, scanRawPackZipFromPath, type ExtractByteBudget } from './pack-scan'
 import { buildPackExportToFile } from './pack-export'
@@ -147,6 +147,29 @@ export interface PackManager {
 function asErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
   return typeof error === 'string' ? error : '未知错误'
+}
+
+/** 创建/导出整合包时解析当前启动器实际使用的 DSH 精确版本。 */
+async function resolvePackDshVersion(settings: AppSettings, requested?: string): Promise<string> {
+  const candidates = [requested, settings.dshVersion]
+  for (const candidate of candidates) {
+    if (isValidPackDshVersion(candidate)) return normalizePackDshVersion(candidate)
+  }
+
+  // 兼容旧设置：版本目录名本身包含精确版本。
+  const versionMatch = settings.launchExecutable.match(/[\\/]versions[\\/]([^\\/]+)[\\/]/i)
+  if (versionMatch?.[1] && isValidPackDshVersion(versionMatch[1])) return normalizePackDshVersion(versionMatch[1])
+
+  // 再从当前 dsh 包的 package.json 读取，避免把范围表达式写入整合包。
+  const executable = path.resolve(settings.launchExecutable)
+  const runtimeRoot = path.dirname(path.dirname(path.dirname(executable)))
+  try {
+    const manifest = JSON.parse(await readFile(path.join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8')) as { version?: unknown }
+    if (isValidPackDshVersion(manifest.version)) return normalizePackDshVersion(manifest.version)
+  } catch {
+    // 下面统一给出缺少精确版本的提示。
+  }
+  throw new Error('当前 DSH 没有可记录的精确版本，请先在“运行环境”中选择或安装一个 DSH 版本。')
 }
 
 function assertSafePackId(packId: string): void {
@@ -285,6 +308,11 @@ export function createPackManager(options: PackManagerOptions): PackManager {
   async function writeRecordManifest(record: PackRecord, sourceManifest?: PackManifest): Promise<void> {
     const existing = sourceManifest ?? await readPackManifest(manifestRoot, record.id)
     const existingPlugins = new Map((existing?.plugins ?? []).map(item => [item.packageName, item]))
+    const dshVersion = isValidPackDshVersion(record.dshVersion)
+      ? normalizePackDshVersion(record.dshVersion)
+      : isValidPackDshVersion(existing?.dshVersion)
+        ? normalizePackDshVersion(existing.dshVersion)
+        : undefined
     const plugins: PackPluginEntry[] = record.plugins.map(item => ({
       ...existingPlugins.get(item.packageName),
       packageName: item.packageName,
@@ -294,6 +322,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       name: record.name,
       description: record.description || `DSH 整合包：${record.name}`,
       version: record.version,
+      ...(dshVersion ? { dshVersion } : {}),
       plugins,
       ...(record.presets?.length ? { presets: record.presets.map(item => ({ name: item.name })) } : {}),
       ...(record.skills?.length ? { skills: record.skills.map(item => ({ name: item.name, format: item.format })) } : {}),
@@ -392,6 +421,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         if (existing.some(record => record.id === packId)) throw new Error('整合包已存在。')
 
         const settings = await options.readSettings()
+        const dshVersion = await resolvePackDshVersion(settings, request.dshVersion)
         const dshHome = await getDshHome()
         const profileName = settings.profileName
         // 确认当前 profile 可读（顺带校验 profile 名），安装来源仍以 receipt 为准。
@@ -478,6 +508,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           name: request.name,
           description: request.description ?? '',
           version: '1.0.0',
+          dshVersion,
           source: 'created',
           installedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -511,12 +542,13 @@ export function createPackManager(options: PackManagerOptions): PackManager {
 
     async analyzeImport(filePath) {
       if (/\.ya?ml$/i.test(filePath)) {
-        const manifest = parsePackManifest(await readFile(filePath, 'utf8'))
+        const manifest = parsePackManifest(await readFile(filePath, 'utf8'), { requireDshVersion: true })
         return {
           id: packProfileName(manifest.name),
           name: manifest.name,
           description: manifest.description,
           version: manifest.version,
+          dshVersion: manifest.dshVersion ?? null,
           source: 'manifest' as const,
           items: manifest.plugins.map(entry => ({ packageName: entry.packageName, available: Boolean(entry.repository || entry.source === 'npm'), offline: false, enabled: entry.enabled !== false })),
         }
@@ -544,12 +576,14 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           name: nameHint,
           description: `非标准整合包：扫描到 ${scan.plugins.length} 个插件、${scan.skills.length} 个技能${scan.presets.length > 0 ? `、${scan.presets.length} 个预设` : ''}。`,
           version: '1.0.0',
+          dshVersion: null,
           source: 'raw',
           items,
         }
       }
       const inspection = await inspectPackZipFromPath(filePath)
       const manifest = inspection.manifest
+      assertPackDshVersion(manifest)
       const packId = packProfileName(manifest.name)
 
       const items: PackAnalysisItem[] = []
@@ -607,6 +641,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         name: manifest.name,
         description: manifest.description,
         version: manifest.version,
+        dshVersion: manifest.dshVersion ?? null,
         source: inspection.hasBodies ? 'zip' : 'manifest',
         items,
       }
@@ -623,7 +658,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       try {
         // 本地 YAML 是轻量清单格式：只安装清单引用的插件到共享 Profile，不创建包目录。
         if (/\.ya?ml$/i.test(filePath)) {
-          const manifest = parsePackManifest(await readFile(filePath, 'utf8'))
+          const manifest = parsePackManifest(await readFile(filePath, 'utf8'), { requireDshVersion: true })
           const packId = packProfileName(importOptions?.name ?? manifest.name)
           const existing = await readPackRegistry(options.registryPath)
           if (existing.some(record => record.id === packId)) throw new Error('整合包已存在。')
@@ -652,6 +687,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             name: manifest.name,
             description: manifest.description,
             version: manifest.version,
+            dshVersion: manifest.dshVersion,
             source: 'manifest',
             installedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
@@ -684,6 +720,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
 
           const dshHome = await getDshHome()
           const settings = await options.readSettings()
+          const dshVersion = await resolvePackDshVersion(settings)
           const profileName = settings.profileName
           const profileBeforeInstall = await options.installer.readProfile(dshHome, profileName)
           // items 缺省 = 全装；插件名、技能名、预设名各自独立过滤（理论上可能撞名）。
@@ -778,6 +815,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             name: packName,
             description: `非标准整合包：扫描到 ${scan.plugins.length} 个插件、${scan.skills.length} 个技能${scan.presets.length > 0 ? `、${scan.presets.length} 个预设` : ''}。`,
             version: '1.0.0',
+            dshVersion,
             source: 'raw',
             installedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
@@ -796,6 +834,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
 
         const inspection = await inspectPackZipFromPath(filePath)
         const manifest = inspection.manifest
+        assertPackDshVersion(manifest)
         const packId = packProfileName(manifest.name)
 
         const existing = await readPackRegistry(options.registryPath)
@@ -983,6 +1022,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           name: manifest.name,
           description: manifest.description,
           version: manifest.version,
+          dshVersion: manifest.dshVersion,
           source: inspection.hasBodies ? 'zip' : 'manifest',
           installedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -1041,7 +1081,10 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         const orderedReceipts = record.plugins
           .map(plugin => receipts.find(receipt => receipt.packageName === plugin.packageName))
           .filter((receipt): receipt is PluginInstallReceipt => receipt !== undefined)
-        const manifest = buildManifestFromReceipts(packId, orderedReceipts, presetReceipts, skillReceipts, applicationAddons)
+        const dshVersion = isValidPackDshVersion(record.dshVersion)
+          ? normalizePackDshVersion(record.dshVersion)
+          : await resolvePackDshVersion(settings)
+        const manifest = buildManifestFromReceipts(packId, orderedReceipts, presetReceipts, skillReceipts, applicationAddons, dshVersion)
         manifest.plugins = manifest.plugins.map((entry) => {
           const recordPlugin = record.plugins.find(plugin => plugin.packageName === entry.packageName)
           return { ...entry, enabled: recordPlugin?.enabled ?? true }

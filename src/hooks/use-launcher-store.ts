@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLauncherApi } from '../api/client'
 import { DSH_REPOSITORY, EMPTY_DSH_INSTALLATION, EMPTY_RUNTIME_STATE, MAX_LOG_LINES } from '../constants'
 import { errorText } from '../lib/format'
@@ -26,6 +26,7 @@ import type {
   ProfileState,
   RepositoryInstallResult,
   RuntimeOutput,
+  RuntimeEnvironmentState,
   RuntimeState,
   SkillInstallResult,
 } from '../types'
@@ -54,6 +55,7 @@ export function useLauncherStore() {
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME_STATE)
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
   const [dshUpdate, setDshUpdate] = useState<DshUpdateStatus | null>(null)
+  const [runtimeEnvironment, setRuntimeEnvironment] = useState<RuntimeEnvironmentState | null>(null)
   const [launcherUpdate, setLauncherUpdate] = useState<LauncherUpdateStatus | null>(null)
   const [launcherUpdateProgress, setLauncherUpdateProgress] = useState<LauncherUpdateProgress | null>(null)
   const [installProgress, setInstallProgress] = useState<InstallProgress | null>(null)
@@ -76,6 +78,7 @@ export function useLauncherStore() {
     rateLimit: null,
   })
   const [logs, setLogs] = useState<RuntimeOutput[]>([])
+  const progressLogBuckets = useRef<Record<string, { phase: InstallProgress['phase']; bucket: number; message: string }>>({})
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null)
   const [packs, setPacks] = useState<PackStatus[]>([])
   const [packSnapshotsAvailable, setPackSnapshotsAvailable] = useState(false)
@@ -148,6 +151,10 @@ export function useLauncherStore() {
       .then(next => { if (!disposed) setDshUpdate(next) })
       .catch(() => { /* 主进程已把网络失败转换为状态；演示 API 也不应阻塞启动 */ })
 
+    void api.readRuntimeEnvironment()
+      .then(next => { if (!disposed) setRuntimeEnvironment(next) })
+      .catch(() => { /* 版本索引失败不阻塞其他页面 */ })
+
     // 启动器自更新：同样后台检测；发现新版本后自动开始下载，UI 提示由 AppHeader 的更新按钮承载。
     void api.checkLauncherUpdate()
       .then(next => {
@@ -161,10 +168,47 @@ export function useLauncherStore() {
       })
       .catch(() => { /* 主进程已把网络失败转换为 error 状态 */ })
 
+    const handleInstallProgress = (progress: InstallProgress) => {
+        setInstallProgress(progress)
+        const key = `${progress.kind}:${progress.repository}`
+        const bucket = Math.floor(progress.percent / 10)
+        const previous = progressLogBuckets.current[key]
+        const waitingHeartbeat = progress.message.startsWith('安装中 · 已等待')
+        const shouldLog = !previous
+          || previous.phase !== progress.phase
+          || previous.bucket !== bucket
+          || (waitingHeartbeat && previous.message !== progress.message)
+          || progress.phase === 'error'
+          || progress.phase === 'complete'
+        if (shouldLog) {
+          progressLogBuckets.current[key] = { phase: progress.phase, bucket, message: progress.message }
+          const channel: RuntimeOutput['channel'] = progress.kind === 'dsh' ? 'runtime' : 'plugin'
+          const size = progress.downloadedBytes != null
+            ? ` · ${progress.downloadedBytes}${progress.totalBytes != null ? `/${progress.totalBytes}` : ''} B`
+            : ''
+          const entry: RuntimeOutput = {
+            channel,
+            level: progress.phase === 'error' ? 'error' : progress.phase === 'complete' ? 'success' : 'info',
+            text: `[${progress.repository}] ${progress.message} · ${progress.percent}%${size}`,
+            timestamp: new Date().toISOString(),
+          }
+          setLogs(current => [...current.slice(-(MAX_LOG_LINES - 1)), entry])
+        }
+      }
+
     const unsubscribers = [
       api.onRuntimeOutput(output => setLogs(current => [...current.slice(-(MAX_LOG_LINES - 1)), output])),
       api.onRuntimeState(setRuntime),
-      api.onInstallProgress(setInstallProgress),
+      api.onInstallProgress(handleInstallProgress),
+      api.onDshMarketProgress(progress => handleInstallProgress({
+        repository: progress.name ? `dsh-market:${progress.name}` : 'dsh-market',
+        kind: 'plugin',
+        phase: progress.phase === 'loading' || progress.phase === 'checking' ? 'preparing' : progress.phase === 'resolving' ? 'resolving' : progress.phase,
+        percent: progress.percent ?? 0,
+        message: progress.message,
+        downloadedBytes: progress.downloadedBytes ?? undefined,
+        totalBytes: progress.totalBytes ?? undefined,
+      })),
       api.onLauncherUpdateProgress(progress => {
         setLauncherUpdateProgress(progress)
         setLauncherUpdate(current => current ? { ...current, state: progress.phase === 'applying' ? 'applying' : 'downloading' } : current)
@@ -293,6 +337,97 @@ export function useLauncherStore() {
     const result = await installDsh()
     return result !== undefined
   }, [installDsh])
+
+  const applyRuntimeEnvironment = useCallback(async (next: RuntimeEnvironmentState) => {
+    setRuntimeEnvironment(next)
+    setSettings(await api.getSettings())
+    setDshInstallation(await api.detectDshInstallation())
+  }, [api])
+
+  const refreshRuntimeEnvironment = useCallback(async (refresh = false): Promise<boolean> => {
+    const next = await run('runtime-environment-read', () => api.readRuntimeEnvironment(refresh), {
+      onError: error => showToast({ kind: 'error', message: errorText(error) }),
+    })
+    if (!next) return false
+    setRuntimeEnvironment(next)
+    return true
+  }, [api, run, showToast])
+
+  const installDshVersion = useCallback(async (version: string): Promise<boolean> => {
+    const next = await run(`runtime-dsh-install:${version}`, () => api.installDshVersion(version), {
+      success: `DSH ${version} 已安装并设为当前版本。`,
+      onError: error => {
+        const message = errorText(error)
+        setInstallProgress({ repository: version.replace(/^v/i, ''), kind: 'dsh', phase: 'error', percent: 0, message, indeterminate: false })
+        showToast({ kind: 'error', message })
+      },
+    })
+    if (!next) return false
+    await applyRuntimeEnvironment(next)
+    return true
+  }, [api, applyRuntimeEnvironment, run, showToast])
+
+  const selectDshVersion = useCallback(async (version: string): Promise<boolean> => {
+    const next = await run(`runtime-dsh-select:${version}`, () => api.selectDshVersion(version), {
+      success: `DSH ${version} 已设为当前启动版本。`,
+      onError: error => showToast({ kind: 'error', message: errorText(error) }),
+    })
+    if (!next) return false
+    await applyRuntimeEnvironment(next)
+    return true
+  }, [api, applyRuntimeEnvironment, run, showToast])
+
+  const removeDshVersion = useCallback(async (version: string): Promise<boolean> => {
+    const next = await run(`runtime-dsh-remove:${version}`, () => api.removeDshVersion(version), {
+      success: `DSH ${version} 已删除。`,
+      onError: error => showToast({ kind: 'error', message: errorText(error) }),
+    })
+    if (!next) return false
+    await applyRuntimeEnvironment(next)
+    return true
+  }, [api, applyRuntimeEnvironment, run, showToast])
+
+  const installNodeVersion = useCallback(async (version: string): Promise<boolean> => {
+    const next = await run(`runtime-node-install:${version}`, () => api.installNodeVersion(version), {
+      success: `Node.js ${version} 已安装并设为当前版本。`,
+      onError: error => {
+        const message = errorText(error)
+        setInstallProgress({ repository: version.replace(/^v/i, ''), kind: 'dsh', phase: 'error', percent: 0, message, indeterminate: false })
+        showToast({ kind: 'error', message })
+      },
+    })
+    if (!next) return false
+    await applyRuntimeEnvironment(next)
+    return true
+  }, [api, applyRuntimeEnvironment, run, showToast])
+
+  const cancelRuntimeDownload = useCallback(async (): Promise<void> => {
+    try {
+      await api.cancelRuntimeEnvironmentOperation()
+    } catch (error) {
+      showToast({ kind: 'error', message: errorText(error) })
+    }
+  }, [api, showToast])
+
+  const selectNodeVersion = useCallback(async (version: string | null): Promise<boolean> => {
+    const next = await run(`runtime-node-select:${version ?? 'system'}`, () => api.selectNodeVersion(version), {
+      success: version ? `Node.js ${version} 已设为当前运行环境。` : '已恢复使用系统 Node.js。',
+      onError: error => showToast({ kind: 'error', message: errorText(error) }),
+    })
+    if (!next) return false
+    await applyRuntimeEnvironment(next)
+    return true
+  }, [api, applyRuntimeEnvironment, run, showToast])
+
+  const removeNodeVersion = useCallback(async (version: string): Promise<boolean> => {
+    const next = await run(`runtime-node-remove:${version}`, () => api.removeNodeVersion(version), {
+      success: `Node.js ${version} 已删除。`,
+      onError: error => showToast({ kind: 'error', message: errorText(error) }),
+    })
+    if (!next) return false
+    await applyRuntimeEnvironment(next)
+    return true
+  }, [api, applyRuntimeEnvironment, run, showToast])
 
   /** 启动器自更新：检测到新版本后自动开始后台下载（幂等，已有临时文件则跳过）。 */
   const downloadLauncherUpdate = useCallback(async (): Promise<LauncherUpdateStatus | null> => {
@@ -441,7 +576,7 @@ export function useLauncherStore() {
 
   const uninstallPlugin = useCallback(async (plugin: ManagedPlugin) => {
     const next = await run(plugin.packageName, () => api.uninstallPlugin(plugin.packageName), {
-      success: `${plugin.displayName} 已卸载。`,
+      success: `${plugin.displayName} 已从本机完全卸载。`,
     })
     if (!next) return
     setProfile(next)
@@ -642,6 +777,7 @@ export function useLauncherStore() {
     runtime,
     dshInstallation,
     dshUpdate,
+    runtimeEnvironment,
     launcherUpdate,
     launcherUpdateProgress,
     installProgress,
@@ -680,6 +816,14 @@ export function useLauncherStore() {
     finishInstall,
     toggleRuntime,
     updateDsh,
+    refreshRuntimeEnvironment,
+    installDshVersion,
+    selectDshVersion,
+    removeDshVersion,
+    installNodeVersion,
+    cancelRuntimeDownload,
+    selectNodeVersion,
+    removeNodeVersion,
     downloadLauncherUpdate,
     applyLauncherUpdate,
     saveSettings,

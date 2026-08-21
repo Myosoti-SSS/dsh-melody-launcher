@@ -1,10 +1,14 @@
-export type ViewName = 'plugins' | 'discover' | 'dsh-market' | 'runtime' | 'packs' | 'github'
+export type ViewName = 'plugins' | 'discover' | 'dsh-market' | 'runtime' | 'environment' | 'packs' | 'github'
 export type WindowMode = 'launcher' | 'manager'
 export type UiTheme = 'forest' | 'ocean' | 'berry' | 'graphite'
 
 export interface AppSettings {
   dshInstallPath: string
   dshHome: string
+  /** 当前选中的启动器托管 DSH 版本；null 表示沿用旧版自动检测。 */
+  dshVersion?: string | null
+  /** 当前选中的启动器托管 Node.js 版本；null 表示系统 Node 优先。 */
+  nodeVersion?: string | null
   profileName: string
   /** 当前选中的整合包清单；不改变实际 DSH Profile。 */
   activePackId?: string | null
@@ -189,6 +193,43 @@ export interface DshUpdateStatus {
   repository: string
   checkedAt: string
   message: string
+}
+
+export interface RuntimeVersionCandidate {
+  version: string
+  label: string | null
+  lts: string | boolean | null
+  date: string | null
+  prerelease: boolean
+}
+
+export interface DshVersionInfo {
+  version: string
+  root: string
+  executable: string
+  source: 'launcher' | 'legacy' | 'system'
+  selected: boolean
+  removable: boolean
+}
+
+export interface NodeVersionInfo {
+  version: string
+  root: string
+  executable: string
+  source: 'launcher' | 'legacy' | 'system'
+  selected: boolean
+  removable: boolean
+}
+
+export interface RuntimeEnvironmentState {
+  dshRoot: string
+  nodeRoot: string
+  dshSelectedVersion: string | null
+  nodeSelectedVersion: string | null
+  dshInstalled: DshVersionInfo[]
+  nodeInstalled: NodeVersionInfo[]
+  dshAvailable: RuntimeVersionCandidate[]
+  nodeAvailable: RuntimeVersionCandidate[]
 }
 
 export interface LauncherUpdateStatus {
@@ -482,7 +523,7 @@ export interface RuntimeFailure {
 }
 
 export interface RuntimeOutput {
-  channel: 'runtime' | 'plugin' | 'ai'
+  channel: 'runtime' | 'plugin' | 'test' | 'ai'
   level: 'info' | 'error' | 'success'
   text: string
   timestamp: string
@@ -647,6 +688,8 @@ export interface PackManifest {
   name: string
   description: string
   version: string
+  /** 当前整合包要求使用的 DSH 精确版本；导入当前版本时必须提供。 */
+  dshVersion?: string
   author?: string
   plugins: PackPluginEntry[]
   presets?: PackPresetEntry[]
@@ -668,6 +711,7 @@ export interface PackAnalysis {
   name: string
   description: string
   version: string
+  dshVersion: string | null
   source: PackSource
   items: PackAnalysisItem[]
 }
@@ -705,6 +749,8 @@ export interface PackStatus {
   name: string
   description: string
   version: string
+  /** 当前整合包要求的 DSH 版本；旧注册表记录可能为空。 */
+  dshVersion: string | null
   source: PackSource
   enabled: boolean            // 当前选中的整合包清单
   state: 'complete' | 'partial' | 'failed'
@@ -725,6 +771,8 @@ export interface PackCreateRequest {
   presetNames?: string[]      // 从已安装且有来源记录的 Agent 预设勾选
   skillNames?: string[]       // 从已安装且有来源记录的 Skill 勾选
   applicationIds?: string[]   // 从已安装的 Application Addon 勾选
+  /** 可选覆盖；缺省使用当前启动器选中的 DSH 版本。 */
+  dshVersion?: string
 }
 
 /** importPack 的可选覆盖项（raw 导入时的包名覆盖）。 */
@@ -796,6 +844,16 @@ export interface LauncherApi {
   saveSettings(settings: AppSettings): Promise<AppSettings>
   detectDshInstallation(): Promise<DshInstallationStatus>
   checkDshUpdate(): Promise<DshUpdateStatus>
+  readRuntimeEnvironment(refresh?: boolean): Promise<RuntimeEnvironmentState>
+  installDshVersion(version: string): Promise<RuntimeEnvironmentState>
+  selectDshVersion(version: string): Promise<RuntimeEnvironmentState>
+  removeDshVersion(version: string): Promise<RuntimeEnvironmentState>
+  installNodeVersion(version: string): Promise<RuntimeEnvironmentState>
+  selectNodeVersion(version: string | null): Promise<RuntimeEnvironmentState>
+  removeNodeVersion(version: string): Promise<RuntimeEnvironmentState>
+  cancelRuntimeEnvironmentOperation(): Promise<void>
+  openDshFolder(): Promise<void>
+  openNodeFolder(): Promise<void>
   checkLauncherUpdate(): Promise<LauncherUpdateStatus>
   downloadLauncherUpdate(): Promise<LauncherUpdateStatus>
   applyLauncherUpdate(): Promise<void>

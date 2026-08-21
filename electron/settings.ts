@@ -32,6 +32,8 @@ export function defaultSettings(input: DefaultSettingsInput): AppSettings {
   return {
     dshInstallPath: input.dshInstallPath ?? joinForPlatform(platform, input.homeDirectory, '.dsh-runtime'),
     dshHome: input.dshHomeFromEnvironment || joinForPlatform(platform, input.homeDirectory, '.dsh'),
+    dshVersion: null,
+    nodeVersion: null,
     profileName: DEFAULT_PROFILE_NAME,
     activePackId: null,
     workspace: input.documentsDirectory,
@@ -53,6 +55,11 @@ function validUiTheme(value: unknown): value is UiTheme {
 
 function validWebPort(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 65535
+}
+
+function validRuntimeVersion(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value.trim())
 }
 
 /** 兼容曾经直接写在启动参数里的 --port。 */
@@ -97,6 +104,8 @@ export function validateSettings(input: AppSettings): AppSettings {
   return {
     dshInstallPath: input.dshInstallPath,
     dshHome: input.dshHome,
+    dshVersion: input.dshVersion == null ? null : validRuntimeVersion(input.dshVersion) ? input.dshVersion.trim() : null,
+    nodeVersion: input.nodeVersion == null ? null : validRuntimeVersion(input.nodeVersion) ? input.nodeVersion.trim() : null,
     profileName: input.profileName,
     activePackId: typeof input.activePackId === 'string' && isSafeProfileName(input.activePackId) ? input.activePackId : null,
     workspace: input.workspace,
@@ -119,6 +128,8 @@ export function mergeStoredSettings(defaults: AppSettings, stored: Partial<AppSe
   return {
     ...defaults,
     ...stored,
+    dshVersion: stored.dshVersion == null ? null : validRuntimeVersion(stored.dshVersion) ? stored.dshVersion.trim() : null,
+    nodeVersion: stored.nodeVersion == null ? null : validRuntimeVersion(stored.nodeVersion) ? stored.nodeVersion.trim() : null,
     activePackId: typeof stored.activePackId === 'string' && isSafeProfileName(stored.activePackId) ? stored.activePackId : null,
     dshInstallPath: typeof stored.dshInstallPath === 'string' && path.isAbsolute(stored.dshInstallPath)
       ? stored.dshInstallPath

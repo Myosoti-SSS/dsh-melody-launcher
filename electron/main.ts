@@ -37,7 +37,9 @@ import { installPresetFromDirectory } from './preset-install'
 import { installSkillFromDirectory } from './skill-install'
 import { createRendererEvents } from './renderer-events'
 import { createRuntimeController, type RuntimeController } from './runtime'
+import { createRuntimeVersionService, type RuntimeVersionService } from './runtime-versions'
 import { createSettingsStore, defaultSettings, type SettingsStore } from './settings'
+import { recoverLegacyCredentials } from './dsh-credentials-compat'
 
 /**
  * 应用入口与装配根。
@@ -68,6 +70,7 @@ interface Services {
   applicationAddons: ApplicationAddonManager
   catalogSync: CatalogSyncService
   dshMarket: DshMarketService
+  runtimeVersions: RuntimeVersionService
 }
 
 // app.getPath 依赖 app 就绪，因此服务在 whenReady 之后才装配。
@@ -102,6 +105,8 @@ function createServices(): Services {
     onFlush: result => events.output('plugin', result.submitted > 0 ? 'success' : 'error', result.message),
   })
 
+  let settings: SettingsStore
+
   /**
    * 准备 Node.js 运行环境，并把下载进度写进日志。
    * 进度每跨越 10% 记一条，避免刷屏。
@@ -111,14 +116,14 @@ function createServices(): Services {
     onProgress?: (progress: NodeRuntimeProgress) => void,
   ): Promise<NodeRuntime> => {
     let lastBucket = -1
-    return ensureNodeRuntime(managedNodeRoot, progress => {
+    return settings.read().then(currentSettings => ensureNodeRuntime(managedNodeRoot, progress => {
       const bucket = Math.floor(progress.percent / 10)
       if (bucket !== lastBucket || progress.percent === 100) {
         lastBucket = bucket
         events.output(source, 'info', `${progress.message}（${progress.percent}%）`)
       }
       onProgress?.(progress)
-    })
+    }, currentSettings.nodeVersion, (level, text) => events.output(source, level, text)))
   }
 
   const preparePnpmRuntime = (
@@ -134,10 +139,10 @@ function createServices(): Services {
         events.output(source, 'info', `${progress.message}（${progress.percent}%）`)
       }
       onProgress?.(progress)
-    })
+    }, (level, text) => events.output(source, level, text))
   }
 
-  const settings = createSettingsStore({
+  settings = createSettingsStore({
     filePath: path.join(userData, 'settings.json'),
     createDefaults: () => defaultSettings({
       dshHomeFromEnvironment: process.env.DSH_HOME,
@@ -161,6 +166,20 @@ function createServices(): Services {
     emitState: state => events.runtimeState(state),
     openExternal: url => void shell.openExternal(url),
     resolveApplicationLaunchPlan: () => applicationAddons.launchPlan(),
+    legacyCredentialsBackupRoot: path.join(userData, 'dsh-credentials-compat'),
+  })
+
+  const runtimeVersions = createRuntimeVersionService({
+    dshRoot: managedDshRoot,
+    nodeRoot: managedNodeRoot,
+    readSettings: () => settings.read(),
+    saveSettings: next => settings.save(next),
+    prepareNodeRuntime: onProgress => prepareNodeRuntime('plugin', onProgress),
+    preparePnpmRuntime: (nodeRuntime, onProgress) => preparePnpmRuntime('plugin', nodeRuntime, onProgress),
+    isRuntimeRunning: () => runtime.isRunning(),
+    emitOutput: (level, text) => events.output('plugin', level, text),
+    emitProgress: progress => events.installProgress(progress),
+    githubFetch: githubAuth.fetch,
   })
 
   applicationAddons = createApplicationAddonManager({
@@ -209,7 +228,7 @@ function createServices(): Services {
     preparePnpmRuntime: nodeRuntime => preparePnpmRuntime('plugin', nodeRuntime),
     trialRoot: path.join(userData, 'plugin-trials'),
     resultsPath: path.join(userData, 'plugin-trial-results.json'),
-    emitOutput: (level, text) => events.output('plugin', level, text),
+    emitOutput: (level, text) => events.output('test', level, text),
     emitResult: result => events.pluginTrial(result),
     isRuntimeRunning: () => runtime.isRunning(),
     isInstallerBusy: () => installer.isBusy(),
@@ -277,6 +296,7 @@ function createServices(): Services {
           FORCE_COLOR: '0',
         }),
       ),
+      onOutput: (text, level) => events.output('plugin', level, text),
     })
     if (result.exitCode !== 0) throw new Error(`插件安装失败（代码 ${result.exitCode}），请查看运行日志。`)
     let version: string | null = null
@@ -365,7 +385,7 @@ function createServices(): Services {
     .then(current => healCredentialsLock(current.dshHome, path.join(userData, CREDENTIALS_LOCK_DIRNAME)))
     .catch(() => { /* 设置未就绪可忽略，锁会在下次 AI 会话前置处理 */ })
 
-  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager: packManager!, githubAuth, applicationAddons, catalogSync, dshMarket }
+  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager: packManager!, githubAuth, applicationAddons, catalogSync, dshMarket, runtimeVersions }
 }
 
 function openMainWindow(): void {
@@ -379,6 +399,9 @@ function openMainWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  await recoverLegacyCredentials(path.join(app.getPath('userData'), 'dsh-credentials-compat')).catch(error => {
+    console.error('[credentials] 旧版 DSH 凭据恢复失败。', error)
+  })
   try {
     processSupervisor = await createProcessSupervisor({
       root: path.join(app.getPath('userData'), 'process-supervisor'),

@@ -19,6 +19,8 @@ import type {
   DshMarketCatalog,
   DshMarketProgress,
   DshUpdateStatus,
+  RuntimeEnvironmentState,
+  RuntimeVersionCandidate,
   GitHubAuthStatus,
   GitHubPullRequestSummary,
   InstallProgress,
@@ -55,6 +57,8 @@ let demoSettings: AppSettings = {
   webPort: 3080,
   openAfterLaunch: true,
   uiTheme: 'forest',
+  dshVersion: null,
+  nodeVersion: null,
 }
 
 let demoPlugins: ManagedPlugin[] = [
@@ -189,6 +193,18 @@ let demoGitHubAuth: GitHubAuthStatus = {
 const demoStarredRepositories = new Set<string>()
 let demoDshInstallation: DshInstallationStatus = { installed: false, version: null, executable: null, source: null }
 const demoRemoteDshVersion = '0.1.0-rc.7'
+const demoDshCandidates: RuntimeVersionCandidate[] = [
+  { version: '0.1.0-rc.7', label: 'latest', lts: null, date: null, prerelease: true },
+  { version: '0.1.0-rc.6', label: null, lts: null, date: null, prerelease: true },
+]
+const demoNodeCandidates: RuntimeVersionCandidate[] = [
+  { version: 'v24.19.0', label: 'Krypton', lts: 'Krypton', date: null, prerelease: false },
+  { version: 'v22.19.0', label: 'Jod', lts: 'Jod', date: null, prerelease: false },
+]
+let demoDshVersions: RuntimeEnvironmentState['dshInstalled'] = []
+let demoNodeVersions: RuntimeEnvironmentState['nodeInstalled'] = [
+  { version: 'system', root: 'C:\\Program Files\\nodejs', executable: 'C:\\Program Files\\nodejs\\node.exe', source: 'system', selected: true, removable: false },
+]
 /** demo：置 true 可模拟「发现启动器新版本」，验证自更新 UI 与进度条。 */
 let demoLauncherUpdateAvailable = false
 const demoLauncherVersion = '0.1.9'
@@ -274,6 +290,7 @@ let demoPacks: PackStatus[] = [
     name: 'Web 基础包',
     description: 'Web 工作台 + UI 集合，日常使用的基础组合。',
     version: '1.0.0',
+    dshVersion: '0.1.0-rc.7',
     source: 'created',
     enabled: true,
     state: 'complete',
@@ -290,6 +307,7 @@ let demoPacks: PackStatus[] = [
     name: 'CC TUI 终端包',
     description: '终端交互界面专用组合。',
     version: '0.9.0',
+    dshVersion: '0.1.0-rc.7',
     source: 'zip',
     enabled: false,
     state: 'complete',
@@ -620,6 +638,60 @@ export const demoApi: LauncherApi = {
   getSettings: async () => demoSettings,
   saveSettings: async settings => (demoSettings = settings),
   detectDshInstallation: async () => ({ ...demoDshInstallation }),
+  readRuntimeEnvironment: async (): Promise<RuntimeEnvironmentState> => ({
+    dshRoot: demoSettings.dshInstallPath,
+    nodeRoot: 'C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\node-runtime',
+    dshSelectedVersion: demoSettings.dshVersion ?? null,
+    nodeSelectedVersion: demoSettings.nodeVersion ?? null,
+    dshInstalled: demoDshVersions,
+    nodeInstalled: demoNodeVersions,
+    dshAvailable: demoDshCandidates,
+    nodeAvailable: demoNodeCandidates,
+  }),
+  installDshVersion: async version => {
+    const normalized = version.replace(/^v/i, '')
+    const item = { version: normalized, root: `${demoSettings.dshInstallPath}\\versions\\${normalized}`, executable: `${demoSettings.dshInstallPath}\\versions\\${normalized}\\node_modules\\.bin\\dsh.cmd`, source: 'launcher' as const, selected: true, removable: false }
+    demoDshVersions = demoDshVersions.map(entry => ({ ...entry, selected: false, removable: true })).filter(entry => entry.version !== normalized)
+    demoDshVersions.push(item)
+    demoSettings = { ...demoSettings, dshVersion: normalized, launchExecutable: item.executable, launchArgs: ['web'] }
+    demoDshInstallation = { installed: true, version: normalized, executable: item.executable, source: 'launcher' }
+    return demoApi.readRuntimeEnvironment()
+  },
+  selectDshVersion: async version => {
+    const item = demoDshVersions.find(entry => entry.version === version.replace(/^v/i, ''))
+    if (!item) throw new Error('DSH 版本尚未安装。')
+    demoDshVersions = demoDshVersions.map(entry => ({ ...entry, selected: entry.version === item.version, removable: entry.version !== item.version }))
+    demoSettings = { ...demoSettings, dshVersion: item.version, launchExecutable: item.executable, launchArgs: ['web'] }
+    return demoApi.readRuntimeEnvironment()
+  },
+  removeDshVersion: async version => {
+    if (demoSettings.dshVersion === version.replace(/^v/i, '')) throw new Error('当前 DSH 版本不能删除。')
+    demoDshVersions = demoDshVersions.filter(entry => entry.version !== version.replace(/^v/i, ''))
+    return demoApi.readRuntimeEnvironment()
+  },
+  installNodeVersion: async version => {
+    const normalized = version.startsWith('v') ? version : `v${version}`
+    demoNodeVersions = demoNodeVersions.filter(entry => entry.version !== normalized && entry.version !== 'system')
+    demoNodeVersions.push({ version: normalized, root: `C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\node-runtime\\versions\\${normalized}`, executable: `C:\\Users\\demo\\AppData\\Roaming\\dsh-launcher\\node-runtime\\versions\\${normalized}\\node.exe`, source: 'launcher', selected: true, removable: false })
+    demoNodeVersions = demoNodeVersions.map(entry => ({ ...entry, selected: entry.version === normalized, removable: entry.version !== normalized && entry.source === 'launcher' }))
+    demoSettings = { ...demoSettings, nodeVersion: normalized }
+    return demoApi.readRuntimeEnvironment()
+  },
+  selectNodeVersion: async version => {
+    const normalized = version === null || version === 'system' ? null : (version.startsWith('v') ? version : `v${version}`)
+    if (normalized && !demoNodeVersions.some(entry => entry.version === normalized)) throw new Error('Node.js 版本尚未安装。')
+    demoSettings = { ...demoSettings, nodeVersion: normalized }
+    demoNodeVersions = demoNodeVersions.map(entry => ({ ...entry, selected: normalized === null ? entry.version === 'system' : entry.version === normalized, removable: entry.source === 'launcher' && entry.version !== normalized }))
+    return demoApi.readRuntimeEnvironment()
+  },
+  removeNodeVersion: async version => {
+    if (demoSettings.nodeVersion === version) throw new Error('当前 Node.js 版本不能删除。')
+    demoNodeVersions = demoNodeVersions.filter(entry => entry.version !== version)
+    return demoApi.readRuntimeEnvironment()
+  },
+  cancelRuntimeEnvironmentOperation: async () => undefined,
+  openDshFolder: async () => undefined,
+  openNodeFolder: async () => undefined,
   checkDshUpdate: async (): Promise<DshUpdateStatus> => {
     const localVersion = demoDshInstallation.version
     if (!demoDshInstallation.installed || !localVersion) {
@@ -1242,6 +1314,7 @@ export const demoApi: LauncherApi = {
       name: request.name,
       description: request.description ?? '',
       version: '1.0.0',
+      dshVersion: request.dshVersion ?? demoSettings.dshVersion ?? '0.1.0-rc.7',
       source: 'created',
       enabled: true,
       state: 'complete',
@@ -1259,6 +1332,7 @@ export const demoApi: LauncherApi = {
     name: '',
     description: '非标准整合包：扫描到 2 个插件、1 个技能。',
     version: '1.0.0',
+    dshVersion: null,
     source: 'raw',
     items: [
       { packageName: 'dsh-anchored-standard', available: true, offline: true },

@@ -34,7 +34,7 @@ import {
   type ProfileSnapshot,
 } from './ai-install'
 import type { NodeRuntime, PnpmRuntime } from './node-runtime'
-import { spawnCommand, withExecutableDirectoryOnPath } from './process'
+import { formatCommandLine, spawnCommand, withExecutableDirectoryOnPath } from './process'
 
 const MAX_CONCURRENT_ANALYSES = 4
 const MAX_MESSAGES = 240
@@ -475,6 +475,7 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
       cwd: taskRoot,
       env: acpEnvironment(settings.dshHome, apiKey, environment),
     })
+    options.emitOutput('info', `[copilot:${sessionId}] 命令：${formatCommandLine(command.executable, command.args)}\n工作目录：${taskRoot}`)
     const active: ActiveAgent = {
       child,
       acp: null as unknown as AcpClient,

@@ -31,6 +31,7 @@ import type { RuntimeController } from './runtime'
 import type { SettingsStore } from './settings'
 import type { GitHubAuthService } from './github-auth'
 import { createLinkedComponentController } from './linked-components'
+import type { RuntimeVersionService } from './runtime-versions'
 
 /**
  * 渲染层能触达主进程的全部入口。
@@ -51,12 +52,13 @@ export interface IpcDependencies {
   applicationAddons: ApplicationAddonManager
   catalogSync: CatalogSyncService
   dshMarket: DshMarketService
+  runtimeVersions: RuntimeVersionService
   getWindow: () => BrowserWindow | null
   setWindowMode: (mode: WindowMode) => void
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager, githubAuth, applicationAddons, catalogSync, dshMarket } = deps
+  const { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager, githubAuth, applicationAddons, catalogSync, dshMarket, runtimeVersions } = deps
   const linkedComponents = createLinkedComponentController({
     readSettings: () => settings.read(),
     readProfile,
@@ -75,6 +77,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     if (copilot.isMutationBusy()) throw new Error('DSH Copilot 修改任务进行中，请等待完成。')
     if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中，请等待完成。')
     if (dshMarket.isBusy()) throw new Error('DSH Market 插件操作进行中，请等待完成。')
+    if (runtimeVersions.isBusy()) throw new Error('运行环境版本操作进行中，请等待完成。')
   }
 
   ipcMain.handle(IPC.settingsGet, () => settings.read())
@@ -84,6 +87,46 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
   ipcMain.handle(IPC.dshDetect, () => installer.detectDsh())
   ipcMain.handle(IPC.dshUpdateCheck, () => installer.checkDshUpdate())
+  ipcMain.handle(IPC.runtimeEnvironmentRead, (_event, refresh?: boolean) => runtimeVersions.read(Boolean(refresh)))
+  ipcMain.handle(IPC.runtimeEnvironmentInstallDsh, async (_event, version: string) => {
+    assertProfileMutationAvailable()
+    if (typeof version !== 'string') throw new Error('DSH 版本格式无效。')
+    return runtimeVersions.installDsh(version)
+  })
+  ipcMain.handle(IPC.runtimeEnvironmentSelectDsh, async (_event, version: string) => {
+    assertProfileMutationAvailable()
+    if (typeof version !== 'string') throw new Error('DSH 版本格式无效。')
+    return runtimeVersions.selectDsh(version)
+  })
+  ipcMain.handle(IPC.runtimeEnvironmentRemoveDsh, async (_event, version: string) => {
+    assertProfileMutationAvailable()
+    if (typeof version !== 'string') throw new Error('DSH 版本格式无效。')
+    return runtimeVersions.removeDsh(version)
+  })
+  ipcMain.handle(IPC.runtimeEnvironmentInstallNode, async (_event, version: string) => {
+    assertProfileMutationAvailable()
+    if (typeof version !== 'string') throw new Error('Node.js 版本格式无效。')
+    return runtimeVersions.installNode(version)
+  })
+  ipcMain.handle(IPC.runtimeEnvironmentSelectNode, async (_event, version: string | null) => {
+    assertProfileMutationAvailable()
+    if (version !== null && typeof version !== 'string') throw new Error('Node.js 版本格式无效。')
+    return runtimeVersions.selectNode(version)
+  })
+  ipcMain.handle(IPC.runtimeEnvironmentRemoveNode, async (_event, version: string) => {
+    assertProfileMutationAvailable()
+    if (typeof version !== 'string') throw new Error('Node.js 版本格式无效。')
+    return runtimeVersions.removeNode(version)
+  })
+  ipcMain.handle(IPC.runtimeEnvironmentCancel, () => runtimeVersions.cancel())
+  ipcMain.handle(IPC.runtimeEnvironmentOpenDshFolder, async () => {
+    const state = await runtimeVersions.read()
+    await shell.openPath(state.dshRoot)
+  })
+  ipcMain.handle(IPC.runtimeEnvironmentOpenNodeFolder, async () => {
+    const state = await runtimeVersions.read()
+    await shell.openPath(state.nodeRoot)
+  })
   ipcMain.handle(IPC.launcherUpdateCheck, () => launcherUpdater.check())
   ipcMain.handle(IPC.launcherUpdateDownload, () => launcherUpdater.download())
   ipcMain.handle(IPC.launcherUpdateApply, () => launcherUpdater.apply())
