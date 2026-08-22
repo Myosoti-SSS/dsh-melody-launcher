@@ -7,6 +7,7 @@ import { reorderProfilePlugins } from '../lib/profile-order'
 import type {
   ApplicationInstallResult,
   AppSettings,
+  CatalogAnalysisProgress,
   CredentialStatus,
   CustomApiProvider,
   CustomApiProviderInput,
@@ -14,6 +15,7 @@ import type {
   DshUpdateStatus,
   GitHubAuthStatus,
   InstallProgress,
+  LauncherApi,
   InstalledPreset,
   InstalledSkill,
   InstalledApplicationAddon,
@@ -21,6 +23,7 @@ import type {
   LauncherUpdateStatus,
   ManagedPlugin,
   PackStatus,
+  ProfileSummary,
   PluginTrialResult,
   PresetInstallResult,
   ProfileState,
@@ -77,10 +80,13 @@ export function useLauncherStore() {
     oauthAvailable: false,
     rateLimit: null,
   })
+  const githubAuthRefreshVersion = useRef(0)
   const [logs, setLogs] = useState<RuntimeOutput[]>([])
   const progressLogBuckets = useRef<Record<string, { phase: InstallProgress['phase']; bucket: number; message: string }>>({})
+  const catalogProgressLogState = useRef<Record<string, string>>({})
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null)
   const [packs, setPacks] = useState<PackStatus[]>([])
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([])
   const [packSnapshotsAvailable, setPackSnapshotsAvailable] = useState(false)
   const [loading, setLoading] = useState(true)
   const activeRuntimeReplacement = installedApplications.find(
@@ -95,6 +101,14 @@ export function useLauncherStore() {
       : next.plugins[0]?.packageName ?? null)
   }, [])
 
+  const appendRuntimeLog = useCallback((entry: Omit<RuntimeOutput, 'timestamp'>) => {
+    setLogs(current => {
+      const previous = current[current.length - 1]
+      if (previous && previous.channel === entry.channel && previous.level === entry.level && previous.text === entry.text) return current
+      return [...current.slice(-(MAX_LOG_LINES - 1)), { ...entry, timestamp: new Date().toISOString() }]
+    })
+  }, [])
+
   useEffect(() => {
     let disposed = false
     void Promise.all([
@@ -107,11 +121,12 @@ export function useLauncherStore() {
       api.readInstalledApplications(),
       api.readInstalledPresets(),
       api.listPacks(),
+      api.listProfiles(),
       api.packHasSnapshot(),
       api.readPluginTrials(),
       api.listCustomApiProviders().catch(() => [] as CustomApiProvider[]),
     ])
-      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextDshInstallation, nextInstalledSkills, nextInstalledApplications, nextInstalledPresets, nextPacks, nextPackSnapshot, nextPluginTrials, nextCustomApiProviders]) => {
+      .then(([nextSettings, nextProfile, nextRuntime, nextCredentialStatus, nextDshInstallation, nextInstalledSkills, nextInstalledApplications, nextInstalledPresets, nextPacks, nextProfiles, nextPackSnapshot, nextPluginTrials, nextCustomApiProviders]) => {
         setSettings(nextSettings)
         setProfile(nextProfile)
         setRuntime(nextRuntime)
@@ -122,6 +137,7 @@ export function useLauncherStore() {
         setInstalledPresets(nextInstalledPresets)
         setSelectedPlugin(nextProfile.plugins[0]?.packageName ?? null)
         setPacks(nextPacks)
+        setProfiles(nextProfiles)
         setPackSnapshotsAvailable(nextPackSnapshot)
         setPluginTrials(Object.fromEntries(nextPluginTrials.map(result => [pluginTrialStateKey(result.profileName, result.packageName), result])))
         setCustomApiProviders(nextCustomApiProviders)
@@ -130,16 +146,25 @@ export function useLauncherStore() {
       .finally(() => setLoading(false))
 
     // GitHub 凭据状态独立加载；读取失败时短暂重试，避免一次 IPC/启动时序问题把已登录账号卡成未登录。
-    const refreshGitHubAuth = async (attempt = 0): Promise<void> => {
+    const refreshGitHubAuth = async (attempt = 0, refreshVersion?: number): Promise<void> => {
       if (disposed) return
+      const version = refreshVersion ?? ++githubAuthRefreshVersion.current
       try {
         const next = await api.getGitHubAuthStatus()
-        if (!disposed) setGitHubAuthStatus(next)
+        if (!disposed && version === githubAuthRefreshVersion.current) setGitHubAuthStatus(next)
+        // safeStorage can become available just after the first IPC call.
+        // Retry a transient unauthenticated read so a valid encrypted session
+        // is not presented as logged out until the next window focus event.
+        if (!next.authenticated && !disposed && attempt < 2) {
+          const delay = attempt === 0 ? 250 : 1_000
+          await new Promise<void>(resolve => window.setTimeout(resolve, delay))
+          await refreshGitHubAuth(attempt + 1, version)
+        }
       } catch {
         if (disposed || attempt >= 2) return
         const delay = attempt === 0 ? 250 : 1_000
         await new Promise<void>(resolve => window.setTimeout(resolve, delay))
-        await refreshGitHubAuth(attempt + 1)
+        await refreshGitHubAuth(attempt + 1, version)
       }
     }
     void refreshGitHubAuth()
@@ -192,14 +217,26 @@ export function useLauncherStore() {
             text: `[${progress.repository}] ${progress.message} · ${progress.percent}%${size}`,
             timestamp: new Date().toISOString(),
           }
-          setLogs(current => [...current.slice(-(MAX_LOG_LINES - 1)), entry])
+          appendRuntimeLog(entry)
         }
       }
 
+      const handleCatalogAnalysisProgress = (progress: CatalogAnalysisProgress) => {
+        const signature = `${progress.phase}:${progress.completed}:${progress.message}`
+        if (catalogProgressLogState.current[progress.repository] === signature) return
+        catalogProgressLogState.current[progress.repository] = signature
+        appendRuntimeLog({
+          channel: 'plugin',
+          level: progress.phase === 'error' ? 'error' : progress.phase === 'complete' ? 'success' : 'info',
+          text: `[${progress.repository}] ${progress.message} · ${progress.completed}/${progress.total}`,
+        })
+      }
+
     const unsubscribers = [
-      api.onRuntimeOutput(output => setLogs(current => [...current.slice(-(MAX_LOG_LINES - 1)), output])),
+      api.onRuntimeOutput(output => appendRuntimeLog(output)),
       api.onRuntimeState(setRuntime),
       api.onInstallProgress(handleInstallProgress),
+      api.onCatalogAnalysisProgress(handleCatalogAnalysisProgress),
       api.onDshMarketProgress(progress => handleInstallProgress({
         repository: progress.name ? `dsh-market:${progress.name}` : 'dsh-market',
         kind: 'plugin',
@@ -215,6 +252,13 @@ export function useLauncherStore() {
       }),
       api.onPluginTrialEvent(result => {
         setPluginTrials(current => ({ ...current, [pluginTrialStateKey(result.profileName, result.packageName)]: result }))
+        appendRuntimeLog({
+          channel: 'test',
+          level: result.phase === 'failed' ? 'error' : result.phase === 'passed' ? 'success' : 'info',
+          text: result.phase === 'running'
+            ? `插件试运行：${result.packageName}（来源 Profile：${result.profileName}）`
+            : result.message,
+        })
       }),
     ]
     return () => {
@@ -292,11 +336,21 @@ export function useLauncherStore() {
 
   const beginInstall = useCallback((progress: InstallProgress) => {
     setInstallProgress(progress)
-  }, [])
+    appendRuntimeLog({
+      channel: progress.kind === 'dsh' ? 'runtime' : 'plugin',
+      level: 'info',
+      text: `[${progress.repository}] ${progress.message} · ${progress.percent}%`,
+    })
+  }, [appendRuntimeLog])
 
   const finishInstall = useCallback((repository: string, succeeded = false, message = '安装失败') => {
     setInstallProgress(current => finalizeInstallProgress(current, repository, succeeded, message))
-  }, [])
+    appendRuntimeLog({
+      channel: repository === DSH_REPOSITORY ? 'runtime' : 'plugin',
+      level: succeeded ? 'success' : 'error',
+      text: `[${repository}] ${succeeded ? '安装完成' : message}`,
+    })
+  }, [appendRuntimeLog])
 
   const installDsh = useCallback(async (): Promise<RepositoryInstallResult | undefined> => {
     setInstallProgress({
@@ -407,7 +461,7 @@ export function useLauncherStore() {
     } catch (error) {
       showToast({ kind: 'error', message: errorText(error) })
     }
-  }, [api, showToast])
+  }, [api, appendRuntimeLog, showToast])
 
   const selectNodeVersion = useCallback(async (version: string | null): Promise<boolean> => {
     const next = await run(`runtime-node-select:${version ?? 'system'}`, () => api.selectNodeVersion(version), {
@@ -611,6 +665,56 @@ export function useLauncherStore() {
     if (next) setPacks(next)
   }, [api, run, showToast])
 
+  const refreshProfiles = useCallback(async () => {
+    const next = await api.listProfiles()
+    setProfiles(next)
+    return next
+  }, [api])
+
+  const createProfile = useCallback(async (request: Parameters<LauncherApi['createProfile']>[0]) => {
+    const next = await run(`profile-create:${request.name}`, () => api.createProfile(request), { success: `Profile「${request.name}」已创建。` })
+    if (next) await refreshProfiles()
+    return next
+  }, [api, refreshProfiles, run])
+
+  const cloneProfile = useCallback(async (sourceName: string, targetName: string, description?: string) => {
+    const next = await run(`profile-clone:${targetName}`, () => api.cloneProfile(sourceName, targetName, description), { success: `Profile「${targetName}」已克隆。` })
+    if (next) await refreshProfiles()
+    return next
+  }, [api, refreshProfiles, run])
+
+  const switchProfile = useCallback(async (profileName: string, options?: { fillMissing?: boolean }) => {
+    const target = profiles.find(item => item.id === profileName)
+    const fillMissing = options?.fillMissing ?? (target && target.missingDependencies.length > 0
+      ? (typeof window !== 'undefined' && window.confirm(`Profile「${profileName}」缺少 ${target.missingDependencies.length} 项依赖，是否从来源记录补齐后切换？`))
+      : false)
+    if (target && target.missingDependencies.length > 0 && !fillMissing) {
+      // The confirmation dialog is the cancellation boundary for dependency
+      // repair. Clear any stale progress left by an earlier interrupted
+      // installer so Profile controls are immediately usable again.
+      setInstallProgress(null)
+      return undefined
+    }
+    const next = await run(`profile-switch:${profileName}`, async () => {
+      const result = await api.switchProfile(profileName, { fillMissing })
+      setSettings(result)
+      await refreshProfile()
+      await refreshProfiles()
+      return result
+    }, { success: `已切换到 Profile「${profileName}」。` })
+    // 依赖补齐由主进程复用安装进度事件；如果安装在准备阶段失败，
+    // 某些旧版本/第三方安装器可能来不及发送 error 终态。切换请求已经
+    // 结束后清除残留进度，避免 Profile 下拉框和导出菜单永久处于写锁状态。
+    setInstallProgress(null)
+    return next
+  }, [api, profiles, refreshProfiles, refreshProfile, run])
+
+  const deleteProfile = useCallback(async (profileName: string) => {
+    const next = await run(`profile-delete:${profileName}`, () => api.deleteProfile(profileName), { success: `Profile「${profileName}」已删除。` })
+    if (next !== undefined) await refreshProfiles()
+    return next !== undefined
+  }, [api, refreshProfiles, run])
+
   const refreshPackSnapshots = useCallback(async () => {
     try {
       setPackSnapshotsAvailable(await api.packHasSnapshot())
@@ -659,6 +763,12 @@ export function useLauncherStore() {
     const path = await run(`pack-export:${packId}`, () => api.exportPack(packId))
     if (path) showToast({ kind: 'success', message: `整合包已导出到 ${path}` })
     return path ?? null
+  }, [api, run, showToast])
+
+  const exportProfile = useCallback(async (profileName: string, mode: Parameters<LauncherApi['exportProfile']>[1], options?: Parameters<LauncherApi['exportProfile']>[2]): Promise<string | null> => {
+    const result = await run(`profile-export:${profileName}:${mode}`, () => api.exportProfile(profileName, mode, options))
+    if (result) showToast({ kind: 'success', message: mode === 'repository' ? `Profile 已同步到 ${result}` : `Profile 已导出到 ${result}` })
+    return result ?? null
   }, [api, run, showToast])
 
   const addPackPlugin = useCallback(async (packId: string, packageName: string): Promise<boolean> => {
@@ -795,6 +905,7 @@ export function useLauncherStore() {
     selectedPlugin,
     selected: profile?.plugins.find(plugin => plugin.packageName === selectedPlugin) ?? null,
     packs,
+    profiles,
     packSnapshotsAvailable,
     busy,
     toast,
@@ -831,7 +942,11 @@ export function useLauncherStore() {
     clearApiKey,
     saveCustomApi,
     removeCustomApi,
-    setGitHubAuthStatus,
+    setGitHubAuthStatus: (next: GitHubAuthStatus) => {
+      // A manual login/logout supersedes any status request already in flight.
+      githubAuthRefreshVersion.current += 1
+      setGitHubAuthStatus(next)
+    },
     togglePlugin,
     toggleSkill,
     toggleApplication,
@@ -841,11 +956,17 @@ export function useLauncherStore() {
     uninstallPlugin,
     trialPlugin,
     refreshPacks,
+    refreshProfiles,
+    createProfile,
+    cloneProfile,
+    switchProfile,
+    deleteProfile,
     refreshPackSnapshots,
     activatePack,
     deactivatePack,
     removePack,
     exportPack,
+    exportProfile,
     addPackPlugin,
     addPackPreset,
     addPackSkill,

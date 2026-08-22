@@ -1164,6 +1164,7 @@ export function createSpawnAcpTransport(
 const ACP_ENV_ALLOWLIST = [
   'PATH', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'APPDATA', 'LOCALAPPDATA',
   'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramData',
+  'npm_config_store_dir', 'pnpm_config_store_dir',
 ]
 
 function nodeEnvironment(): NodeJS.ProcessEnv {
@@ -1367,6 +1368,8 @@ const AI_INSTALLABLE = new Set<PluginInstallability>(['dynamic', 'application', 
 
 export interface AiInstallerOptions {
   readSettings: () => Promise<AppSettings>
+  /** 所有 Profile 共用的受控 pnpm store。 */
+  packageStoreRoot?: string
   /** 获取 Node 运行时（npm/npx）。 */
   prepareNodeRuntime: () => Promise<NodeRuntime>
   /** 获取 DSH plugin 子命令依赖的 pnpm。 */
@@ -1847,7 +1850,15 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
         settings.launchExecutable,
         withExecutableDirectoryOnPath(
           pnpmRuntime.executable,
-          withExecutableDirectoryOnPath(nodeRuntime.node, process.env),
+          withExecutableDirectoryOnPath(nodeRuntime.node, {
+            ...process.env,
+            ...(options.packageStoreRoot ? {
+              npm_config_store_dir: options.packageStoreRoot,
+              NPM_CONFIG_STORE_DIR: options.packageStoreRoot,
+              pnpm_config_store_dir: options.packageStoreRoot,
+              PNPM_CONFIG_STORE_DIR: options.packageStoreRoot,
+            } : {}),
+          }),
         ),
       )
 
@@ -1941,7 +1952,15 @@ export function createAiInstaller(options: AiInstallerOptions): AiInstaller {
         settings.launchExecutable,
         withExecutableDirectoryOnPath(
           pnpmRuntime.executable,
-          withExecutableDirectoryOnPath(nodeRuntime.node, process.env),
+          withExecutableDirectoryOnPath(nodeRuntime.node, {
+            ...process.env,
+            ...(options.packageStoreRoot ? {
+              npm_config_store_dir: options.packageStoreRoot,
+              NPM_CONFIG_STORE_DIR: options.packageStoreRoot,
+              pnpm_config_store_dir: options.packageStoreRoot,
+              PNPM_CONFIG_STORE_DIR: options.packageStoreRoot,
+            } : {}),
+          }),
         ),
       )
 

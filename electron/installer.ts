@@ -127,6 +127,8 @@ export interface InstallerOptions {
   pluginSourceRoot: string
   /** 插件安装凭据文件的路径。 */
   pluginReceiptsPath: string
+  /** 所有 Profile 共用的受控 pnpm store；Profile 自己仍保留独立链接层。 */
+  packageStoreRoot?: string
   /** Agent 预设安装凭据文件的路径。 */
   presetReceiptsPath: string
   /** Skill 安装凭据文件的路径。 */
@@ -508,6 +510,8 @@ export function createInstaller(options: InstallerOptions): Installer {
           withExecutableDirectoryOnPath(nodeRuntime.node, {
             ...process.env,
             DSH_HOME: settings.dshHome,
+            ...(options.packageStoreRoot ? { npm_config_store_dir: options.packageStoreRoot, NPM_CONFIG_STORE_DIR: options.packageStoreRoot } : {}),
+            ...(options.packageStoreRoot ? { pnpm_config_store_dir: options.packageStoreRoot, PNPM_CONFIG_STORE_DIR: options.packageStoreRoot } : {}),
             FORCE_COLOR: '0',
           }),
         ),
@@ -538,6 +542,8 @@ export function createInstaller(options: InstallerOptions): Installer {
           ...process.env,
           CI: 'true',
           DSH_HOME: settings.dshHome,
+          ...(options.packageStoreRoot ? { npm_config_store_dir: options.packageStoreRoot, NPM_CONFIG_STORE_DIR: options.packageStoreRoot } : {}),
+          ...(options.packageStoreRoot ? { pnpm_config_store_dir: options.packageStoreRoot, PNPM_CONFIG_STORE_DIR: options.packageStoreRoot } : {}),
           FORCE_COLOR: '0',
         }),
         onOutput: (text, level: OutputLevel) => options.emitOutput(level, text),
@@ -922,6 +928,8 @@ export function createInstaller(options: InstallerOptions): Installer {
           subdirectory: target.subdirectory,
           version: target.version,
           commit: target.commit,
+          defaultBranch: request.defaultBranch,
+          targetId: request.targetId,
           installedAt: new Date().toISOString(),
         })
         // The receipt is the authoritative source for local `file:` and archive-subdirectory
@@ -988,6 +996,7 @@ export function createInstaller(options: InstallerOptions): Installer {
           subdirectory: null,
           version: version ?? installedPlugin.version ?? null,
           commit: '',
+          targetId: request.packageName,
           installedAt: new Date().toISOString(),
         })
         const profile = profileName === settings.profileName

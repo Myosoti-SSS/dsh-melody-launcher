@@ -75,6 +75,41 @@ describe('legacy DSH credentials compatibility', () => {
     expect(isLegacyCredentialsFormatError('plugin tree failed: network timeout')).toBe(false)
   })
 
+  it('detects the DSH version from an add-on entry inside pnpm virtual store', async () => {
+    const entry = path.join(
+      root,
+      'runtime',
+      'node_modules',
+      '.pnpm',
+      '@deepseek-ai+dsh-plugin-desktop@2.0.0_hash',
+      'node_modules',
+      'dsh-plugin-desktop',
+      'lib',
+      'bin.js',
+    )
+    const dshPackage = path.join(
+      root,
+      'runtime',
+      'node_modules',
+      '.pnpm',
+      '@deepseek-ai+dsh@0.1.0-rc.6_hash',
+      'node_modules',
+      '@deepseek-ai',
+      'dsh',
+      'package.json',
+    )
+    await mkdir(path.dirname(entry), { recursive: true })
+    await mkdir(path.dirname(dshPackage), { recursive: true })
+    await writeFile(entry, '', 'utf8')
+    await writeFile(dshPackage, JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.0-rc.6' }), 'utf8')
+    await writeFile(path.join(dshHome, '.credentials.yaml'), modernCredentials, 'utf8')
+
+    const session = await prepareLegacyCredentials(dshHome, '0.1.1-rc.1', entry, backupRoot)
+    expect(session).not.toBeNull()
+    expect(await readFile(path.join(dshHome, '.credentials.yaml'), 'utf8')).not.toContain('version:')
+    await session!.restore()
+  })
+
   it('recovers a session left by an interrupted launcher', async () => {
     await writeFile(path.join(dshHome, '.credentials.yaml'), modernCredentials, 'utf8')
     await prepareLegacyCredentials(dshHome, '0.1.0-rc.8', 'dsh.cmd', backupRoot)

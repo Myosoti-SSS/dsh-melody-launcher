@@ -858,6 +858,86 @@ export const demoApi: LauncherApi = {
       ? 'C:\\Users\\demo\\.dsh'
       : 'C:\\Users\\demo\\Projects',
   readProfile: async () => profile(),
+  listProfiles: async () => [{
+    id: demoSettings.profileName,
+    name: demoSettings.profileName,
+    description: '浏览器演示 Profile',
+    dshVersion: demoSettings.dshVersion ?? '0.1.0-rc.7',
+    source: { kind: 'local' as const },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: new Date().toISOString(),
+    profileDir: `${demoSettings.dshHome}\\profiles\\${demoSettings.profileName}`,
+    initialized: true,
+    pluginCount: profile().dependencyCount,
+    enabledPluginCount: profile().plugins.filter(plugin => !plugin.builtin && plugin.enabled).length,
+    disabledPluginCount: profile().disabledCount,
+    missingDependencies: [],
+    hasNodeModules: true,
+    selected: true,
+  }],
+  createProfile: async request => {
+    if (request.name === demoSettings.profileName) throw new Error(`Profile「${request.name}」已存在。`)
+    return {
+      id: request.name,
+      name: request.name,
+      description: request.description ?? '',
+      dshVersion: request.dshVersion ?? demoSettings.dshVersion ?? null,
+      source: { kind: 'local' as const },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      profileDir: `${demoSettings.dshHome}\\profiles\\${request.name}`,
+      initialized: true,
+      pluginCount: 0,
+      enabledPluginCount: 0,
+      disabledPluginCount: 0,
+      missingDependencies: [],
+      hasNodeModules: false,
+      selected: false,
+    }
+  },
+  cloneProfile: async (sourceName, targetName, description) => {
+    const result = await demoApi.createProfile({ name: targetName, cloneFrom: sourceName, description })
+    return { ...result, pluginCount: profile().dependencyCount, enabledPluginCount: profile().dependencyCount }
+  },
+  switchProfile: async (profileName, _options) => {
+    demoSettings = { ...demoSettings, profileName, activePackId: undefined }
+    return demoSettings
+  },
+  deleteProfile: async profileName => {
+    if (profileName === demoSettings.profileName) throw new Error('当前 Profile 不能删除。')
+  },
+  readProfileMetadata: async profileName => {
+    const list = await demoApi.listProfiles()
+    const found = list.find(item => item.id === profileName)
+    if (!found) throw new Error(`Profile「${profileName}」不存在。`)
+    return found
+  },
+  exportProfile: async profileName => `C:\\Users\\demo\\Desktop\\${profileName}.zip`,
+  importProfile: async (_filePath, options) => demoApi.createProfile({ name: options?.name ?? 'imported-profile' }),
+  analyzeProfileRepository: async url => {
+    const parsed = parseGitHubImportUrl(url)
+    return {
+      repository: parsed.fullName,
+      branch: parsed.defaultBranch ?? 'main',
+      commit: 'demo000000000000000000000000000000000000',
+      manifestPath: 'dsh-profile.yaml' as const,
+      profileName: 'pack-demo',
+      description: '演示 GitHub Profile 仓库。',
+      version: '1.0.0',
+      dshVersion: demoSettings.dshVersion ?? '0.1.0-rc.7',
+      dshVersionInstalled: true,
+      plugins: [{
+        packageName: 'dsh-demo-plugin', enabled: true, order: 0, source: 'npm' as const,
+        repository: null, version: '0.1.0', commit: null, match: 'declared' as const, candidates: [],
+      }],
+      hasFullPackage: true,
+      fullPackagePluginBodies: [],
+      differences: [],
+      blockers: [],
+    }
+  },
+  importProfileRepository: async (_url, options) => demoApi.createProfile({ name: options.name ?? 'imported-profile' }),
+  matchProfilePlugin: async packageName => ({ packageName, source: 'npm', enabled: true }),
   togglePlugin: async (packageName, enabled) => {
     const selected = demoPlugins.find(plugin => plugin.packageName === packageName)
     demoPlugins = renumber(demoPlugins.map(plugin => plugin.packageName === packageName ? { ...plugin, enabled } : plugin))

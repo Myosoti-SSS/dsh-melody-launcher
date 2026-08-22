@@ -117,10 +117,16 @@ export function PluginsView({
     }
   }, [selected?.packageName])
 
-  const pluginNamesKey = profile.plugins.map(plugin => plugin.packageName).join('\n')
+  // ProfileState.plugins is already sorted from dsh.profile.bundles by the
+  // main process. Include the order and enabled state in the key so importing
+  // a Profile with the same plugin set but a different sequence also resets
+  // the local display state.
+  const pluginOrderKey = profile.plugins
+    .map(plugin => `${plugin.packageName}:${plugin.enabled ? 'on' : 'off'}:${plugin.order ?? ''}`)
+    .join('\n')
   useEffect(() => {
-    setPluginDisplayOrder(current => reconcilePluginDisplayOrder(current, profile.plugins.map(plugin => plugin.packageName)))
-  }, [profileName, pluginNamesKey])
+    setPluginDisplayOrder(profile.plugins.map(plugin => plugin.packageName))
+  }, [profileName, pluginOrderKey])
 
   const active = profile.plugins.filter(plugin => plugin.enabled)
   const inactive = profile.plugins.filter(plugin => !plugin.enabled)
@@ -324,13 +330,6 @@ export function PluginsView({
 
     </div>
   )
-}
-
-function reconcilePluginDisplayOrder(current: string[], incoming: string[]): string[] {
-  const available = new Set(incoming)
-  const retained = current.filter(packageName => available.has(packageName))
-  const retainedSet = new Set(retained)
-  return [...retained, ...incoming.filter(packageName => !retainedSet.has(packageName))]
 }
 
 function applyActiveOrderToDisplay(current: string[], activeOrder: string[]): string[] {

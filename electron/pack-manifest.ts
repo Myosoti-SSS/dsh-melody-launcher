@@ -20,6 +20,7 @@ import type { SkillInstallReceipt } from './skill-receipts'
 
 /** 压缩包内的清单文件名（导出 / 导入共用）。 */
 export const PACK_MANIFEST_FILENAME = 'dsh-pack.yaml'
+export const PROFILE_MANIFEST_FILENAME = 'dsh-profile.yaml'
 
 const PACK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$/
 const PACK_VERSION_RE = /^\d+\.\d+\.\d+/
@@ -216,6 +217,12 @@ function parsePackPlugin(item: unknown, index: number): PackPluginEntry {
     throw new Error(`plugins[${index}] 的 packageName 缺失或格式非法。`)
   }
   const entry: PackPluginEntry = { packageName }
+  if (raw.targetId !== undefined) {
+    if (typeof raw.targetId !== 'string' || raw.targetId.length === 0 || raw.targetId.length > 240 || raw.targetId.includes('..') || raw.targetId.includes('\\')) {
+      throw new Error(`plugins[${index}] 的 targetId 格式非法。`)
+    }
+    entry.targetId = raw.targetId
+  }
   if (raw.repository !== undefined) {
     if (typeof raw.repository !== 'string' || !isSafeRepositoryName(raw.repository)) {
       throw new Error(`plugins[${index}] 的 repository 格式非法。`)
@@ -233,6 +240,10 @@ function parsePackPlugin(item: unknown, index: number): PackPluginEntry {
       throw new Error(`plugins[${index}] 的 subdirectory 格式非法。`)
     }
     entry.subdirectory = raw.subdirectory
+  }
+  if (raw.defaultBranch !== undefined) {
+    if (typeof raw.defaultBranch !== 'string' || !safeBranch(raw.defaultBranch)) throw new Error(`plugins[${index}] 的 defaultBranch 格式非法。`)
+    entry.defaultBranch = raw.defaultBranch
   }
   if (raw.commit !== undefined) {
     if (typeof raw.commit !== 'string' || !safeCommit(raw.commit)) {
@@ -355,6 +366,8 @@ function manifestNameFromPackId(packId: string): string {
 
 function receiptToPluginEntry(receipt: PluginInstallReceipt): PackPluginEntry {
   const entry: PackPluginEntry = { packageName: receipt.packageName }
+  if (receipt.targetId) entry.targetId = receipt.targetId
+  if (receipt.defaultBranch) entry.defaultBranch = receipt.defaultBranch
   if (receipt.source === 'github' || receipt.source === 'archive-subdirectory') {
     entry.source = 'github'
     if (receipt.repository) entry.repository = receipt.repository

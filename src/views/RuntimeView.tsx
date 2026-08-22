@@ -1,11 +1,10 @@
-import { AppWindow, CircleAlert, CircleCheck, CircleStop, ExternalLink, LoaderCircle, Pause, Play, Settings, SquareTerminal, Wrench } from 'lucide-react'
+import { AppWindow, CircleAlert, CircleCheck, CircleStop, ExternalLink, LoaderCircle, Pause, Play, SquareTerminal, Wrench } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { PageHeading } from '../components/PageHeading'
 import type { AppSettings, InstallProgress, InstalledApplicationAddon, RuntimeOutput, RuntimeState } from '../types'
 
 /** 运行与日志页：进程状态、启动参数与实时输出。 */
 
-interface RuntimeViewProps {
+export interface RuntimeViewProps {
   runtime: RuntimeState
   settings: AppSettings
   logs: RuntimeOutput[]
@@ -15,10 +14,10 @@ interface RuntimeViewProps {
   onPauseDownload: () => void
   onOpenHarness: () => void
   onClearLogs: () => void
-  onOpenSettings: () => void
   onRepairRuntime: () => void
   aiActive: boolean
   activeRuntimeReplacement: InstalledApplicationAddon | null
+  compact?: boolean
 }
 
 export function RuntimeView({
@@ -31,10 +30,10 @@ export function RuntimeView({
   onPauseDownload,
   onOpenHarness,
   onClearLogs,
-  onOpenSettings,
   onRepairRuntime,
   aiActive,
   activeRuntimeReplacement,
+  compact = false,
 }: RuntimeViewProps) {
   const logEnd = useRef<HTMLDivElement>(null)
   const progressSample = useRef<{ repository: string; bytes: number; timestamp: number } | null>(null)
@@ -75,14 +74,27 @@ export function RuntimeView({
     logEnd.current?.scrollIntoView?.({ block: 'nearest' })
   }, [logs])
 
+  if (compact) {
+    // 保留完整终端输出，由半隐藏抽屉内的日志框负责滚动，调整抽屉高度时可显示更多记录。
+    const compactLogs = logs
+    return (
+      <div className="runtime-compact-page">
+        <div className="runtime-compact-log" role="log" aria-live="polite">
+            {compactLogs.length === 0 ? <div className="log-empty"><SquareTerminal size={19} /><span>暂无输出</span></div> : compactLogs.map((log, index) => (
+              <div className={`log-line ${log.level}`} key={`${log.timestamp}-${index}`}>
+                <time>{new Date(log.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}</time>
+                <span className="log-channel">{log.channel === 'plugin' ? 'PLUGIN' : log.channel === 'test' ? 'TEST' : log.channel === 'ai' ? 'COPILOT' : 'DSH'}</span>
+                <pre>{log.text}</pre>
+              </div>
+            ))}
+            <div ref={logEnd} />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="page runtime-page">
-      <PageHeading
-        eyebrow="LOCAL RUNTIME"
-        title="运行 DeepSeek Harness"
-        description={activeRuntimeReplacement ? `${activeRuntimeReplacement.name} 已接管启动流程，不会同时启动普通 dsh web。` : '从当前工作目录启动 Web 界面，并在这里查看进程状态与实时输出。'}
-        actions={<button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={16} />启动设置</button>}
-      />
       <section className={`runtime-band ${runtime.running ? 'running' : ''} ${downloadActive ? 'downloading' : ''} ${downloadFailed ? 'download-error' : ''}`}>
         <div className="runtime-status-icon">{downloadActive ? <LoaderCircle className="spin" size={25} /> : downloadFailed ? <CircleAlert size={25} /> : activeRuntimeReplacement ? <AppWindow size={25} /> : runtime.running ? <CircleCheck size={25} /> : <CircleStop size={25} />}</div>
         <div className="runtime-copy"><span>{downloadVisible ? downloadName : runtime.running ? `${runtime.applicationAddonName ?? 'DSH'} 正在运行` : 'DSH 当前已停止'}</span><strong>{downloadVisible ? downloadStatus : runtime.running ? runtime.url ?? (runtime.launchMode === 'application-replacement' ? '桌面宿主已启动' : '正在等待 Web 地址…') : activeRuntimeReplacement ? `准备启动 ${activeRuntimeReplacement.name}` : '准备从本地启动'}</strong></div>

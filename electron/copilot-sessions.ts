@@ -86,6 +86,8 @@ export interface CopilotSessionManagerOptions {
   filePath: string
   runtimeRoot: string
   snapshotRoot: string
+  /** 所有 Profile 共用的受控 pnpm store。 */
+  packageStoreRoot?: string
   readSettings: () => Promise<AppSettings>
   readApiKey: (dshHome: string) => Promise<string | null>
   prepareNodeRuntime: () => Promise<NodeRuntime>
@@ -469,7 +471,15 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
     const command = buildAcpServerCommand(options.runtimeRoot, configPath)
     const environment = withExecutableDirectoryOnPath(
       settings.launchExecutable,
-      withExecutableDirectoryOnPath(prepared.pnpm.executable, withExecutableDirectoryOnPath(prepared.node.node, process.env)),
+      withExecutableDirectoryOnPath(prepared.pnpm.executable, withExecutableDirectoryOnPath(prepared.node.node, {
+        ...process.env,
+        ...(options.packageStoreRoot ? {
+          npm_config_store_dir: options.packageStoreRoot,
+          NPM_CONFIG_STORE_DIR: options.packageStoreRoot,
+          pnpm_config_store_dir: options.packageStoreRoot,
+          PNPM_CONFIG_STORE_DIR: options.packageStoreRoot,
+        } : {}),
+      })),
     )
     const child = spawnCommand(command.executable, command.args, {
       cwd: taskRoot,

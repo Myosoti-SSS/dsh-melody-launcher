@@ -115,10 +115,10 @@ describe('DSH Web 端口', () => {
 
   it('替换旧端口参数并保留其他参数', () => {
     expect(withDshWebPort('dsh.cmd', ['web', '--port', '4000', '--host', '127.0.0.1'], 3082)).toEqual([
-      'web', '--host', '127.0.0.1', '--port', '3082',
+      'web', '--host', '127.0.0.1', '--no-open', '--port', '3082',
     ])
     expect(withDshWebPort('npx', ['--yes', '@deepseek-ai/dsh', 'web', '--port=4000'], 3083)).toEqual([
-      '--yes', '@deepseek-ai/dsh', 'web', '--port', '3083',
+      '--yes', '@deepseek-ai/dsh', 'web', '--no-open', '--port', '3083',
     ])
   })
 

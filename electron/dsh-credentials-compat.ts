@@ -109,6 +109,16 @@ async function readDshVersionFromExecutable(executable: string): Promise<string 
   for (let depth = 0; depth < 7; depth += 1) {
     candidates.add(path.join(current, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))
     candidates.add(path.join(current, '@deepseek-ai', 'dsh', 'package.json'))
+    // Application add-ons are installed with pnpm. Their entry script is
+    // usually below `.pnpm/<package>/node_modules/...`, while the DSH runtime
+    // itself lives in a sibling `.pnpm/@deepseek-ai+dsh@...` package. Discover
+    // that layout without recursively scanning the whole add-on directory.
+    const pnpmRoot = path.join(current, 'node_modules', '.pnpm')
+    const pnpmEntries = await readdir(pnpmRoot, { withFileTypes: true }).catch(() => [])
+    for (const entry of pnpmEntries) {
+      if (!entry.isDirectory() || !entry.name.startsWith('@deepseek-ai+dsh@')) continue
+      candidates.add(path.join(pnpmRoot, entry.name, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))
+    }
     const parent = path.dirname(current)
     if (parent === current) break
     current = parent

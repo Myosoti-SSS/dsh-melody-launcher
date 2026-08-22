@@ -50,6 +50,10 @@ export function withDshWebPort(executable: string, args: string[], port: number)
     if (value.startsWith('--port=')) continue
     next.push(value)
   }
+  // DSH Web opens the default browser by itself unless this flag is set.
+  // The launcher opens the URL after observing the ready output, so allowing
+  // both behaviors would open the same Web page twice.
+  if (!next.includes('--no-open')) next.push('--no-open')
   return [...next, '--port', String(port)]
 }
 
@@ -220,6 +224,10 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
       executable = resolveNodeExecutable(executable, nodeRuntime)
       environment = withExecutableDirectoryOnPath(nodeRuntime.node, environment)
     }
+    // A replacement host is commonly launched as `node entry.js`. Probe the
+    // entry script, not node.exe, so an add-on's bundled DSH version can select
+    // the correct credentials schema.
+    const credentialsProbeExecutable = replacement?.args[0] ?? executable
 
     launchMode = replacement ? 'application-replacement' : 'web'
     applicationAddonId = replacement?.id ?? null
@@ -260,8 +268,8 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
     let initialLegacyCredentials = false
     const selectedLaunchPort = port
 
-    if (!replacement && options.legacyCredentialsBackupRoot && isDshWebLaunch(executable, launchArgs)) {
-      const format = await detectDshCredentialsFormat(settings.dshVersion ?? null, executable)
+    if (options.legacyCredentialsBackupRoot) {
+      const format = await detectDshCredentialsFormat(settings.dshVersion ?? null, credentialsProbeExecutable)
       initialLegacyCredentials = format === 'legacy'
       legacyFallbackEligible = format === 'unknown'
     }
@@ -337,7 +345,7 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
         legacyCredentialsSession = await prepareLegacyCredentials(
           settings.dshHome,
           settings.dshVersion ?? null,
-          executable,
+          credentialsProbeExecutable,
           options.legacyCredentialsBackupRoot,
           { force: true },
         )

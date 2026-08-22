@@ -107,7 +107,9 @@ export function validateSettings(input: AppSettings): AppSettings {
     dshVersion: input.dshVersion == null ? null : validRuntimeVersion(input.dshVersion) ? input.dshVersion.trim() : null,
     nodeVersion: input.nodeVersion == null ? null : validRuntimeVersion(input.nodeVersion) ? input.nodeVersion.trim() : null,
     profileName: input.profileName,
-    activePackId: typeof input.activePackId === 'string' && isSafeProfileName(input.activePackId) ? input.activePackId : null,
+    // Kept only so older settings.json files remain readable. Runtime code
+    // selects an environment exclusively through profileName.
+    activePackId: null,
     workspace: input.workspace,
     launchExecutable: input.launchExecutable.trim(),
     launchArgs: input.launchArgs,
@@ -130,7 +132,7 @@ export function mergeStoredSettings(defaults: AppSettings, stored: Partial<AppSe
     ...stored,
     dshVersion: stored.dshVersion == null ? null : validRuntimeVersion(stored.dshVersion) ? stored.dshVersion.trim() : null,
     nodeVersion: stored.nodeVersion == null ? null : validRuntimeVersion(stored.nodeVersion) ? stored.nodeVersion.trim() : null,
-    activePackId: typeof stored.activePackId === 'string' && isSafeProfileName(stored.activePackId) ? stored.activePackId : null,
+    activePackId: null,
     dshInstallPath: typeof stored.dshInstallPath === 'string' && path.isAbsolute(stored.dshInstallPath)
       ? stored.dshInstallPath
       : defaults.dshInstallPath,
