@@ -17,12 +17,16 @@ export interface ProfileMetadata {
   createdAt: string
   updatedAt: string
   exportedAt?: string | null
+  packName?: string
+  distributionKind?: 'standard-profile' | 'meta-repo' | 'distribution'
+  importState?: 'complete' | 'partial' | 'failed'
+  importFailures?: string[]
 }
 
 export type ProfileSource =
   | { kind: 'local'; path?: string }
   | { kind: 'github'; repository: string; branch?: string; commit?: string }
-  | { kind: 'import'; format: 'zip' | 'yaml' | 'github'; reference?: string }
+  | { kind: 'import'; format: 'zip' | 'yaml' | 'github' | 'distribution'; reference?: string; packName?: string; distributionKind?: 'standard-profile' | 'meta-repo' | 'distribution' }
 
 export interface ProfileSummary extends ProfileMetadata {
   id: string
@@ -41,6 +45,11 @@ export interface ProfileCreateOptions {
   description?: string
   dshVersion?: string | null
   cloneFrom?: string
+  /** Do not inherit dependency specifiers from the selected Profile. */
+  empty?: boolean
+  source?: ProfileSource | null
+  packName?: string
+  distributionKind?: 'standard-profile' | 'meta-repo' | 'distribution'
 }
 
 export interface ProfileServiceOptions {
@@ -107,8 +116,8 @@ function normalizeMetadata(raw: unknown, fallbackName: string): ProfileMetadata 
   const sourceKind = source?.kind
   const normalizedSource: ProfileSource | null = sourceKind === 'github' && typeof source?.repository === 'string'
     ? { kind: 'github', repository: source.repository, ...(typeof source.branch === 'string' ? { branch: source.branch } : {}), ...(typeof source.commit === 'string' ? { commit: source.commit } : {}) }
-    : sourceKind === 'import' && (source?.format === 'zip' || source?.format === 'yaml' || source?.format === 'github')
-      ? { kind: 'import', format: source.format, ...(typeof source.reference === 'string' ? { reference: source.reference } : {}) }
+    : sourceKind === 'import' && (source?.format === 'zip' || source?.format === 'yaml' || source?.format === 'github' || source?.format === 'distribution')
+      ? { kind: 'import', format: source.format, ...(typeof source.reference === 'string' ? { reference: source.reference } : {}), ...(typeof source.packName === 'string' ? { packName: source.packName } : {}), ...(source.distributionKind === 'standard-profile' || source.distributionKind === 'meta-repo' || source.distributionKind === 'distribution' ? { distributionKind: source.distributionKind } : {}) }
       : sourceKind === 'local'
         ? { kind: 'local', ...(typeof source?.path === 'string' ? { path: source.path } : {}) }
         : null
@@ -121,6 +130,10 @@ function normalizeMetadata(raw: unknown, fallbackName: string): ProfileMetadata 
     createdAt: typeof value.createdAt === 'string' ? value.createdAt : new Date(0).toISOString(),
     updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : new Date().toISOString(),
     exportedAt: typeof value.exportedAt === 'string' ? value.exportedAt : null,
+    packName: typeof value.packName === 'string' ? value.packName : undefined,
+    distributionKind: value.distributionKind === 'standard-profile' || value.distributionKind === 'meta-repo' || value.distributionKind === 'distribution' ? value.distributionKind : undefined,
+    importState: value.importState === 'complete' || value.importState === 'partial' || value.importState === 'failed' ? value.importState : undefined,
+    importFailures: Array.isArray(value.importFailures) ? value.importFailures.filter((item): item is string => typeof item === 'string').slice(0, 200) : undefined,
   }
 }
 
@@ -475,6 +488,7 @@ export async function createProfile(options: ProfileServiceOptions, input: Profi
     // currently selected Profile; links are materialized lazily on switch.
     let dependencies: Record<string, string> = {}
     try {
+      if (input.empty) throw new Error('empty profile')
       const current = await options.readSettings()
       const currentManifest = JSON.parse(await readFile(path.join(dshHome, 'profiles', current.profileName, 'package.json'), 'utf8')) as { dependencies?: Record<string, unknown> }
       dependencies = Object.fromEntries(Object.entries(currentManifest.dependencies ?? {}).filter(([name, spec]) =>
@@ -493,7 +507,9 @@ export async function createProfile(options: ProfileServiceOptions, input: Profi
   await writeProfileMetadata(dshHome, input.name, {
     description: input.description ?? sourceMetadata?.description ?? '',
     dshVersion: input.dshVersion ?? sourceMetadata?.dshVersion ?? null,
-    source: { kind: 'local' },
+    source: input.source ?? { kind: 'local' },
+    packName: input.packName,
+    distributionKind: input.distributionKind,
   })
   return summaryFor(scoped, input.name, false)
 }

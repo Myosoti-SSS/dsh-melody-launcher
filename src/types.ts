@@ -103,6 +103,17 @@ export interface ManagedPlugin {
   locked: boolean
   compatible: boolean
   order: number | null
+  /** The installation route used when this plugin was imported. */
+  actualSource?: 'market' | 'github' | 'local'
+  /** Originating distribution/profile metadata, when applicable. */
+  packOrigin?: PluginPackOrigin
+}
+
+export interface PluginPackOrigin {
+  packName: string
+  packRepository: string
+  packCommit: string | null
+  componentId: string
 }
 
 export interface ProfileState {
@@ -239,8 +250,10 @@ export interface ProfileSourceMetadata {
   repository?: string
   branch?: string
   commit?: string
-  format?: 'zip' | 'yaml' | 'github'
+  format?: 'zip' | 'yaml' | 'github' | 'distribution'
   reference?: string
+  packName?: string
+  distributionKind?: 'standard-profile' | 'meta-repo' | 'distribution'
 }
 
 export interface ProfileSummary {
@@ -260,6 +273,8 @@ export interface ProfileSummary {
   missingDependencies: string[]
   hasNodeModules: boolean
   selected: boolean
+  importState?: 'complete' | 'partial' | 'failed'
+  importFailures?: string[]
 }
 
 export interface ProfileCreateRequest {
@@ -901,6 +916,55 @@ export interface ProfileRepositoryImportPreview {
   blockers: string[]
 }
 
+export type NonstandardPackKind = 'standard-profile' | 'meta-repo' | 'distribution' | 'plugin' | 'skill' | 'application' | 'unknown'
+export type PackComponentCategory = 'core' | 'optional' | 'workspace' | 'vendored' | 'preset' | 'skill' | 'application' | 'runtime' | 'unknown'
+export type PackComponentSource = 'market' | 'github' | 'local' | 'unavailable'
+
+export interface NonstandardPackPluginPreview {
+  componentId: string
+  packageName: string
+  displayName: string
+  category: PackComponentCategory
+  enabled: boolean
+  order: number
+  repository: string | null
+  subdirectory: string | null
+  version: string | null
+  commit: string | null
+  source: PackComponentSource
+  sourceLabel: string
+  targetId: string | null
+  reason?: string
+}
+
+export interface NonstandardPackSkippedComponent {
+  id: string
+  name: string
+  category: Exclude<PackComponentCategory, 'core' | 'optional' | 'workspace' | 'vendored' | 'unknown'> | 'unknown'
+  reason: string
+}
+
+export interface NonstandardPackImportPreview {
+  repository: string
+  branch: string
+  commit: string | null
+  kind: NonstandardPackKind
+  name: string
+  description: string
+  profileName: string
+  dshVersion: string | null
+  dshSourceVersion: string | null
+  warnings: string[]
+  plugins: NonstandardPackPluginPreview[]
+  skipped: NonstandardPackSkippedComponent[]
+  blockers: string[]
+}
+
+export interface NonstandardPackImportOptions {
+  name?: string
+  packageNames?: string[]
+}
+
 export interface PackInstallResult {
   id: string
   installed: string[]
@@ -1006,6 +1070,9 @@ export interface LauncherApi {
   importProfile(path: string, options?: { name?: string; overwrite?: boolean }): Promise<ProfileSummary>
   analyzeProfileRepository(url: string): Promise<ProfileRepositoryImportPreview>
   importProfileRepository(url: string, options: { mode: ProfileRepositoryImportMode; name?: string; overwrite?: boolean; resolutions?: Record<string, PackPluginEntry> }): Promise<ProfileSummary>
+  analyzeNonstandardPackRepository(url: string): Promise<NonstandardPackImportPreview>
+  importNonstandardPackRepository(url: string, options?: NonstandardPackImportOptions): Promise<ProfileSummary>
+  resolvePackPluginSources(preview: NonstandardPackImportPreview): Promise<NonstandardPackPluginPreview[]>
   matchProfilePlugin(packageName: string): Promise<PackPluginEntry | null>
   togglePlugin(packageName: string, enabled: boolean, profileName?: string): Promise<LinkedComponentToggleResult>
   reorderPlugins(packageNames: string[]): Promise<ProfileState>
@@ -1014,9 +1081,9 @@ export interface LauncherApi {
   analyzeCatalogRepository(fullName: string, defaultBranch: string, repositoryUpdatedAt?: string): Promise<CatalogRepositoryAnalysis>
   importCatalogUrl(url: string): Promise<CatalogImportResult>
   loadDshMarket(): Promise<DshMarketCatalog>
-  installDshMarketPlugin(name: string): Promise<DshMarketInstalledPlugin[]>
-  updateDshMarketPlugin(name: string): Promise<DshMarketInstalledPlugin[]>
-  uninstallDshMarketPlugin(name: string): Promise<DshMarketInstalledPlugin[]>
+  installDshMarketPlugin(name: string, profileName?: string): Promise<DshMarketInstalledPlugin[]>
+  updateDshMarketPlugin(name: string, profileName?: string): Promise<DshMarketInstalledPlugin[]>
+  uninstallDshMarketPlugin(name: string, profileName?: string): Promise<DshMarketInstalledPlugin[]>
   toggleDshMarketPlugin(name: string, enabled: boolean): Promise<DshMarketInstalledPlugin[]>
   checkDshMarketUpdates(force?: boolean): Promise<Record<string, DshMarketUpdateStatus>>
   installPlugin(request: string | PluginInstallRequest): Promise<RepositoryInstallResult>

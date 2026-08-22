@@ -236,8 +236,9 @@ export function createDshMarketService(options: DshMarketOptions) {
     }
   }
 
-  async function runPlugin(name: string, args: string[], repository: string): Promise<CommandResult> {
+  async function runPlugin(name: string, args: string[], repository: string, profileOverride?: string): Promise<CommandResult> {
     const settings = await options.readSettings()
+    const targetProfile = profileOverride ?? settings.profileName
     const node = await options.prepareNodeRuntime()
     const pnpm = await options.preparePnpmRuntime(node)
     const executable = resolveNodeExecutable(settings.launchExecutable, node)
@@ -245,7 +246,7 @@ export function createDshMarketService(options: DshMarketOptions) {
     const prefix = packageIndex >= 0
       ? settings.launchArgs.slice(0, packageIndex + 1)
       : path.basename(executable).toLowerCase().startsWith('dsh') ? [] : ['--yes', DSH_PACKAGE_NAME]
-    const commandArgs = [...prefix, 'plugin', '--profile', settings.profileName, ...args]
+    const commandArgs = [...prefix, 'plugin', '--profile', targetProfile, ...args]
     const commandEnv = {
       ...process.env,
       DSH_HOME: settings.dshHome,
@@ -278,7 +279,7 @@ export function createDshMarketService(options: DshMarketOptions) {
     // store. Move the links to the launcher's shared store before retrying the
     // DSH command; otherwise pnpm refuses to touch the Profile at all.
     if (result.exitCode !== 0 && /ERR_PNPM_UNEXPECTED_STORE/i.test(result.output)) {
-      const profilePath = path.join(settings.dshHome, 'profiles', settings.profileName)
+      const profilePath = path.join(settings.dshHome, 'profiles', targetProfile)
       options.emitOutput('info', '检测到 Profile 使用旧 pnpm store，正在迁移依赖后自动重试。')
       progress(name, 'resolving', '正在迁移 Profile 依赖到启动器插件池', 78)
       const migrate = await execute(pnpm.executable, ['install'], {
@@ -295,7 +296,7 @@ export function createDshMarketService(options: DshMarketOptions) {
     // Keep dsh-market's recovery behavior: an ignored build approval or a
     // transient network failure gets exactly one automatic retry.
     if (result.exitCode !== 0 && /ERR_PNPM_IGNORED_BUILDS/i.test(result.output)) {
-      const approved = await approveAllIgnoredBuilds(path.join(settings.dshHome, 'profiles', settings.profileName, 'pnpm-workspace.yaml'), result.output)
+      const approved = await approveAllIgnoredBuilds(path.join(settings.dshHome, 'profiles', targetProfile, 'pnpm-workspace.yaml'), result.output)
       if (approved.length > 0) {
         progress(name, 'building', `已允许 ${approved.length} 个构建脚本，正在重试`, 86)
         result = await runDshPlugin()
@@ -307,7 +308,7 @@ export function createDshMarketService(options: DshMarketOptions) {
     return result
   }
 
-  async function mutate(name: string, action: 'install' | 'update' | 'uninstall'): Promise<DshMarketInstalledPlugin[]> {
+  async function mutate(name: string, action: 'install' | 'update' | 'uninstall', profileOverride?: string): Promise<DshMarketInstalledPlugin[]> {
     if (active) throw new Error('dsh-market 正在执行另一个插件操作，请等待完成。')
     active = true
     try {
@@ -317,7 +318,8 @@ export function createDshMarketService(options: DshMarketOptions) {
       const target = dshMarketInstallTarget(entry)
       if (!target) throw new Error('dsh-market 不支持此插件的来源地址。')
       const settings = await options.readSettings()
-      const before = await readInstalled(settings)
+      const targetSettings = profileOverride ? { ...settings, profileName: profileOverride } : settings
+      const before = await readInstalled(targetSettings)
       const alias = findDshMarketInstalledAlias(entry, before.map)
       if (action === 'install' && alias) throw new Error(`插件已安装（${alias}）。`)
       if (action === 'update' && !alias) throw new Error('插件尚未安装，不能更新。')
@@ -327,13 +329,13 @@ export function createDshMarketService(options: DshMarketOptions) {
         if (collision !== undefined) throw new Error(`同名冲突：Profile 已安装「${collision}」，请先卸载后再从 dsh-market 安装。`)
       }
       progress(name, action === 'uninstall' ? 'resolving' : 'checking', action === 'uninstall' ? '正在准备卸载' : '正在核对 dsh-market 来源', 8)
-      const result = await runPlugin(name, action === 'uninstall' ? ['remove', alias ?? name] : ['add', target], entry.url)
+      const result = await runPlugin(name, action === 'uninstall' ? ['remove', alias ?? name] : ['add', target], entry.url, profileOverride)
       if (result.exitCode !== 0) throw new Error(`dsh-market 插件操作失败（代码 ${result.exitCode}）：${result.output.slice(-800)}`)
-      const after = await readInstalled(settings)
+      const after = await readInstalled(targetSettings)
       if (action !== 'uninstall') {
         const installedName = findDshMarketInstalledAlias(entry, after.map)
         if (!installedName) throw new Error('pnpm 已完成，但 dsh-market 未检测到安装结果。')
-        const profile = await readProfile(settings.dshHome, settings.profileName)
+        const profile = await readProfile(targetSettings.dshHome, targetSettings.profileName)
         const component = profile.plugins.find(item => item.packageName === installedName)
         if (!component || !component.compatible) throw new Error('插件已下载，但没有检测到可加载的 DSH Bundle。')
       }
@@ -403,9 +405,9 @@ export function createDshMarketService(options: DshMarketOptions) {
         throw error
       }
     },
-    install: (name: string) => mutate(name, 'install'),
-    update: (name: string) => mutate(name, 'update'),
-    uninstall: (name: string) => mutate(name, 'uninstall'),
+    install: (name: string, profileName?: string) => mutate(name, 'install', profileName),
+    update: (name: string, profileName?: string) => mutate(name, 'update', profileName),
+    uninstall: (name: string, profileName?: string) => mutate(name, 'uninstall', profileName),
     toggle: async (name: string, enabled: boolean) => {
       const settings = await options.readSettings()
       const installed = await readInstalled(settings)

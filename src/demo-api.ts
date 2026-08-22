@@ -937,6 +937,26 @@ export const demoApi: LauncherApi = {
     }
   },
   importProfileRepository: async (_url, options) => demoApi.createProfile({ name: options.name ?? 'imported-profile' }),
+  analyzeNonstandardPackRepository: async url => {
+    const parsed = parseGitHubImportUrl(url)
+    return {
+      repository: parsed.fullName,
+      branch: parsed.defaultBranch ?? 'main',
+      commit: 'demo000000000000000000000000000000000000',
+      kind: 'distribution' as const,
+      name: 'demo-pack',
+      description: '演示非标准 DSH 发行版。',
+      profileName: 'pack-demo-pack',
+      dshVersion: demoSettings.dshVersion ?? '0.1.0-rc.7',
+      dshSourceVersion: '0.1.0-rc.6',
+      warnings: ['演示：运行时版本与源码基线不同。'],
+      plugins: [{ componentId: 'demo-plugin', packageName: 'dsh-demo-plugin', displayName: 'Demo Plugin', category: 'core' as const, enabled: true, order: 0, repository: 'demo/demo-plugin', subdirectory: null, version: '0.1.0', commit: null, source: 'market' as const, sourceLabel: 'DSH Market', targetId: 'dsh-demo-plugin' }],
+      skipped: [{ id: 'demo-preset', name: 'demo-preset', category: 'preset' as const, reason: '演示预设，导入时跳过。' }],
+      blockers: [],
+    }
+  },
+  importNonstandardPackRepository: async (_url, options) => demoApi.createProfile({ name: options?.name ?? 'pack-demo-pack' }),
+  resolvePackPluginSources: async preview => preview.plugins,
   matchProfilePlugin: async packageName => ({ packageName, source: 'npm', enabled: true }),
   togglePlugin: async (packageName, enabled) => {
     const selected = demoPlugins.find(plugin => plugin.packageName === packageName)

@@ -2,7 +2,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC, IPC_EVENTS } from '../src/constants'
-import type { AiSessionCreateInput, ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, PresetInstallRequest, SkillInstallRequest, WindowMode, ProfileRepositoryImportMode, PackPluginEntry } from '../src/types'
+import type { AiSessionCreateInput, ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, PresetInstallRequest, SkillInstallRequest, WindowMode, ProfileRepositoryImportMode, PackPluginEntry, NonstandardPackImportPreview } from '../src/types'
 import type { ApplicationAddonManager } from './application-addons'
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
@@ -38,6 +38,7 @@ import { serializePackManifest } from './pack-manifest'
 import { writeProfileMetadata } from './profile-service'
 import { readPluginReceipts } from './plugin-receipts'
 import { analyzeProfileRepository, applyReceiptMatches, applySelectedMatches, loadProfileRepositoryManifest, manifestText, readProfileRepositoryArchive, validateFullArchive } from './profile-repository-import'
+import type { NonstandardPackService } from './nonstandard-pack'
 
 /**
  * 渲染层能触达主进程的全部入口。
@@ -60,12 +61,13 @@ export interface IpcDependencies {
   dshMarket: DshMarketService
   runtimeVersions: RuntimeVersionService
   profiles: ProfileService
+  nonstandardPack: NonstandardPackService
   getWindow: () => BrowserWindow | null
   setWindowMode: (mode: WindowMode) => void
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager, githubAuth, applicationAddons, catalogSync, dshMarket, runtimeVersions, profiles } = deps
+  const { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager, githubAuth, applicationAddons, catalogSync, dshMarket, runtimeVersions, profiles, nonstandardPack } = deps
   const linkedComponents = createLinkedComponentController({
     readSettings: () => settings.read(),
     readProfile,
@@ -415,6 +417,20 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined)
     }
   })
+  ipcMain.handle(IPC.profilesNonstandardAnalyze, async (_event, url: string) => {
+    if (typeof url !== 'string' || !url.trim()) throw new Error('整合包仓库链接无效。')
+    return nonstandardPack.analyze(url.trim())
+  })
+  ipcMain.handle(IPC.profilesNonstandardResolve, async (_event, preview: NonstandardPackImportPreview) => {
+    if (!preview || typeof preview !== 'object' || !Array.isArray(preview.plugins)) throw new Error('整合包解析结果无效。')
+    return nonstandardPack.resolve(preview)
+  })
+  ipcMain.handle(IPC.profilesNonstandardImport, async (_event, payload: { url: string; name?: string; packageNames?: string[] }) => {
+    assertProfileMutationAvailable()
+    if (!payload || typeof payload.url !== 'string' || !payload.url.trim()) throw new Error('整合包仓库链接无效。')
+    if (runtime.isRunning()) throw new Error('请先停止 DSH，再导入整合包。')
+    return nonstandardPack.import(payload.url.trim(), { name: payload.name, packageNames: payload.packageNames })
+  })
   ipcMain.handle(IPC.profilesMatchPlugin, async (_event, packageName: string) => {
     if (typeof packageName !== 'string' || !isSafePackageName(packageName)) throw new Error('插件名称无效。')
     const current = await settings.read()
@@ -526,20 +542,23 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     )
   })
   ipcMain.handle(IPC.dshMarketLoad, () => dshMarket.load())
-  ipcMain.handle(IPC.dshMarketInstall, async (_event, name: string) => {
+  ipcMain.handle(IPC.dshMarketInstall, async (_event, payload: string | { name: string; profileName?: string }) => {
+    const name = typeof payload === 'string' ? payload : payload?.name
     assertProfileMutationAvailable()
     if (typeof name !== 'string' || name.length === 0 || name.length > 200) throw new Error('dsh-market 插件名称无效。')
-    return dshMarket.install(name)
+    return dshMarket.install(name, typeof payload === 'string' ? undefined : payload.profileName)
   })
-  ipcMain.handle(IPC.dshMarketUpdate, async (_event, name: string) => {
+  ipcMain.handle(IPC.dshMarketUpdate, async (_event, payload: string | { name: string; profileName?: string }) => {
+    const name = typeof payload === 'string' ? payload : payload?.name
     assertProfileMutationAvailable()
     if (typeof name !== 'string' || name.length === 0 || name.length > 200) throw new Error('dsh-market 插件名称无效。')
-    return dshMarket.update(name)
+    return dshMarket.update(name, typeof payload === 'string' ? undefined : payload.profileName)
   })
-  ipcMain.handle(IPC.dshMarketUninstall, async (_event, name: string) => {
+  ipcMain.handle(IPC.dshMarketUninstall, async (_event, payload: string | { name: string; profileName?: string }) => {
+    const name = typeof payload === 'string' ? payload : payload?.name
     assertProfileMutationAvailable()
     if (typeof name !== 'string' || name.length === 0 || name.length > 200) throw new Error('dsh-market 插件名称无效。')
-    return dshMarket.uninstall(name)
+    return dshMarket.uninstall(name, typeof payload === 'string' ? undefined : payload.profileName)
   })
   ipcMain.handle(IPC.dshMarketToggle, async (_event, payload: { name: string; enabled: boolean }) => {
     assertProfileMutationAvailable()

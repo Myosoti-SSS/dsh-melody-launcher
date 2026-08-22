@@ -167,6 +167,11 @@ export interface Installer {
     request: { packageName: string; version?: string; repository?: string; approvedBuildKeys?: string[]; deniedBuildKeys?: string[] },
     profileOverride?: string,
   ): Promise<RepositoryInstallResult>
+  /** Install a validated package directory into a target Profile. */
+  installLocalPlugin(
+    request: { packageName: string; directory: string; repository?: string; commit?: string; version?: string },
+    profileOverride?: string,
+  ): Promise<RepositoryInstallResult>
   /** 检测一个插件仓库，返回可安装组件清单（带 5 分钟缓存）。 */
   analyzePlugin(fullName: string, defaultBranch: string): Promise<RepositoryAnalysis>
   /** 检测一个 Skill 仓库，返回可安装组件清单（带 5 分钟缓存）。 */
@@ -1011,6 +1016,43 @@ export function createInstaller(options: InstallerOptions): Installer {
       } finally {
         active = null
       }
+    },
+
+    async installLocalPlugin(request, profileOverride) {
+      if (!isSafePackageName(request.packageName)) throw new Error('本地插件包名无效。')
+      const directory = validateLocalPluginDirectory(request.directory)
+      const settings = await options.readSettings()
+      const profileName = profileOverride ?? settings.profileName
+      const repository = request.repository ?? `file:${directory}`
+      if (active) throw new Error(`正在安装 ${active.repository}，请等待当前任务完成。`)
+      emit({ repository, kind: 'plugin', phase: 'preparing', percent: 5, message: '正在准备整合包本地插件' })
+      try {
+        await runPluginCommand(['add', `file:${directory}`], repository, true, profileName)
+        const installedProfile = await readProfile(settings.dshHome, profileName, options.pluginReceiptsPath)
+        const installedPlugin = installedProfile.plugins.find(plugin => plugin.packageName === request.packageName)
+        if (!installedPlugin?.compatible) throw new Error('本地插件没有检测到有效 DSH Bundle。')
+        await verifyProfileComposition(profileName, repository)
+        await recordPluginInstall(options.pluginReceiptsPath, {
+          repository,
+          packageName: request.packageName,
+          profileName,
+          source: 'local-directory',
+          subdirectory: null,
+          version: request.version ?? installedPlugin.version ?? null,
+          commit: request.commit ?? '',
+          targetId: request.packageName,
+          installedAt: new Date().toISOString(),
+          actualSource: 'local',
+        })
+        const currentProfile = profileName === settings.profileName
+          ? installedProfile
+          : await readProfile(settings.dshHome, settings.profileName, options.pluginReceiptsPath)
+        emit({ repository, kind: 'plugin', phase: 'complete', percent: 100, message: `本地插件已安装到 ${profileName} Profile` })
+        return { kind: 'plugin', profile: currentProfile, settings, dshInstallation: await detectDsh(), installedProfileName: profileName, packageName: request.packageName }
+      } catch (error) {
+        emit({ repository, kind: 'plugin', phase: 'error', percent: currentPercent(0), message: error instanceof Error ? error.message : '本地插件安装失败' })
+        throw error
+      } finally { active = null }
     },
 
     async installSkill(request: SkillInstallRequest): Promise<SkillInstallResult> {

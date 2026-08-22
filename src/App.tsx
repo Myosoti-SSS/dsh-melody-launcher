@@ -24,7 +24,7 @@ import { useNavigation } from './hooks/use-navigation'
 import { usePackInstall } from './hooks/use-pack-install'
 import { isInstallProgressActive } from './lib/install-progress'
 import { clampRuntimeDrawerHeight, RUNTIME_DRAWER_AUTO_CLOSE_MS } from './lib/runtime-drawer'
-import type { CatalogRepositoryAnalysis, ManagedPlugin, PackPluginEntry, ProfileRepositoryImportMode, ProfileRepositoryImportPreview, RuntimeDrawerMode } from './types'
+import type { CatalogRepositoryAnalysis, ManagedPlugin, NonstandardPackImportPreview, PackPluginEntry, ProfileRepositoryImportMode, ProfileRepositoryImportPreview, RuntimeDrawerMode } from './types'
 import { DiscoverView } from './views/DiscoverView'
 import { PacksView } from './views/PacksView'
 import { PluginsView } from './views/PluginsView'
@@ -67,6 +67,7 @@ function LauncherShell() {
   const [repositoryImportOpen, setRepositoryImportOpen] = useState(false)
   const [repositoryImportUrl, setRepositoryImportUrl] = useState('')
   const [repositoryImportPreview, setRepositoryImportPreview] = useState<ProfileRepositoryImportPreview | null>(null)
+  const [nonstandardImportPreview, setNonstandardImportPreview] = useState<NonstandardPackImportPreview | null>(null)
   const [repositoryImportBusy, setRepositoryImportBusy] = useState(false)
   const [repositoryImportError, setRepositoryImportError] = useState<string | null>(null)
   const [updateOpen, setUpdateOpen] = useState(false)
@@ -241,6 +242,7 @@ function LauncherShell() {
     setRepositoryImportOpen(true)
     setRepositoryImportUrl('')
     setRepositoryImportPreview(null)
+    setNonstandardImportPreview(null)
     setRepositoryImportError(null)
   }
 
@@ -248,7 +250,29 @@ function LauncherShell() {
     setRepositoryImportBusy(true)
     setRepositoryImportError(null)
     try {
-      setRepositoryImportPreview(await api.analyzeProfileRepository(repositoryImportUrl))
+      try {
+        setRepositoryImportPreview(await api.analyzeProfileRepository(repositoryImportUrl))
+        setNonstandardImportPreview(null)
+      } catch (standardError) {
+        const fallback = await api.analyzeNonstandardPackRepository(repositoryImportUrl)
+        setRepositoryImportPreview(null)
+        setNonstandardImportPreview(fallback)
+      }
+    } catch (error) {
+      setRepositoryImportError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setRepositoryImportBusy(false)
+    }
+  }
+
+  const confirmNonstandardRepositoryImport = async (name?: string, packageNames?: string[]) => {
+    setRepositoryImportBusy(true)
+    setRepositoryImportError(null)
+    try {
+      await api.importNonstandardPackRepository(repositoryImportUrl, { name, packageNames })
+      await Promise.all([store.refreshProfiles(), store.refreshPacks(), store.refreshProfile()])
+      setRepositoryImportOpen(false)
+      store.showToast({ kind: 'success', message: '已创建独立 Profile，当前 Profile 未自动切换。' })
     } catch (error) {
       setRepositoryImportError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -672,11 +696,13 @@ function LauncherShell() {
         open={repositoryImportOpen}
         url={repositoryImportUrl}
         preview={repositoryImportPreview}
+        nonstandardPreview={nonstandardImportPreview}
         busy={repositoryImportBusy}
         error={repositoryImportError}
-        onUrlChange={value => { setRepositoryImportUrl(value); setRepositoryImportPreview(null); setRepositoryImportError(null) }}
+        onUrlChange={value => { setRepositoryImportUrl(value); setRepositoryImportPreview(null); setNonstandardImportPreview(null); setRepositoryImportError(null) }}
         onAnalyze={() => void analyzeRepositoryImport()}
         onConfirm={(mode, name, overwrite) => void confirmRepositoryImport(mode, name, overwrite)}
+        onConfirmNonstandard={(name, packageNames) => void confirmNonstandardRepositoryImport(name, packageNames)}
         onClose={() => { if (!repositoryImportBusy) setRepositoryImportOpen(false) }}
       />
       {updateOpen && store.launcherUpdate && (

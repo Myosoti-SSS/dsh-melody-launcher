@@ -41,6 +41,7 @@ import { createRuntimeController, type RuntimeController } from './runtime'
 import { createRuntimeVersionService, type RuntimeVersionService } from './runtime-versions'
 import { createSettingsStore, defaultSettings, type SettingsStore } from './settings'
 import { recoverLegacyCredentials } from './dsh-credentials-compat'
+import { createNonstandardPackService, type NonstandardPackService } from './nonstandard-pack'
 
 /**
  * 应用入口与装配根。
@@ -73,6 +74,7 @@ interface Services {
   dshMarket: DshMarketService
   runtimeVersions: RuntimeVersionService
   profiles: ProfileService
+  nonstandardPack: NonstandardPackService
   profilePoolReady: Promise<void>
 }
 
@@ -379,6 +381,20 @@ function createServices(): Services {
     isInstallerBusy: () => installer.isBusy(),
   })
 
+  const nonstandardPack = createNonstandardPackService({
+    githubAuth,
+    installer,
+    dshMarket,
+    profiles: profileService,
+    readSettings: () => settings.read(),
+    pluginReceiptsPath,
+    pluginSourceRoot,
+    ensureDshVersion: async version => {
+      const environment = await runtimeVersions.read(false)
+      if (!environment.dshInstalled.some(item => item.version === version)) await runtimeVersions.installDsh(version)
+    },
+  })
+
   let packManager: PackManager | null = null
   const copilot = createCopilotSessionManager({
     filePath: path.join(userData, 'copilot-sessions.json'),
@@ -551,7 +567,7 @@ function createServices(): Services {
     if (result.dependencies > 0) events.output('plugin', 'info', `已将 ${result.dependencies} 个 Profile 插件依赖归并到共享插件池。`)
   }).catch(error => events.output('plugin', 'error', `旧整合包/插件池迁移失败：${error instanceof Error ? error.message : String(error)}`))
 
-  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager: packManager!, githubAuth, applicationAddons, catalogSync, dshMarket, runtimeVersions, profiles: profileService, profilePoolReady }
+  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager: packManager!, githubAuth, applicationAddons, catalogSync, dshMarket, runtimeVersions, profiles: profileService, nonstandardPack, profilePoolReady }
 }
 
 function openMainWindow(): void {

@@ -138,6 +138,7 @@ export async function readProfile(dshHome: string, profileName: string, pluginRe
       const repo = repositoryFullName
         ? `https://github.com/${repositoryFullName}`
         : manifestRepo
+      const receipt = receipts.find(item => item.profileName === profileName && item.packageName === packageName)
       return {
         packageName,
         displayName: displayName(packageName),
@@ -152,6 +153,15 @@ export async function readProfile(dshHome: string, profileName: string, pluginRe
         order: enabled
           ? profileBundles.indexOf(packageName) + 1
           : null,
+        ...(receipt?.actualSource ? { actualSource: receipt.actualSource } : {}),
+        ...(receipt?.packName && receipt.packRepository ? {
+          packOrigin: {
+            packName: receipt.packName,
+            packRepository: receipt.packRepository,
+            packCommit: receipt.packCommit ?? null,
+            componentId: receipt.componentId ?? packageName,
+          },
+        } : {}),
       }
     })
     .sort((a, b) => {
