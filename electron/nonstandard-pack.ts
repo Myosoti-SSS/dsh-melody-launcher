@@ -154,7 +154,9 @@ async function npmVersion(auth: GitHubAuthService, packageName: string, requeste
     const body = object(await response.json().catch(() => null))
     const latest = object(body?.['dist-tags'])?.latest
     return string(latest)
-  } catch { return null }
+  } catch {
+    return null
+  }
 }
 
 async function npmRepository(auth: GitHubAuthService, packageName: string): Promise<string | null> {
@@ -164,7 +166,26 @@ async function npmRepository(auth: GitHubAuthService, packageName: string): Prom
     const body = object(await response.json().catch(() => null))
     const repository = body?.repository
     const raw = typeof repository === 'string' ? repository : object(repository)?.url
-    return githubRepo(string(raw))
+    const declared = githubRepo(string(raw))
+    if (declared) return declared
+  } catch {
+    // Continue with GitHub search when npm metadata is unavailable.
+  }
+  // A few packages in the wild omit `repository` when publishing. GitHub's
+  // repository search is a conservative fallback: only an exact repository
+  // basename match is accepted, never a fuzzy result.
+  try {
+    const shortName = packageName.split('/').at(-1) ?? packageName
+    const response = await auth.fetch(`https://api.github.com/search/repositories?q=${encodeURIComponent(`${shortName} in:name`)}&per_page=10`, { headers: { Accept: 'application/vnd.github+json' } })
+    if (!response.ok) return null
+    const body = object(await response.json().catch(() => null))
+    const items = Array.isArray(body?.items) ? body.items : []
+    const exact = items.find(item => {
+      const record = object(item)
+      const fullName = string(record?.full_name)
+      return fullName && fullName.split('/').at(-1)?.toLowerCase() === shortName.toLowerCase()
+    })
+    return githubRepo(string(object(exact)?.full_name))
   } catch { return null }
 }
 

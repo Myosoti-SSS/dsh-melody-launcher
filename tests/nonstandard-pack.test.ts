@@ -22,7 +22,7 @@ describe('nonstandard pack repository analysis', () => {
     archive.addFile(`${root}dsh-source.json`, Buffer.from(JSON.stringify({ version: '0.1.0-rc.5' })))
     archive.addFile(`${root}config/bundles.json`, Buffer.from(JSON.stringify({
       core: [{ id: 'demo-plugin', pkg: 'owner/demo-plugin', source: 'github', profile: ['web'] }],
-      optional: [{ id: 'browser', pkg: 'owner/browser', source: 'github', install: 'manual' }],
+      optional: [{ id: 'browser', pkg: 'owner/browser', source: 'github', install: 'manual' }, { id: 'notification', pkg: '@dingyi222666/dsh-session-notification', source: 'npm' }],
       presets: [{ id: 'router-standard' }],
     })))
     archive.addFile(`${root}plugins/local-plugin/package.json`, Buffer.from(JSON.stringify({ name: 'dsh-local-plugin', version: '1.0.0', dsh: { bundle: { patch: 'bundle.json' } } })))
@@ -35,6 +35,7 @@ describe('nonstandard pack repository analysis', () => {
       if (url.includes('/repos/owner/pack')) return response({ default_branch: 'main' })
       if (url.includes('/commits/main')) return response({ sha: 'a'.repeat(40) })
       if (url.includes('codeload.github.com/owner/pack')) return new Response(new Uint8Array(buffer))
+      if (url.includes('/search/repositories')) return response({ items: [{ full_name: 'dingyi222666/dsh-session-notification' }] })
       if (url.includes('registry.npmjs.org')) return response({ 'dist-tags': { latest: '1.0.0' } })
       return response({}, 404)
     }
@@ -51,6 +52,7 @@ describe('nonstandard pack repository analysis', () => {
     expect(preview.dshVersion).toBe('0.1.0-rc.6')
     expect(preview.warnings).toHaveLength(1)
     expect(preview.plugins.some(plugin => plugin.packageName === 'dsh-local-plugin' && plugin.source === 'local')).toBe(true)
+    expect(preview.plugins.find(plugin => plugin.packageName === '@dingyi222666/dsh-session-notification')).toMatchObject({ repository: 'dingyi222666/dsh-session-notification', source: 'github' })
     expect(preview.skipped.some(item => item.name === 'browser')).toBe(true)
     expect(preview.skipped.some(item => item.name === 'router-standard')).toBe(true)
   })
