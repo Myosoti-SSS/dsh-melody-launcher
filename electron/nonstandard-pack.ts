@@ -59,7 +59,7 @@ export interface NonstandardPackOptions {
 
 export interface NonstandardPackService {
   analyze(url: string): Promise<NonstandardPackImportPreview>
-  import(url: string, options?: { name?: string; packageNames?: string[] }): Promise<ProfileSummary>
+  import(url: string, options?: { name?: string; packageNames?: string[]; installDsh?: boolean }): Promise<ProfileSummary>
   resolve(preview: NonstandardPackImportPreview): Promise<NonstandardPackPluginPreview[]>
 }
 
@@ -154,6 +154,17 @@ async function npmVersion(auth: GitHubAuthService, packageName: string, requeste
     const body = object(await response.json().catch(() => null))
     const latest = object(body?.['dist-tags'])?.latest
     return string(latest)
+  } catch { return null }
+}
+
+async function npmRepository(auth: GitHubAuthService, packageName: string): Promise<string | null> {
+  try {
+    const response = await auth.fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}`, { headers: { Accept: 'application/json' } })
+    if (!response.ok) return null
+    const body = object(await response.json().catch(() => null))
+    const repository = body?.repository
+    const raw = typeof repository === 'string' ? repository : object(repository)?.url
+    return githubRepo(string(raw))
   } catch { return null }
 }
 
@@ -275,6 +286,19 @@ export async function analyzeNonstandardPackRepository(options: NonstandardPackO
     if (plugins.some(plugin => plugin.packageName === packageName)) continue
     plugins.push({ componentId: packageName, packageName, displayName: string(local.manifest.description) ?? packageName, category: 'workspace', enabled: true, order: order++, repository: snap.repository, subdirectory: path.relative(snap.root, local.directory).replace(/\\/g, '/'), version: string(local.manifest.version), commit: snap.commit, source: 'local', sourceLabel: '整合包本地源码', targetId: packageName })
   }
+  for (const plugin of plugins.filter(item => item.source === 'unavailable')) {
+    const local = localPackages.get(plugin.packageName) ?? [...localPackages.entries()].find(([name]) => name.toLowerCase() === plugin.componentId.toLowerCase() || name.split('/').at(-1)?.toLowerCase() === plugin.componentId.toLowerCase())?.[1]
+    if (local) {
+      plugin.packageName = string(local.manifest.name) ?? plugin.packageName
+      plugin.displayName = string(local.manifest.description) ?? plugin.packageName
+      plugin.subdirectory = path.relative(snap.root, local.directory).replace(/\\/g, '/')
+      plugin.repository = snap.repository
+      plugin.commit = snap.commit
+      plugin.source = 'local'
+      plugin.sourceLabel = '整合包本地源码'
+      plugin.targetId = plugin.packageName
+    }
+  }
   const presetValues = Array.isArray(bundles.presets) ? bundles.presets : []
   for (const raw of presetValues) if (object(raw)) skipped.push({ id: string((raw as Record<string, unknown>).id) ?? 'preset', name: string((raw as Record<string, unknown>).id) ?? 'preset', category: 'preset', reason: 'Agent 预设由独立预设流程处理，暂不作为插件安装。' })
   const catalog = await options.dshMarket.load().catch(() => ({ updated: '', count: 0, categories: {}, plugins: [] } as DshMarketCatalog))
@@ -286,6 +310,15 @@ export async function analyzeNonstandardPackRepository(options: NonstandardPackO
       plugin.version = await npmVersion(options.githubAuth, plugin.packageName, plugin.version)
       if (!plugin.version) { plugin.source = 'unavailable'; plugin.sourceLabel = '无法安装'; plugin.reason = '无法解析 npm 的精确版本。' }
       continue
+    }
+    if (plugin.source === 'unavailable' && !plugin.repository) {
+      const repository = await npmRepository(options.githubAuth, plugin.packageName)
+      if (repository) {
+        plugin.repository = repository
+        plugin.source = 'github'
+        plugin.sourceLabel = 'GitHub（npm 元数据）'
+        plugin.commit = (await repoInfo(options.githubAuth, repository).catch(() => null))?.commit ?? snap.commit
+      }
     }
     if (plugin.repository && plugin.source === 'github' && !plugin.commit) {
       const pinned = await repoInfo(options.githubAuth, plugin.repository).catch(() => null)
@@ -310,14 +343,14 @@ function uniqueProfileName(base: string, existing: string[]): string {
   return `${base}-${index}`
 }
 
-export async function importNonstandardPackRepository(options: NonstandardPackOptions, url: string, input: { name?: string; packageNames?: string[] } = {}): Promise<ProfileSummary> {
+export async function importNonstandardPackRepository(options: NonstandardPackOptions, url: string, input: { name?: string; packageNames?: string[]; installDsh?: boolean } = {}): Promise<ProfileSummary> {
   const preview = await analyzeNonstandardPackRepository(options, url)
   if (preview.blockers.length > 0 && preview.plugins.every(plugin => plugin.source === 'unavailable')) throw new Error(preview.blockers.join('；'))
   const settings = await options.readSettings()
   const summaries = await options.profiles.list()
   const requested = input.name?.trim() ? assertMeaningfulPackName(input.name.trim()) : preview.profileName
   const profileName = uniqueProfileName(requested, summaries.map(summary => summary.name))
-  if (preview.dshVersion && options.ensureDshVersion) await options.ensureDshVersion(preview.dshVersion)
+  if (preview.dshVersion && input.installDsh !== false && options.ensureDshVersion) await options.ensureDshVersion(preview.dshVersion)
   await options.profiles.create({
     name: profileName,
     description: preview.description,

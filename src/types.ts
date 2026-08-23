@@ -953,6 +953,7 @@ export interface NonstandardPackImportPreview {
   description: string
   profileName: string
   dshVersion: string | null
+  dshVersionInstalled?: boolean
   dshSourceVersion: string | null
   warnings: string[]
   plugins: NonstandardPackPluginPreview[]
@@ -963,6 +964,8 @@ export interface NonstandardPackImportPreview {
 export interface NonstandardPackImportOptions {
   name?: string
   packageNames?: string[]
+  /** Explicitly opt into installing the exact DSH version declared by the pack. */
+  installDsh?: boolean
 }
 
 export interface PackInstallResult {

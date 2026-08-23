@@ -265,11 +265,11 @@ function LauncherShell() {
     }
   }
 
-  const confirmNonstandardRepositoryImport = async (name?: string, packageNames?: string[]) => {
+  const confirmNonstandardRepositoryImport = async (name?: string, packageNames?: string[], installDsh?: boolean) => {
     setRepositoryImportBusy(true)
     setRepositoryImportError(null)
     try {
-      await api.importNonstandardPackRepository(repositoryImportUrl, { name, packageNames })
+      await api.importNonstandardPackRepository(repositoryImportUrl, { name, packageNames, installDsh })
       await Promise.all([store.refreshProfiles(), store.refreshPacks(), store.refreshProfile()])
       setRepositoryImportOpen(false)
       store.showToast({ kind: 'success', message: '已创建独立 Profile，当前 Profile 未自动切换。' })

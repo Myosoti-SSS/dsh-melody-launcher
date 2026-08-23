@@ -12,7 +12,7 @@ export interface ProfileRepositoryImportDialogProps {
   onUrlChange: (value: string) => void
   onAnalyze: () => void
   onConfirm: (mode: ProfileRepositoryImportMode, name?: string, overwrite?: boolean, resolutions?: Record<string, PackPluginEntry>) => void
-  onConfirmNonstandard?: (name?: string, packageNames?: string[]) => void
+  onConfirmNonstandard?: (name?: string, packageNames?: string[], installDsh?: boolean) => void
   onClose: () => void
 }
 
@@ -22,6 +22,7 @@ export function ProfileRepositoryImportDialog({ open, url, preview, nonstandardP
   const [overwrite, setOverwrite] = useState(false)
   const [resolutions, setResolutions] = useState<Record<string, PackPluginEntry>>({})
   const [selectedNonstandard, setSelectedNonstandard] = useState<string[]>([])
+  const [installDsh, setInstallDsh] = useState(true)
 
   useEffect(() => {
     if (preview) {
@@ -36,6 +37,7 @@ export function ProfileRepositoryImportDialog({ open, url, preview, nonstandardP
       setResolutions({})
     }
     setSelectedNonstandard(nonstandardPreview?.plugins.filter(plugin => plugin.source !== 'unavailable').map(plugin => plugin.packageName) ?? [])
+    setInstallDsh(true)
   }, [preview, nonstandardPreview])
 
   if (!open) return null
@@ -79,6 +81,7 @@ export function ProfileRepositoryImportDialog({ open, url, preview, nonstandardP
               <div className="pack-preview-head"><div><strong>{nonstandardPreview.name}</strong><span>{nonstandardPreview.description}</span></div><span className="pack-source-badge">{nonstandardPreview.repository} · {nonstandardPreview.branch}</span></div>
               <label className="pack-preview-name"><span>新 Profile 名称</span><input value={name} onChange={event => setName(event.target.value)} disabled={busy} /></label>
               <p className="pack-preview-meta">仓库类型：{nonstandardPreview.kind} · commit {nonstandardPreview.commit?.slice(0, 8) ?? '未知'} · DSH {nonstandardPreview.dshVersion ?? '未声明'} · {nonstandardPreview.plugins.length} 个插件</p>
+              {nonstandardPreview.dshVersion && <label className="profile-import-overwrite"><input type="checkbox" checked={nonstandardPreview.dshVersionInstalled || installDsh} disabled={nonstandardPreview.dshVersionInstalled === true || busy} onChange={event => setInstallDsh(event.target.checked)} />{nonstandardPreview.dshVersionInstalled ? `DSH ${nonstandardPreview.dshVersion} 已安装` : `安装整合包要求的 DSH ${nonstandardPreview.dshVersion}`}</label>}
               {nonstandardPreview.warnings.map((warning, index) => <div className="pack-error-banner" key={`warning-${index}`}><CircleAlert size={16} /><span>{warning}</span></div>)}
               <div className="profile-import-plugin-list">{nonstandardPreview.plugins.map(plugin => <label key={plugin.componentId}><input type="checkbox" checked={selectedNonstandard.includes(plugin.packageName)} disabled={plugin.source === 'unavailable' || busy} onChange={event => setSelectedNonstandard(current => event.target.checked ? [...current, plugin.packageName] : current.filter(name => name !== plugin.packageName))} /><span>{plugin.order + 1}. {plugin.packageName}</span><small>{plugin.category} · {plugin.sourceLabel}{plugin.reason ? ` · ${plugin.reason}` : ''}</small></label>)}</div>
               {nonstandardPreview.skipped.length > 0 && <div className="profile-import-differences"><strong>跳过的非插件组件</strong>{nonstandardPreview.skipped.map(item => <span key={item.id}>{item.name}：{item.reason}</span>)}</div>}
@@ -88,7 +91,7 @@ export function ProfileRepositoryImportDialog({ open, url, preview, nonstandardP
         </div>
         <footer>
           <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>取消</button>
-          <button type="button" className="primary-command" disabled={!canConfirm} onClick={() => nonstandard ? onConfirmNonstandard?.(name.trim(), selectedNonstandard) : onConfirm(mode, name.trim(), overwrite, resolutions)}><Download size={16} />确认导入</button>
+          <button type="button" className="primary-command" disabled={!canConfirm} onClick={() => nonstandard ? onConfirmNonstandard?.(name.trim(), selectedNonstandard, installDsh) : onConfirm(mode, name.trim(), overwrite, resolutions)}><Download size={16} />确认导入</button>
         </footer>
       </section>
     </div>

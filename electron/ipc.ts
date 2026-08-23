@@ -419,17 +419,19 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
   ipcMain.handle(IPC.profilesNonstandardAnalyze, async (_event, url: string) => {
     if (typeof url !== 'string' || !url.trim()) throw new Error('整合包仓库链接无效。')
-    return nonstandardPack.analyze(url.trim())
+    const preview = await nonstandardPack.analyze(url.trim())
+    const environment = await runtimeVersions.read(false)
+    return { ...preview, dshVersionInstalled: preview.dshVersion ? environment.dshInstalled.some(item => item.version === preview.dshVersion) : true }
   })
   ipcMain.handle(IPC.profilesNonstandardResolve, async (_event, preview: NonstandardPackImportPreview) => {
     if (!preview || typeof preview !== 'object' || !Array.isArray(preview.plugins)) throw new Error('整合包解析结果无效。')
     return nonstandardPack.resolve(preview)
   })
-  ipcMain.handle(IPC.profilesNonstandardImport, async (_event, payload: { url: string; name?: string; packageNames?: string[] }) => {
+  ipcMain.handle(IPC.profilesNonstandardImport, async (_event, payload: { url: string; name?: string; packageNames?: string[]; installDsh?: boolean }) => {
     assertProfileMutationAvailable()
     if (!payload || typeof payload.url !== 'string' || !payload.url.trim()) throw new Error('整合包仓库链接无效。')
     if (runtime.isRunning()) throw new Error('请先停止 DSH，再导入整合包。')
-    return nonstandardPack.import(payload.url.trim(), { name: payload.name, packageNames: payload.packageNames })
+    return nonstandardPack.import(payload.url.trim(), { name: payload.name, packageNames: payload.packageNames, installDsh: payload.installDsh !== false })
   })
   ipcMain.handle(IPC.profilesMatchPlugin, async (_event, packageName: string) => {
     if (typeof packageName !== 'string' || !isSafePackageName(packageName)) throw new Error('插件名称无效。')
