@@ -54,6 +54,7 @@ interface PluginsViewProps {
   onToggleApplication: (application: InstalledApplicationAddon, enabled: boolean) => void
   onUninstallApplication: (application: InstalledApplicationAddon) => void
   onTogglePreset: (preset: InstalledPreset, enabled: boolean) => void
+  onUninstallPreset: (preset: InstalledPreset) => void
   onReorder: (names: string[]) => Promise<void> | void
   onRefresh: () => void
   onBrowse: () => void
@@ -88,6 +89,7 @@ export function PluginsView({
   onToggleApplication,
   onUninstallApplication,
   onTogglePreset,
+  onUninstallPreset,
   onReorder,
   onRefresh,
   onBrowse,
@@ -301,7 +303,7 @@ export function PluginsView({
               />
             </div>}
             {secondaryTab === 'presets' && <div className="resource-tab-panel" role="tabpanel">
-              <PresetList presets={installedPresets.filter(preset => visiblePreset(preset, filter))} busy={busy} locked={profileLocked} onToggle={onTogglePreset} />
+              <PresetList presets={installedPresets.filter(preset => visiblePreset(preset, filter))} busy={busy} locked={profileLocked} onToggle={onTogglePreset} onUninstall={onUninstallPreset} />
             </div>}
           </section>
           </div>
@@ -419,12 +421,15 @@ function visiblePreset(preset: InstalledPreset, filter: string): boolean {
 }
 
 /** Agent 预设列：与 Skill 相同的开关机制（目录在 .agent-presets/.disabled 下时停用）。 */
-function PresetList({ presets, busy, locked, onToggle }: {
+function PresetList({ presets, busy, locked, onToggle, onUninstall }: {
   presets: InstalledPreset[]
   busy: string | null
   locked: boolean
   onToggle: (preset: InstalledPreset, enabled: boolean) => void
+  onUninstall: (preset: InstalledPreset) => void
 }) {
+  const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null)
+  const removeBusy = (name: string) => busy === `preset-remove:${name}`
   return (
     <div className="skill-management-column preset-management-column">
       {presets.length === 0 ? (
@@ -445,6 +450,23 @@ function PresetList({ presets, busy, locked, onToggle }: {
               </label>
               <div className="skill-name-cell"><strong>{preset.name}</strong></div>
               <span className="skill-description-cell">{preset.enabled ? '已启用' : '已停用'}</span>
+              <button
+                type="button"
+                className={`icon-button preset-remove ${confirmingRemove === preset.name ? 'confirming' : ''}`}
+                title={confirmingRemove === preset.name ? '再次点击确认删除' : '删除预设'}
+                aria-label={confirmingRemove === preset.name ? `确认删除预设 ${preset.name}` : `删除预设 ${preset.name}`}
+                disabled={locked || removeBusy(preset.name)}
+                onClick={() => {
+                  if (confirmingRemove !== preset.name) {
+                    setConfirmingRemove(preset.name)
+                    return
+                  }
+                  setConfirmingRemove(null)
+                  onUninstall(preset)
+                }}
+              >
+                {removeBusy(preset.name) ? <LoaderCircle className="spin" size={13} /> : <Trash2 size={13} />}
+              </button>
             </div>
           ))}
         </div>

@@ -248,8 +248,9 @@ function LauncherShell() {
                   onToggleApplication={store.toggleApplication}
                   onUninstallApplication={store.uninstallApplication}
                   onTogglePreset={store.togglePreset}
+                  onUninstallPreset={store.uninstallPreset}
                   onReorder={store.reorderPlugins}
-                  onRefresh={store.refreshProfile}
+                  onRefresh={() => { void store.refreshProfile(); void store.refreshSecondaryResources() }}
                   onBrowse={() => navigation.setView('discover')}
                   onOpenRepository={url => void api.openExternal(url)}
                   onToggleRuntime={toggleRuntime}

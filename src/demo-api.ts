@@ -1081,6 +1081,10 @@ export const demoApi: LauncherApi = {
     demoInstalledPresets = demoInstalledPresets.map(preset => preset.name === name ? { ...preset, enabled } : preset)
     return demoInstalledPresets
   },
+  uninstallPreset: async name => {
+    demoInstalledPresets = demoInstalledPresets.filter(preset => preset.name !== name)
+    return demoInstalledPresets
+  },
   getRuntimeState: async () => demoRuntime,
   startRuntime: async () => {
     const replacement = demoInstalledApplications.find(application => application.enabled && application.launchMode === 'runtime-replacement')

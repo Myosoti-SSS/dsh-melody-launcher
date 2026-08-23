@@ -80,6 +80,7 @@ const api: LauncherApi = {
   installPreset: request => ipcRenderer.invoke(IPC.presetsInstall, request),
   readInstalledPresets: () => ipcRenderer.invoke(IPC.presetsReadInstalled),
   togglePreset: (name, enabled) => ipcRenderer.invoke(IPC.presetsToggle, { name, enabled }),
+  uninstallPreset: name => ipcRenderer.invoke(IPC.presetsUninstall, { name }),
   getRuntimeState: () => ipcRenderer.invoke(IPC.runtimeState),
   startRuntime: () => ipcRenderer.invoke(IPC.runtimeStart),
   stopRuntime: () => ipcRenderer.invoke(IPC.runtimeStop),

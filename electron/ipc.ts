@@ -345,6 +345,13 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     }
     return installer.togglePreset(payload.name, Boolean(payload.enabled))
   })
+  ipcMain.handle(IPC.presetsUninstall, async (_event, payload: { name: string }) => {
+    assertProfileMutationAvailable()
+    if (!payload || typeof payload.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(payload.name)) {
+      throw new Error('预设名称无效。')
+    }
+    return installer.uninstallPreset(payload.name)
+  })
 
   ipcMain.handle(IPC.aiStatus, () => aiInstaller.status())
   ipcMain.handle(IPC.aiHasSnapshot, () => aiInstaller.hasSnapshot())

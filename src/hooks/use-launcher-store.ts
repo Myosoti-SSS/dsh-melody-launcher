@@ -98,7 +98,11 @@ export function useLauncherStore() {
       api.getSettings(),
       api.readProfile(),
       api.getRuntimeState(),
-      api.getDeepSeekCredentialStatus(),
+      // 凭据文件损坏时凭据状态未知，但不应阻塞整个启动器加载。
+      api.getDeepSeekCredentialStatus().catch(error => {
+        showToast({ kind: 'error', message: errorText(error) })
+        return { configured: false }
+      }),
       api.detectDshInstallation(),
       api.readInstalledSkills(),
       api.readInstalledApplications(),
@@ -187,6 +191,22 @@ export function useLauncherStore() {
       showToast({ kind: 'error', message: errorText(error) })
     }
   }, [adoptProfile, api, showToast])
+
+  /** 插件管理页的「刷新」：Profile 之外的 Skill、加载项、预设都是全局资源，需一并重读。 */
+  const refreshSecondaryResources = useCallback(async () => {
+    try {
+      const [skills, applications, presets] = await Promise.all([
+        api.readInstalledSkills(),
+        api.readInstalledApplications(),
+        api.readInstalledPresets(),
+      ])
+      setInstalledSkills(skills)
+      setInstalledApplications(applications)
+      setInstalledPresets(presets)
+    } catch (error) {
+      showToast({ kind: 'error', message: errorText(error) })
+    }
+  }, [api, showToast])
 
   const refreshCustomApiProviders = useCallback(async (): Promise<boolean> => {
     setCustomApiLoading(true)
@@ -421,6 +441,13 @@ export function useLauncherStore() {
   const togglePreset = useCallback(async (preset: InstalledPreset, enabled: boolean) => {
     const next = await run(`preset:${preset.name}`, () => api.togglePreset(preset.name, enabled), {
       success: enabled ? `预设「${preset.name}」已启用。` : `预设「${preset.name}」已停用。`,
+    })
+    if (next) setInstalledPresets(next)
+  }, [api, run])
+
+  const uninstallPreset = useCallback(async (preset: InstalledPreset) => {
+    const next = await run(`preset-remove:${preset.name}`, () => api.uninstallPreset(preset.name), {
+      success: `预设「${preset.name}」已删除。`,
     })
     if (next) setInstalledPresets(next)
   }, [api, run])
@@ -669,6 +696,7 @@ export function useLauncherStore() {
     dismissToast,
     showToast,
     refreshProfile,
+    refreshSecondaryResources,
     refreshCustomApiProviders,
     applyInstallResult,
     adoptCatalogInstallationState,
@@ -693,6 +721,7 @@ export function useLauncherStore() {
     toggleApplication,
     uninstallApplication,
     togglePreset,
+    uninstallPreset,
     reorderPlugins,
     uninstallPlugin,
     trialPlugin,
