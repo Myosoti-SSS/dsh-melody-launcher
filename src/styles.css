@@ -833,20 +833,19 @@ input:focus-visible {
 
 .header-pack-switcher {
   display: grid;
-  width: min(350px, 100%);
-  height: 38px;
+  width: min(260px, 100%);
+  height: 32px;
   min-width: 0;
-  grid-template-columns: 18px auto minmax(130px, 1fr);
+  grid-template-columns: 18px auto minmax(96px, 1fr);
   align-items: center;
-  padding: 3px 4px 3px 12px;
-  gap: 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 19px;
+  padding: 0 4px 0 10px;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
   color: var(--accent);
   background: var(--surface-soft);
-  box-shadow: 0 2px 8px rgba(31, 47, 37, 0.07);
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 650;
 }
 
 .header-pack-switcher > span {
@@ -857,10 +856,10 @@ input:focus-visible {
 .header-pack-switcher select {
   width: 100%;
   min-width: 0;
-  height: 30px;
-  padding: 0 27px 0 10px;
+  height: 24px;
+  padding: 0 22px 0 8px;
   border: 0;
-  border-radius: 15px;
+  border-radius: 4px;
   color: var(--ink);
   background: var(--surface);
   font-size: 11px;
@@ -875,6 +874,7 @@ input:focus-visible {
 
 .header-management-stats {
   display: flex;
+  flex: none;
   min-width: 0;
   height: 32px;
   align-items: center;
@@ -912,6 +912,7 @@ input:focus-visible {
 
 .header-runtime-status {
   display: inline-flex;
+  flex: none;
   height: 32px;
   align-items: center;
   padding: 0 9px;
@@ -3569,7 +3570,8 @@ input:focus-visible {
 .repository-headings,
 .repository-row {
   display: grid;
-  grid-template-columns: minmax(330px, 1fr) 100px 125px minmax(280px, auto);
+  grid-template-columns: minmax(300px, 1fr) 104px 132px minmax(300px, auto);
+  column-gap: 16px;
   min-width: 0;
 }
 
@@ -3979,7 +3981,7 @@ input:focus-visible {
   display: flex;
   width: 100%;
   min-width: 0;
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .install-button {
@@ -4055,24 +4057,23 @@ input:focus-visible {
   padding: 0 10px;
 }
 
-/* Keep catalog row actions in a stable slot.  Rows can expose a single
- * install/update command, a trial plus install pair, or an in-progress
- * state; the right edge should stay fixed and the controls should not
- * resize when their labels change. */
+/* 目录行操作左对齐：紧随语言/活跃度列，空白留在行右缘。
+ * 按钮定宽（96px），标签在「检测/检测中/管理」间切换不改变列宽。 */
 .repository-row .installed-actions,
 .repository-row .ai-ready-actions {
   width: 100%;
-  align-items: flex-end;
+  align-items: flex-start;
 }
 
 .repository-row .installed-label {
   width: 100%;
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .repository-row .installed-command-row,
 .repository-row .ai-ready-actions {
   width: 100%;
+  justify-content: flex-start;
 }
 
 .repository-row .installed-command-row > .install-button,
@@ -4564,6 +4565,8 @@ input:focus-visible {
 }
 
 .credential-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(700px, calc(100vw - 32px));
 }
 
@@ -4614,6 +4617,7 @@ input:focus-visible {
 }
 
 .api-config-content {
+  flex: 1 1 auto;
   min-height: 270px;
   max-height: min(66vh, 610px);
 }
@@ -4753,6 +4757,29 @@ input:focus-visible {
 }
 
 .custom-api-remove.confirming {
+  color: #fff;
+  background: var(--danger);
+}
+
+.preset-management-column .skill-row {
+  grid-template-columns: 35px minmax(110px, 0.8fr) minmax(90px, 1fr) 28px;
+}
+
+.preset-remove {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  color: var(--quiet);
+  background: transparent;
+}
+
+.preset-remove:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: transparent;
+  background: rgba(179, 38, 30, 0.08);
+}
+
+.preset-remove.confirming {
   color: #fff;
   background: var(--danger);
 }
@@ -5521,9 +5548,26 @@ input:focus-visible {
   }
 }
 
+/* 中等宽度：整合包标签与右侧按钮文字同步收缩，避免切换器被单独压扁。 */
+@media (max-width: 1320px) {
+  .header-pack-switcher {
+    grid-template-columns: 18px minmax(96px, 1fr);
+    padding: 0 4px 0 8px;
+  }
+
+  .header-pack-switcher > span {
+    display: none;
+  }
+
+  .credential-button > span:first-of-type,
+  .github-account-button > span:first-of-type {
+    display: none;
+  }
+}
+
 @media (max-width: 1160px) {
   .app-header {
-    grid-template-columns: 218px minmax(0, 1fr) auto;
+    grid-template-columns: 180px minmax(0, 1fr) auto;
   }
 
   .header-context .context-label,
@@ -5532,8 +5576,16 @@ input:focus-visible {
     display: none;
   }
 
-  .header-management-stats > span,
-  .header-runtime-status > span:last-child {
+  /* 窄窗口：中间只保留整合包切换与配置目录入口，右侧按钮收成图标，防止中间列溢出被裁。 */
+  .header-pack-switcher {
+    grid-template-columns: 18px minmax(80px, 1fr);
+  }
+
+  .header-runtime-status {
+    display: none;
+  }
+
+  .header-management-stats > span {
     display: none;
   }
 
@@ -5585,7 +5637,7 @@ input:focus-visible {
 
   .repository-headings,
   .repository-row {
-    grid-template-columns: minmax(320px, 1fr) 85px 105px 280px;
+    grid-template-columns: minmax(280px, 1fr) 96px 120px minmax(220px, auto);
   }
 }
 
@@ -5608,11 +5660,6 @@ input:focus-visible {
   }
 
   .brand-subtitle {
-    display: none;
-  }
-
-  .credential-button > span:first-of-type,
-  .github-account-button > span:first-of-type {
     display: none;
   }
 

@@ -843,6 +843,7 @@ export interface LauncherApi {
   installPreset(request: PresetInstallRequest): Promise<PresetInstallResult>
   readInstalledPresets(): Promise<InstalledPreset[]>
   togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]>
+  uninstallPreset(name: string): Promise<InstalledPreset[]>
   getRuntimeState(): Promise<RuntimeState>
   startRuntime(): Promise<RuntimeState>
   stopRuntime(): Promise<RuntimeState>

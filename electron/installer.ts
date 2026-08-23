@@ -49,7 +49,7 @@ import { isSafePackageName, readProfile } from './profile'
 import { withExecutableDirectoryOnPath } from './process'
 import { analyzeSkillRepository } from './skill-catalog'
 import { readInstalledSkills as readLocalSkills, toggleInstalledSkill } from './skill-format'
-import { installPresetFromRepository, readInstalledPresets as readLocalPresets, toggleInstalledPreset } from './preset-install'
+import { installPresetFromRepository, readInstalledPresets as readLocalPresets, toggleInstalledPreset, uninstallInstalledPreset } from './preset-install'
 import { downloadReleaseAsset } from './release-download'
 import { installSkillFromRepository } from './skill-install'
 
@@ -186,6 +186,8 @@ export interface Installer {
   readInstalledPresets(): Promise<InstalledPreset[]>
   /** 启用或停用一个本地 agent-preset。 */
   togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]>
+  /** 删除一个本地 agent-preset（目录与安装凭据）。 */
+  uninstallPreset(name: string): Promise<InstalledPreset[]>
   /** 汇总当前 Profile 与安装凭据里已安装的仓库，用于在列表中标记「已安装」。 */
   listInstalledRepositories(): Promise<string[]>
   /** 从指定 Profile 中卸载一个插件（缺省为当前 Profile）。 */
@@ -966,6 +968,11 @@ export function createInstaller(options: InstallerOptions): Installer {
     async togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]> {
       const settings = await options.readSettings()
       return toggleInstalledPreset(settings.dshHome, name, Boolean(enabled))
+    },
+
+    async uninstallPreset(name: string): Promise<InstalledPreset[]> {
+      const settings = await options.readSettings()
+      return uninstallInstalledPreset(settings.dshHome, name, options.presetReceiptsPath)
     },
   }
 }

@@ -96,6 +96,7 @@ export const IPC = {
   presetsInstall: 'presets:install',
   presetsReadInstalled: 'presets:read-installed',
   presetsToggle: 'presets:toggle',
+  presetsUninstall: 'presets:uninstall',
   runtimeState: 'runtime:state',
   runtimeStart: 'runtime:start',
   runtimeStop: 'runtime:stop',
