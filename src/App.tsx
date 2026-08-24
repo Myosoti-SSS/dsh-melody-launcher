@@ -144,7 +144,7 @@ function LauncherShell() {
   ].join('|')
   const runtimeActivityRef = useRef(false)
   const runtimeActivityInitializedRef = useRef(false)
-  const runtimeLogRef = useRef<string | null>(null)
+  const runtimeLogRef = useRef<number | null>(null)
   const runtimeLogInitializedRef = useRef(false)
 
   const revealRuntimeDrawer = () => {
@@ -183,18 +183,20 @@ function LauncherShell() {
   }, [runtimeActivity, store.loading])
 
   // Some plugin operations stream directly to the terminal without creating an
-  // InstallProgress record. Treat a new runtime log entry as activity as well.
+  // InstallProgress record. Treat a new process-output entry as activity as well —
+  // keyed on the real-output counter, so catalog/market sync's synthetic progress
+  // lines (also written to the log list) don't pop the drawer on page switch.
   useEffect(() => {
     if (store.loading) return
-    const timestamp = latestRuntimeLog?.timestamp ?? null
+    const version = store.processLogCount
     if (!runtimeLogInitializedRef.current) {
       runtimeLogInitializedRef.current = true
-      runtimeLogRef.current = timestamp
+      runtimeLogRef.current = version
       return
     }
-    if (timestamp && timestamp !== runtimeLogRef.current) revealRuntimeDrawer()
-    runtimeLogRef.current = timestamp
-  }, [latestRuntimeLog?.timestamp, store.loading])
+    if (version !== runtimeLogRef.current) revealRuntimeDrawer()
+    runtimeLogRef.current = version
+  }, [store.processLogCount, store.loading])
 
   useEffect(() => {
     if (!runtimeDrawerAutoOpened || runtimeDrawerMode !== 'half') return

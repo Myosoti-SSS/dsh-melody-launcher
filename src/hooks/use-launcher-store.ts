@@ -82,6 +82,9 @@ export function useLauncherStore() {
   })
   const githubAuthRefreshVersion = useRef(0)
   const [logs, setLogs] = useState<RuntimeOutput[]>([])
+  // 真实进程输出（onRuntimeOutput）的计数：App 用它判断是否自动弹出运行日志，
+  // 市场/目录同步等合成的进度日志不会计入，避免切页时灵动岛被顶出来。
+  const [processLogCount, setProcessLogCount] = useState(0)
   const progressLogBuckets = useRef<Record<string, { phase: InstallProgress['phase']; bucket: number; message: string }>>({})
   const catalogProgressLogState = useRef<Record<string, string>>({})
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null)
@@ -237,7 +240,10 @@ export function useLauncherStore() {
       }
 
     const unsubscribers = [
-      api.onRuntimeOutput(output => appendRuntimeLog(output)),
+      api.onRuntimeOutput(output => {
+        appendRuntimeLog(output)
+        setProcessLogCount(current => current + 1)
+      }),
       api.onRuntimeState(setRuntime),
       api.onInstallProgress(handleInstallProgress),
       api.onCatalogAnalysisProgress(handleCatalogAnalysisProgress),
@@ -929,6 +935,7 @@ export function useLauncherStore() {
     customApiLoading,
     githubAuthStatus,
     logs,
+    processLogCount,
     selectedPlugin,
     selected: profile?.plugins.find(plugin => plugin.packageName === selectedPlugin) ?? null,
     packs,
