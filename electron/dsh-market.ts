@@ -13,12 +13,14 @@ import { runCommand, type CommandOptions, type CommandResult, type OutputLevel }
 import { approveAllIgnoredBuilds } from './plugin-install'
 import { readProfile } from './profile'
 import { resolveNodeExecutable, ensureNodeRuntime, ensurePnpmRuntime, type NodeRuntime, type PnpmRuntime } from './node-runtime'
-import { withExecutableDirectoryOnPath } from './process'
+import { findGitExecutable, gitUnavailableMessage, isGitHostedSpecifier, isGitUnavailableOutput, withExecutableDirectoryOnPath, withGitOnPath } from './process'
+import { isNpmVersionUnavailableError } from './npm-install'
 
 const REGISTRY_URL = 'https://awesome-dsh-plugin.com/plugins.json'
 const NPM_NAME = /^(@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/i
 const GITHUB_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const CORE = new Set(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-headless'])
+const MARKET_COMMAND_IDLE_TIMEOUT_MS = 5 * 60 * 1000
 
 export interface DshMarketOptions {
   readSettings: () => Promise<AppSettings>
@@ -29,6 +31,10 @@ export interface DshMarketOptions {
   emitProgress: (progress: DshMarketProgress) => void
   emitOutput: (level: OutputLevel, text: string) => void
   packageStoreRoot?: string
+  /** 安装成功后同步所有 Profile 的共享插件依赖声明。 */
+  syncProfilePool?: (dshHome: string) => Promise<void>
+  /** Local Profile/shared-pool uninstall path; avoids pnpm/network resolution. */
+  removePluginLocally?: (packageName: string, profileName?: string, options?: { purgeStore?: boolean }) => Promise<unknown>
 }
 
 interface RegistryPlugin {
@@ -65,10 +71,13 @@ export function parseDshMarketSourceUrl(url: string): { repo: string; subpath: s
   return { repo: match[1], subpath }
 }
 
-export function dshMarketInstallTarget(entry: { url: string; npm?: string | null }): string | null {
+export function dshMarketInstallTarget(entry: { url: string; npm?: string | null }, exactVersion?: string | null): string | null {
   const source = parseDshMarketSourceUrl(entry.url)
   if (!source) return null
-  if (typeof entry.npm === 'string' && NPM_NAME.test(entry.npm)) return entry.npm
+  if (typeof entry.npm === 'string' && NPM_NAME.test(entry.npm)) {
+    if (exactVersion && !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(exactVersion)) throw new Error('dsh-market 精确版本格式无效。')
+    return exactVersion ? `${entry.npm}@${exactVersion}` : entry.npm
+  }
   return source.subpath === null ? `github:${source.repo}` : `github:${source.repo}#path:/${source.subpath}`
 }
 
@@ -252,6 +261,11 @@ export function createDshMarketService(options: DshMarketOptions) {
       DSH_HOME: settings.dshHome,
       FORCE_COLOR: '0',
       CI: 'true',
+      npm_config_yes: 'true',
+      NPM_CONFIG_YES: 'true',
+      PNPM_CONFIG_YES: 'true',
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+      NPM_CONFIG_UPDATE_NOTIFIER: 'false',
       ...(options.packageStoreRoot ? {
         npm_config_store_dir: options.packageStoreRoot,
         NPM_CONFIG_STORE_DIR: options.packageStoreRoot,
@@ -259,7 +273,12 @@ export function createDshMarketService(options: DshMarketOptions) {
         PNPM_CONFIG_STORE_DIR: options.packageStoreRoot,
       } : {}),
     }
-    const dshEnv = withExecutableDirectoryOnPath(pnpm.executable, withExecutableDirectoryOnPath(node.node, commandEnv))
+    const dshEnv = withGitOnPath(withExecutableDirectoryOnPath(pnpm.executable, withExecutableDirectoryOnPath(node.node, commandEnv)))
+    if (args.some(isGitHostedSpecifier) && !findGitExecutable(dshEnv)) {
+      const message = gitUnavailableMessage()
+      options.emitOutput('error', message)
+      throw new Error(message)
+    }
     const handleOutput = (text: string, level: OutputLevel) => {
       options.emitOutput(level, text)
       const match = /downloaded\s+(\d+)\s+of\s+(\d+)/i.exec(text)
@@ -270,6 +289,7 @@ export function createDshMarketService(options: DshMarketOptions) {
     const runDshPlugin = () => execute(executable, commandArgs, {
       cwd: settings.workspace,
       env: dshEnv,
+      inactivityTimeoutMs: MARKET_COMMAND_IDLE_TIMEOUT_MS,
       onOutput: handleOutput,
     })
     options.emitOutput('info', `dsh-market 插件操作：${args.join(' ')}`)
@@ -285,6 +305,7 @@ export function createDshMarketService(options: DshMarketOptions) {
       const migrate = await execute(pnpm.executable, ['install'], {
         cwd: profilePath,
         env: dshEnv,
+        inactivityTimeoutMs: MARKET_COMMAND_IDLE_TIMEOUT_MS,
         onOutput: (text, level) => options.emitOutput(level, text),
       })
       if (migrate.exitCode !== 0) {
@@ -308,14 +329,22 @@ export function createDshMarketService(options: DshMarketOptions) {
     return result
   }
 
-  async function mutate(name: string, action: 'install' | 'update' | 'uninstall', profileOverride?: string): Promise<DshMarketInstalledPlugin[]> {
+  async function mutate(name: string, action: 'install' | 'update' | 'uninstall', profileOverride?: string, exactVersion?: string | null): Promise<DshMarketInstalledPlugin[]> {
     if (active) throw new Error('dsh-market 正在执行另一个插件操作，请等待完成。')
     active = true
     try {
+      // Uninstall is deliberately local. Do not even load the remote market
+      // registry: resolving a display name is not worth making removal online.
+      if (action === 'uninstall' && options.removePluginLocally) {
+        await options.removePluginLocally(name, profileOverride, { purgeStore: true })
+        updatesCache = null
+        progress(name, 'complete', '插件已从 Profile 和共享插件池卸载', 100)
+        return []
+      }
       const registry = await loadRegistry()
       const entry = registry.plugins!.find(item => item.name === name || item.npm === name)
       if (!entry) throw new Error('插件不在 dsh-market 精选目录中。')
-      const target = dshMarketInstallTarget(entry)
+      let target = dshMarketInstallTarget(entry, action === 'install' ? exactVersion : null)
       if (!target) throw new Error('dsh-market 不支持此插件的来源地址。')
       const settings = await options.readSettings()
       const targetSettings = profileOverride ? { ...settings, profileName: profileOverride } : settings
@@ -329,15 +358,46 @@ export function createDshMarketService(options: DshMarketOptions) {
         if (collision !== undefined) throw new Error(`同名冲突：Profile 已安装「${collision}」，请先卸载后再从 dsh-market 安装。`)
       }
       progress(name, action === 'uninstall' ? 'resolving' : 'checking', action === 'uninstall' ? '正在准备卸载' : '正在核对 dsh-market 来源', 8)
-      const result = await runPlugin(name, action === 'uninstall' ? ['remove', alias ?? name] : ['add', target], entry.url, profileOverride)
+      let usedLatest = false
+      let result = await runPlugin(name, action === 'uninstall' ? ['remove', alias ?? name] : ['add', target], entry.url, profileOverride)
+      if (
+        action === 'install'
+        && exactVersion
+        && entry.npm
+        && result.exitCode !== 0
+        && isNpmVersionUnavailableError(new Error(result.output), entry.npm, exactVersion)
+      ) {
+        usedLatest = true
+        options.emitOutput('info', `npm 未找到 ${entry.npm}@${exactVersion}，正在尝试安装 latest。`)
+        progress(name, 'resolving', `版本 ${exactVersion} 不存在，正在尝试 npm latest`, 12)
+        target = dshMarketInstallTarget(entry)
+        if (!target) throw new Error('dsh-market 不支持此插件的来源地址。')
+        result = await runPlugin(name, ['add', target], entry.url, profileOverride)
+      }
+      if (result.exitCode !== 0 && isGitUnavailableOutput(result.output)) {
+        const message = gitUnavailableMessage()
+        options.emitOutput('error', message)
+        throw new Error(message)
+      }
       if (result.exitCode !== 0) throw new Error(`dsh-market 插件操作失败（代码 ${result.exitCode}）：${result.output.slice(-800)}`)
       const after = await readInstalled(targetSettings)
       if (action !== 'uninstall') {
         const installedName = findDshMarketInstalledAlias(entry, after.map)
         if (!installedName) throw new Error('pnpm 已完成，但 dsh-market 未检测到安装结果。')
+        const installedRecord = after.records.find(item => item.name === installedName)
+        if (exactVersion && !usedLatest && installedRecord?.version !== exactVersion) throw new Error(`插件版本校验失败：要求 ${exactVersion}，实际 ${installedRecord?.version ?? '未知'}。`)
+        if (usedLatest && !installedRecord?.version) throw new Error('npm latest 安装完成，但无法读取实际安装版本。')
+        if (usedLatest) options.emitOutput('info', `已回退到 npm latest，实际安装版本：${installedRecord?.version ?? '未知'}`)
         const profile = await readProfile(targetSettings.dshHome, targetSettings.profileName)
         const component = profile.plugins.find(item => item.packageName === installedName)
         if (!component || !component.compatible) throw new Error('插件已下载，但没有检测到可加载的 DSH Bundle。')
+        if (options.syncProfilePool) {
+          try {
+            await options.syncProfilePool(targetSettings.dshHome)
+          } catch (error) {
+            options.emitOutput('error', `共享插件池同步失败：${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
       }
       updatesCache = null
       progress(name, 'verifying', '正在刷新 dsh-market 安装状态', 94)
@@ -405,7 +465,7 @@ export function createDshMarketService(options: DshMarketOptions) {
         throw error
       }
     },
-    install: (name: string, profileName?: string) => mutate(name, 'install', profileName),
+    install: (name: string, profileName?: string, exactVersion?: string | null) => mutate(name, 'install', profileName, exactVersion),
     update: (name: string, profileName?: string) => mutate(name, 'update', profileName),
     uninstall: (name: string, profileName?: string) => mutate(name, 'uninstall', profileName),
     toggle: async (name: string, enabled: boolean) => {

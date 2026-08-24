@@ -5039,6 +5039,9 @@ input:focus-visible {
 }
 
 .log-panel > header button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 4px 7px;
   border: 0;
   color: #aab4ad;
@@ -7017,6 +7020,12 @@ input:focus-visible {
   min-height: 32px;
   padding: 0 14px;
   font-size: 12px;
+}
+
+.log-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 @media (max-width: 760px) {

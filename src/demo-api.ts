@@ -950,7 +950,7 @@ export const demoApi: LauncherApi = {
       dshVersion: demoSettings.dshVersion ?? '0.1.0-rc.7',
       dshSourceVersion: '0.1.0-rc.6',
       warnings: ['演示：运行时版本与源码基线不同。'],
-      plugins: [{ componentId: 'demo-plugin', packageName: 'dsh-demo-plugin', displayName: 'Demo Plugin', category: 'core' as const, enabled: true, order: 0, repository: 'demo/demo-plugin', subdirectory: null, version: '0.1.0', commit: null, source: 'market' as const, sourceLabel: 'DSH Market', targetId: 'dsh-demo-plugin' }],
+      plugins: [{ componentId: 'demo-plugin', packageName: 'dsh-demo-plugin', displayName: 'Demo Plugin', category: 'core' as const, enabled: true, order: 0, repository: 'demo/demo-plugin', defaultBranch: 'main', subdirectory: null, version: '0.1.0', commit: null, declaredSource: 'npm' as const, source: 'market' as const, sourceLabel: 'DSH Market', targetId: 'dsh-demo-plugin' }],
       skipped: [{ id: 'demo-preset', name: 'demo-preset', category: 'preset' as const, reason: '演示预设，导入时跳过。' }],
       blockers: [],
     }
@@ -1121,7 +1121,7 @@ export const demoApi: LauncherApi = {
       packageName: analysis?.targets[0].packageName,
     }
   },
-  uninstallPlugin: async packageName => {
+  uninstallPlugin: async (packageName, _options) => {
     demoPlugins = renumber(demoPlugins.filter(plugin => plugin.packageName !== packageName))
     return profile()
   },

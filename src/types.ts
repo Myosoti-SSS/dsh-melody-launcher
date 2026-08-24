@@ -103,8 +103,15 @@ export interface ManagedPlugin {
   locked: boolean
   compatible: boolean
   order: number | null
+  /** Whether this Profile declares the dependency in its own manifest.
+   *
+   * The launcher exposes the union of the shared plugin pool in every
+   * Profile. An undeclared plugin is therefore visible as an inactive
+   * candidate, but is not a missing dependency until the user activates it.
+   */
+  declaredInProfile?: boolean
   /** The installation route used when this plugin was imported. */
-  actualSource?: 'market' | 'github' | 'local'
+  actualSource?: 'market' | 'npm' | 'github' | 'local'
   /** Originating distribution/profile metadata, when applicable. */
   packOrigin?: PluginPackOrigin
 }
@@ -225,6 +232,8 @@ export interface PluginInstallRequest {
   profileName?: string // 安装到指定 profile
   /** release 源插件：meta-repo 分析得到的 tgz 直链，安装时覆盖重分析得到的 github 源。 */
   tarballUrl?: string
+  /** 整合包清单声明的安装来源；用于防止同名 npm 包改写 GitHub 来源。 */
+  source?: 'npm' | 'github'
 }
 
 export interface DshInstallationStatus {
@@ -275,6 +284,8 @@ export interface ProfileSummary {
   selected: boolean
   importState?: 'complete' | 'partial' | 'failed'
   importFailures?: string[]
+  /** Number of plugins installed by the most recent import operation. */
+  importedPluginCount?: number
 }
 
 export interface ProfileCreateRequest {
@@ -918,7 +929,7 @@ export interface ProfileRepositoryImportPreview {
 
 export type NonstandardPackKind = 'standard-profile' | 'meta-repo' | 'distribution' | 'plugin' | 'skill' | 'application' | 'unknown'
 export type PackComponentCategory = 'core' | 'optional' | 'workspace' | 'vendored' | 'preset' | 'skill' | 'application' | 'runtime' | 'unknown'
-export type PackComponentSource = 'market' | 'github' | 'local' | 'unavailable'
+export type PackComponentSource = 'market' | 'npm' | 'github' | 'local' | 'unavailable'
 
 export interface NonstandardPackPluginPreview {
   componentId: string
@@ -928,9 +939,12 @@ export interface NonstandardPackPluginPreview {
   enabled: boolean
   order: number
   repository: string | null
+  defaultBranch: string | null
   subdirectory: string | null
   version: string | null
   commit: string | null
+  /** Source explicitly declared by a non-standard distribution manifest. */
+  declaredSource: 'npm' | 'github' | 'github-tarball' | 'link' | null
   source: PackComponentSource
   sourceLabel: string
   targetId: string | null
@@ -1027,6 +1041,12 @@ export interface DshMarketProgress {
   totalBytes?: number | null
 }
 
+/** 插件卸载选项。purgeStore 表示跨所有 Profile 彻底清除，并离线回收受控 pnpm 缓存。 */
+export interface PluginUninstallOptions {
+  profileName?: string
+  purgeStore?: boolean
+}
+
 export interface LauncherApi {
   getSettings(): Promise<AppSettings>
   saveSettings(settings: AppSettings): Promise<AppSettings>
@@ -1084,13 +1104,13 @@ export interface LauncherApi {
   analyzeCatalogRepository(fullName: string, defaultBranch: string, repositoryUpdatedAt?: string): Promise<CatalogRepositoryAnalysis>
   importCatalogUrl(url: string): Promise<CatalogImportResult>
   loadDshMarket(): Promise<DshMarketCatalog>
-  installDshMarketPlugin(name: string, profileName?: string): Promise<DshMarketInstalledPlugin[]>
+  installDshMarketPlugin(name: string, profileName?: string, exactVersion?: string): Promise<DshMarketInstalledPlugin[]>
   updateDshMarketPlugin(name: string, profileName?: string): Promise<DshMarketInstalledPlugin[]>
   uninstallDshMarketPlugin(name: string, profileName?: string): Promise<DshMarketInstalledPlugin[]>
   toggleDshMarketPlugin(name: string, enabled: boolean): Promise<DshMarketInstalledPlugin[]>
   checkDshMarketUpdates(force?: boolean): Promise<Record<string, DshMarketUpdateStatus>>
   installPlugin(request: string | PluginInstallRequest): Promise<RepositoryInstallResult>
-  uninstallPlugin(packageName: string): Promise<ProfileState>
+  uninstallPlugin(packageName: string, options?: PluginUninstallOptions): Promise<ProfileState>
   trialPlugin(packageName: string, profileName?: string): Promise<PluginTrialResult>
   readPluginTrials(): Promise<PluginTrialResult[]>
   installSkill(request: SkillInstallRequest): Promise<SkillInstallResult>

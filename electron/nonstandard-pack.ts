@@ -9,6 +9,7 @@ import type {
   NonstandardPackSkippedComponent,
   PackComponentCategory,
   ProfileSummary,
+  RuntimeOutput,
 } from '../src/types'
 import { parseGitHubImportUrl } from '../src/lib/github-import'
 import { assertMeaningfulPackName } from './pack-manifest'
@@ -18,11 +19,13 @@ import type { GitHubAuthService } from './github-auth'
 import type { Installer } from './installer'
 import { recordPluginInstall } from './plugin-receipts'
 import { readProfile, togglePlugin, reorderPlugins } from './profile'
+import { writeProfileMetadata } from './profile-service'
 import type { ProfileService } from './profile-service'
 
 const MAX_ARCHIVE_BYTES = 96 * 1024 * 1024
 const MAX_FILES = 20_000
 const SAFE_REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+const EXACT_NPM_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 
 interface DistributionEntry {
   id?: unknown
@@ -34,6 +37,11 @@ interface DistributionEntry {
   install?: unknown
   path?: unknown
   subdirectory?: unknown
+  branch?: unknown
+  commit?: unknown
+  url?: unknown
+  repository?: unknown
+  tarballUrl?: unknown
   [key: string]: unknown
 }
 
@@ -49,12 +57,13 @@ interface DistributionManifest {
 export interface NonstandardPackOptions {
   githubAuth: GitHubAuthService
   installer: Installer
-  dshMarket: { load(): Promise<DshMarketCatalog>; install?(name: string, profileName?: string): Promise<unknown> }
+  dshMarket: { load(): Promise<DshMarketCatalog>; install?(name: string, profileName?: string, exactVersion?: string | null): Promise<unknown> }
   profiles: ProfileService
   readSettings: () => Promise<AppSettings>
   pluginReceiptsPath: string
   pluginSourceRoot: string
   ensureDshVersion?: (version: string) => Promise<void>
+  emitOutput?: (level: RuntimeOutput['level'], text: string) => void
 }
 
 export interface NonstandardPackService {
@@ -138,16 +147,25 @@ async function writeFileCompat(filePath: string, data: Buffer): Promise<void> {
 async function repoInfo(auth: GitHubAuthService, repository: string, branch?: string): Promise<{ branch: string; commit: string | null }> {
   const [owner, repo] = repository.split('/')
   const response = await auth.fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { headers: { Accept: 'application/vnd.github+json' } })
-  if (!response.ok) throw new Error(`无法读取 GitHub 仓库 ${repository}（HTTP ${response.status}）。`)
+  if (!response.ok) throw new Error(githubRepositoryError(repository, response.status))
   const body = object(await response.json().catch(() => null))
   const resolvedBranch = branch ?? string(body?.default_branch) ?? 'main'
   const commitResponse = await auth.fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(resolvedBranch)}`, { headers: { Accept: 'application/vnd.github+json' } })
+  if (!commitResponse.ok) throw new Error(githubRepositoryError(repository, commitResponse.status, true))
   const commitBody = object(await commitResponse.json().catch(() => null))
-  return { branch: resolvedBranch, commit: string(commitBody?.sha) }
+  const commit = string(commitBody?.sha)
+  if (!commit) throw new Error(`GitHub 仓库 ${repository} 没有返回可固定的 commit。`)
+  return { branch: resolvedBranch, commit }
+}
+
+function githubRepositoryError(repository: string, status: number, commit = false): string {
+  if (status === 403 || status === 429) return `GitHub 请求额度暂时用尽，无法${commit ? '固定' : '读取'}仓库 ${repository}。`
+  if (status === 404) return `GitHub 仓库 ${repository} 不存在或当前账号无权访问。`
+  return `无法${commit ? '固定' : '读取'} GitHub 仓库 ${repository}（HTTP ${status}）。`
 }
 
 async function npmVersion(auth: GitHubAuthService, packageName: string, requested: string | null): Promise<string | null> {
-  if (requested && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(requested)) return requested
+  if (requested && EXACT_NPM_VERSION.test(requested)) return requested
   try {
     const response = await auth.fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}`, { headers: { Accept: 'application/json' } })
     if (!response.ok) return null
@@ -159,7 +177,7 @@ async function npmVersion(auth: GitHubAuthService, packageName: string, requeste
   }
 }
 
-async function npmRepository(auth: GitHubAuthService, packageName: string): Promise<string | null> {
+async function npmRepository(auth: GitHubAuthService, packageName: string, searchFallback = true): Promise<string | null> {
   try {
     const response = await auth.fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}`, { headers: { Accept: 'application/json' } })
     if (!response.ok) return null
@@ -171,6 +189,7 @@ async function npmRepository(auth: GitHubAuthService, packageName: string): Prom
   } catch {
     // Continue with GitHub search when npm metadata is unavailable.
   }
+  if (!searchFallback) return null
   // A few packages in the wild omit `repository` when publishing. GitHub's
   // repository search is a conservative fallback: only an exact repository
   // basename match is accepted, never a fuzzy result.
@@ -215,9 +234,19 @@ function packageNameFromEntry(entry: DistributionEntry): string | null {
   return value
 }
 
-function entrySource(entry: DistributionEntry): 'npm' | 'github' | 'link' | null {
+function entrySource(entry: DistributionEntry): 'npm' | 'github' | 'github-tarball' | 'link' | null {
   const source = string(entry.source)?.toLowerCase()
-  return source === 'npm' || source === 'github' || source === 'link' ? source : null
+  return source === 'npm' || source === 'github' || source === 'github-tarball' || source === 'link' ? source : null
+}
+
+/**
+ * A github-tarball entry commonly uses a release tag as its version. Treat an
+ * exact semver/tag as the ref to pin, but do not send ranges such as `0.8.x`
+ * or the moving `latest` label to GitHub's commit endpoint.
+ */
+function githubTarballRef(source: ReturnType<typeof entrySource>, version: string | null): string | null {
+  if (source !== 'github-tarball' || !version || version.toLowerCase() === 'latest') return null
+  return /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version) ? version : null
 }
 
 function profilesFrom(value: unknown): string[] {
@@ -228,22 +257,37 @@ function addEntry(entries: NonstandardPackPluginPreview[], entry: DistributionEn
   const id = string(entry.id) ?? `component-${order + 1}`
   const source = entrySource(entry)
   const pkg = packageNameFromEntry(entry)
-  const repo = source === 'github' ? githubRepo(string(entry.pkg)) : null
+  const repo = source === 'github' || source === 'github-tarball'
+    ? githubRepo(string(entry.pkg) ?? string(entry.repository) ?? string(entry.url))
+    : null
+  const version = string(entry.version)
+  const defaultBranch = string(entry.branch) ?? githubTarballRef(source, version)
   const enabled = profilesFrom(entry.profile).length === 0 || profilesFrom(entry.profile).includes('web') || profilesFrom(entry.profile).includes('desktop')
   if (!pkg && !repo && source !== 'link') return
-  entries.push({ componentId: id, packageName: pkg ?? id, displayName: id, category, enabled, order, repository: repo, subdirectory: source === 'link' ? string(entry.pkg) : null, version: string(entry.version), commit: null, source: 'unavailable', sourceLabel: '正在解析来源', targetId: null })
+  entries.push({ componentId: id, packageName: pkg ?? id, displayName: id, category, enabled, order, repository: repo, defaultBranch, subdirectory: source === 'link' ? string(entry.pkg) : null, version, commit: string(entry.commit), declaredSource: source, source: source === 'npm' ? 'npm' : source === 'github' || source === 'github-tarball' ? 'github' : 'unavailable', sourceLabel: source === 'github-tarball' ? '正在解析 GitHub 压缩包来源' : '正在解析来源', targetId: null })
 }
 
 async function findLocalPackages(root: string): Promise<Map<string, { directory: string; manifest: Record<string, unknown> }>> {
   const result = new Map<string, { directory: string; manifest: Record<string, unknown> }>()
   const files = await walk(root)
   for (const relative of files.filter(item => item.endsWith('package.json'))) {
+    const normalizedRelative = relative.replace(/\\/g, '/')
     const directory = path.dirname(path.join(root, relative))
     const manifest = await readJson(path.join(root, relative))
     if (!manifest) continue
+    // The repository root and its web/desktop shells are the distribution
+    // application itself, not installable Profile plugins. They can declare a
+    // Cordis patch for their own build, so treating every such package as a
+    // workspace plugin would make imports install the whole app shell.
+    if (normalizedRelative === 'package.json') continue
+    const manifestName = string(manifest.name)
+    const scripts = object(manifest.scripts)
+    const isApplicationShell = /^(?:web|desktop)\/package\.json$/i.test(normalizedRelative)
+      && (manifest.private === true || /^@oh-dsh\//i.test(manifestName ?? '') || Boolean(scripts?.stage || scripts?.desktop || scripts?.web))
+    if (isApplicationShell) continue
     const dsh = object(manifest.dsh)
     const bundle = object(dsh?.bundle)
-    const hasBundle = Boolean(bundle?.patch) || Boolean(object(dsh?.profile)) || /^@?dsh[-/]/i.test(string(manifest.name) ?? '')
+    const hasBundle = Boolean(bundle?.patch)
     const name = string(manifest.name)
     if (name && hasBundle) result.set(name, { directory, manifest })
   }
@@ -251,8 +295,12 @@ async function findLocalPackages(root: string): Promise<Map<string, { directory:
 }
 
 function marketMatch(catalog: DshMarketCatalog, item: NonstandardPackPluginPreview): { source: 'market' | 'github'; repository: string | null; targetId: string | null } | null {
+  // A distribution manifest explicitly declaring GitHub or local/link source
+  // is authoritative. Do not let a same-named npm Market entry silently turn
+  // a pinned source plugin into a registry install.
+  if (item.declaredSource === 'github' || item.declaredSource === 'github-tarball' || item.declaredSource === 'link') return null
   const needle = item.packageName.toLowerCase()
-  const match = catalog.plugins.find(plugin => plugin.npm?.toLowerCase() === needle || plugin.name.toLowerCase() === needle || (item.repository && plugin.url.toLowerCase().includes(item.repository.toLowerCase())))
+  const match = catalog.plugins.find(plugin => plugin.npm?.toLowerCase() === needle || (item.declaredSource !== 'npm' && (plugin.name.toLowerCase() === needle || (item.repository && plugin.url.toLowerCase().includes(item.repository.toLowerCase())))))
   if (!match) return null
   const urlMatch = /github\.com\/([^/]+\/[^/]+)/i.exec(match.url)
   return { source: match.npm ? 'market' : 'github', repository: match.npm ? null : (urlMatch?.[1]?.replace(/\.git$/, '') ?? item.repository), targetId: match.npm ?? match.name }
@@ -288,7 +336,7 @@ export async function analyzeNonstandardPackRepository(options: NonstandardPackO
     const meta = await analyzeMetaRepository(snap.repository, snap.branch, options.installer.analyzePlugin, options.installer.analyzeSkill, options.githubAuth.fetch).catch(() => null)
     for (const target of meta?.pluginAnalysis?.targets ?? []) {
       const repository = target.sourceRepository ?? null
-      plugins.push({ componentId: target.id, packageName: target.packageName, displayName: target.packageName, category: 'vendored', enabled: true, order: order++, repository: repository ?? null, subdirectory: target.subdirectory, version: target.version, commit: target.commit, source: target.source === 'npm' ? 'unavailable' : 'github', sourceLabel: target.source === 'npm' ? '正在解析 npm 来源' : 'GitHub', targetId: target.id, ...(target.source === 'npm' && !target.version ? { reason: 'meta-repo 子模块缺少精确 npm 版本。' } : {}) })
+      plugins.push({ componentId: target.id, packageName: target.packageName, displayName: target.packageName, category: 'vendored', enabled: true, order: order++, repository: repository ?? null, defaultBranch: null, subdirectory: target.subdirectory, version: target.version, commit: target.commit, declaredSource: target.source === 'npm' ? 'npm' : 'github', source: target.source === 'npm' ? 'npm' : 'github', sourceLabel: target.source === 'npm' ? '正在解析 npm 来源' : 'GitHub', targetId: target.id, ...(target.source === 'npm' && !target.version ? { reason: 'meta-repo 子模块缺少精确 npm 版本。' } : {}) })
     }
     for (const target of meta?.presetAnalysis?.targets ?? []) skipped.push({ id: target.id, name: target.name, category: 'preset', reason: 'meta-repo 子模块中的 Agent 预设，导入时跳过。' })
   }
@@ -299,13 +347,16 @@ export async function analyzeNonstandardPackRepository(options: NonstandardPackO
       linked.packageName = packageName
       linked.displayName = string(local.manifest.description) ?? packageName
       linked.version = string(local.manifest.version)
+      linked.repository = snap.repository
+      linked.defaultBranch = snap.branch
+      linked.commit = null
       linked.source = 'local'
       linked.sourceLabel = '整合包本地源码'
       linked.targetId = packageName
       continue
     }
     if (plugins.some(plugin => plugin.packageName === packageName)) continue
-    plugins.push({ componentId: packageName, packageName, displayName: string(local.manifest.description) ?? packageName, category: 'workspace', enabled: true, order: order++, repository: snap.repository, subdirectory: path.relative(snap.root, local.directory).replace(/\\/g, '/'), version: string(local.manifest.version), commit: snap.commit, source: 'local', sourceLabel: '整合包本地源码', targetId: packageName })
+    plugins.push({ componentId: packageName, packageName, displayName: string(local.manifest.description) ?? packageName, category: 'workspace', enabled: true, order: order++, repository: snap.repository, defaultBranch: snap.branch, subdirectory: path.relative(snap.root, local.directory).replace(/\\/g, '/'), version: string(local.manifest.version), commit: null, declaredSource: 'link', source: 'local', sourceLabel: '整合包本地源码', targetId: packageName })
   }
   for (const plugin of plugins.filter(item => item.source === 'unavailable')) {
     const local = localPackages.get(plugin.packageName) ?? [...localPackages.entries()].find(([name]) => name.toLowerCase() === plugin.componentId.toLowerCase() || name.split('/').at(-1)?.toLowerCase() === plugin.componentId.toLowerCase())?.[1]
@@ -314,7 +365,8 @@ export async function analyzeNonstandardPackRepository(options: NonstandardPackO
       plugin.displayName = string(local.manifest.description) ?? plugin.packageName
       plugin.subdirectory = path.relative(snap.root, local.directory).replace(/\\/g, '/')
       plugin.repository = snap.repository
-      plugin.commit = snap.commit
+      plugin.defaultBranch = snap.branch
+      plugin.commit = null
       plugin.source = 'local'
       plugin.sourceLabel = '整合包本地源码'
       plugin.targetId = plugin.packageName
@@ -323,29 +375,78 @@ export async function analyzeNonstandardPackRepository(options: NonstandardPackO
   const presetValues = Array.isArray(bundles.presets) ? bundles.presets : []
   for (const raw of presetValues) if (object(raw)) skipped.push({ id: string((raw as Record<string, unknown>).id) ?? 'preset', name: string((raw as Record<string, unknown>).id) ?? 'preset', category: 'preset', reason: 'Agent 预设由独立预设流程处理，暂不作为插件安装。' })
   const catalog = await options.dshMarket.load().catch(() => ({ updated: '', count: 0, categories: {}, plugins: [] } as DshMarketCatalog))
+  const npmRepositoryCache = new Map<string, string | null>()
+  const repositoryInfoCache = new Map<string, { info: { branch: string; commit: string | null } | null; error: string | null }>()
+  const getRepositoryInfo = async (repository: string, branch?: string): Promise<{ info: { branch: string; commit: string | null } | null; error: string | null }> => {
+    const key = `${repository}@${branch ?? ''}`
+    const cached = repositoryInfoCache.get(key)
+    if (cached) return cached
+    try {
+      const value = await repoInfo(options.githubAuth, repository, branch)
+      const result = { info: value, error: null }
+      repositoryInfoCache.set(key, result)
+      return result
+    } catch (error) {
+      const result = { info: null, error: error instanceof Error ? error.message : 'GitHub 来源请求失败。' }
+      repositoryInfoCache.set(key, result)
+      return result
+    }
+  }
   for (const plugin of plugins) {
-    const match = marketMatch(catalog, plugin)
-    if (match) { plugin.source = match.source; plugin.sourceLabel = match.source === 'market' ? 'DSH Market' : 'GitHub'; plugin.targetId = match.targetId ?? plugin.targetId; if (match.repository) plugin.repository = match.repository }
+    const match = plugin.source === 'local' ? null : marketMatch(catalog, plugin)
+    if (match) {
+      plugin.source = match.source
+      plugin.sourceLabel = match.source === 'market' ? 'DSH Market' : 'GitHub'
+      plugin.targetId = match.targetId ?? plugin.targetId
+      if (match.repository) plugin.repository = match.repository
+    }
     if (plugin.source === 'local') continue
-    if (plugin.source === 'market' && !plugin.repository) {
+    if (plugin.source === 'market') {
       plugin.version = await npmVersion(options.githubAuth, plugin.packageName, plugin.version)
       if (!plugin.version) { plugin.source = 'unavailable'; plugin.sourceLabel = '无法安装'; plugin.reason = '无法解析 npm 的精确版本。' }
       continue
     }
-    if (plugin.source === 'unavailable' && !plugin.repository) {
-      const repository = await npmRepository(options.githubAuth, plugin.packageName)
+    if (plugin.declaredSource === 'npm' && plugin.source === 'npm') {
+      if (plugin.version && !EXACT_NPM_VERSION.test(plugin.version)) {
+        plugin.source = 'unavailable'
+        plugin.sourceLabel = '无法安装'
+        plugin.reason = `npm 来源版本必须是精确版本，当前为 ${plugin.version}。`
+        continue
+      }
+      if (!plugin.version) plugin.version = await npmVersion(options.githubAuth, plugin.packageName, null)
+      if (!plugin.version) { plugin.source = 'unavailable'; plugin.sourceLabel = '无法安装'; plugin.reason = 'npm 来源缺少可安装的精确版本。' }
+      else {
+        const repository = npmRepositoryCache.has(plugin.packageName) ? npmRepositoryCache.get(plugin.packageName) : await npmRepository(options.githubAuth, plugin.packageName, false)
+        npmRepositoryCache.set(plugin.packageName, repository ?? null)
+        if (repository) plugin.repository = repository
+        plugin.sourceLabel = 'npm'
+      }
+      continue
+    }
+    if (plugin.declaredSource === null && plugin.source === 'unavailable' && !plugin.repository) {
+      const repository = npmRepositoryCache.has(plugin.packageName) ? npmRepositoryCache.get(plugin.packageName) : await npmRepository(options.githubAuth, plugin.packageName)
+      npmRepositoryCache.set(plugin.packageName, repository ?? null)
       if (repository) {
         plugin.repository = repository
         plugin.source = 'github'
         plugin.sourceLabel = 'GitHub（npm 元数据）'
-        plugin.commit = (await repoInfo(options.githubAuth, repository).catch(() => null))?.commit ?? snap.commit
       }
     }
     if (plugin.repository && plugin.source === 'github' && !plugin.commit) {
-      const pinned = await repoInfo(options.githubAuth, plugin.repository).catch(() => null)
-      plugin.commit = pinned?.commit ?? snap.commit
+      const pinned = await getRepositoryInfo(plugin.repository, plugin.defaultBranch ?? undefined)
+      if (pinned.info?.commit) {
+        plugin.commit = pinned.info.commit
+        if (!plugin.defaultBranch) plugin.defaultBranch = pinned.info.branch
+      } else {
+        plugin.source = 'unavailable'
+        plugin.sourceLabel = '来源待重试'
+        plugin.reason = pinned.error ?? '来源存在，但暂时无法固定插件自身 commit，请稍后重试。'
+      }
     }
-    if (plugin.repository || plugin.packageName) { plugin.source = plugin.repository ? 'github' : 'unavailable'; plugin.sourceLabel = plugin.repository ? 'GitHub' : '无法安装'; if (!plugin.repository) plugin.reason = '没有可验证的 npm 包名或 GitHub 仓库。'; continue }
+    if (plugin.repository && plugin.source === 'github' && plugin.commit) { plugin.source = 'github'; plugin.sourceLabel = 'GitHub'; continue }
+    if (plugin.source === 'npm' && plugin.version) continue
+    if (plugin.source === 'unavailable' && plugin.sourceLabel === '来源待重试') continue
+    if (plugin.repository || plugin.packageName) { plugin.source = 'unavailable'; plugin.sourceLabel = '无法安装'; if (!plugin.repository) plugin.reason = '没有可验证的 npm 包名或 GitHub 仓库。'; continue }
     plugin.source = 'unavailable'; plugin.sourceLabel = '无法安装'; plugin.reason = '缺少可验证的安装来源。'
   }
   if (bundles.modelPresetLink && object(bundles.modelPresetLink)) {
@@ -371,7 +472,13 @@ export async function importNonstandardPackRepository(options: NonstandardPackOp
   const summaries = await options.profiles.list()
   const requested = input.name?.trim() ? assertMeaningfulPackName(input.name.trim()) : preview.profileName
   const profileName = uniqueProfileName(requested, summaries.map(summary => summary.name))
-  if (preview.dshVersion && input.installDsh !== false && options.ensureDshVersion) await options.ensureDshVersion(preview.dshVersion)
+  if (preview.dshVersion && input.installDsh !== false && options.ensureDshVersion) {
+    options.emitOutput?.('info', `[${preview.name}] 正在准备要求的 DSH ${preview.dshVersion} 运行环境。`)
+    await options.ensureDshVersion(preview.dshVersion)
+    options.emitOutput?.('success', `[${preview.name}] DSH ${preview.dshVersion} 运行环境已准备。`)
+  } else if (preview.dshVersion) {
+    options.emitOutput?.('info', `[${preview.name}] 已跳过 DSH ${preview.dshVersion} 运行环境安装。`)
+  }
   await options.profiles.create({
     name: profileName,
     description: preview.description,
@@ -383,9 +490,18 @@ export async function importNonstandardPackRepository(options: NonstandardPackOp
   })
   const wanted = input.packageNames ? new Set(input.packageNames) : null
   const failures: string[] = []
+  let importedPluginCount = 0
+  const importedOrder = new Map<string, number>()
   for (const plugin of preview.plugins) {
     if (wanted && !wanted.has(plugin.packageName)) continue
     if (plugin.source === 'unavailable') { failures.push(`${plugin.packageName}：${plugin.reason ?? '无安装来源'}`); continue }
+    // `bundles.json` often uses a human-facing id (for example
+    // `dsh-session-notification`) while the repository's actual package is
+    // scoped or lives below a workspace directory. Keep the manifest id for
+    // selection, but use the analyzer's package identity for the Profile and
+    // receipt once the GitHub target is known.
+    let installedPackageName = plugin.packageName
+    let installedTargetId = plugin.targetId ?? plugin.packageName
     try {
       if (plugin.source === 'local') {
         const snap = await snapshot(options, url)
@@ -393,45 +509,79 @@ export async function importNonstandardPackRepository(options: NonstandardPackOp
         if (!local) throw new Error('整合包内没有找到本地插件本体。')
         await options.installer.installLocalPlugin({ packageName: plugin.packageName, directory: local.directory, repository: preview.repository, commit: preview.commit ?? undefined, version: plugin.version ?? undefined }, profileName)
       } else if (plugin.source === 'market' && options.dshMarket.install && plugin.targetId) {
-        await options.dshMarket.install(plugin.targetId, profileName)
-      } else if (!plugin.repository) {
+        await options.dshMarket.install(plugin.targetId, profileName, plugin.version)
+      } else if (plugin.source === 'npm') {
         await options.installer.installNpmPackage({ packageName: plugin.packageName, version: plugin.version ?? undefined, repository: `npm:${plugin.packageName}` }, profileName)
       } else {
-        const analysis = await options.installer.analyzePlugin(plugin.repository, preview.branch)
-        const target = analysis.targets.find(item => item.packageName === plugin.packageName) ?? analysis.targets[0]
+        if (!plugin.repository || !plugin.commit) throw new Error(plugin.reason ?? 'GitHub 插件来源未固定，无法安装。')
+        const analysis = await options.installer.analyzePlugin(plugin.repository, plugin.defaultBranch ?? preview.branch)
+        const target = analysis.targets.find(item => item.packageName === plugin.packageName)
+          ?? (plugin.targetId ? analysis.targets.find(item => item.id === plugin.targetId) : undefined)
+          ?? (plugin.subdirectory ? analysis.targets.find(item => item.subdirectory === plugin.subdirectory) : undefined)
+          ?? (analysis.targets.length === 1 ? analysis.targets[0] : undefined)
         if (!target) throw new Error('GitHub 仓库没有检测到可安装的 Bundle。')
-        await options.installer.installPluginTarget({ repository: plugin.repository, defaultBranch: preview.branch, targetId: target.id, commit: plugin.commit ?? undefined, version: plugin.version ?? undefined }, profileName)
+        installedPackageName = target.packageName
+        installedTargetId = target.id
+        await options.installer.installPluginTarget({
+          repository: plugin.repository,
+          defaultBranch: plugin.defaultBranch ?? preview.branch,
+          targetId: target.id,
+          commit: plugin.commit,
+          // Keep the package's declared source when re-analysis sees a
+          // same-named npm publication. GitHub installs must use the plugin's
+          // own pinned commit, never the distribution root commit.
+          ...(plugin.declaredSource === 'github' || plugin.declaredSource === 'github-tarball' || plugin.declaredSource === 'npm'
+            ? { source: plugin.declaredSource === 'npm' ? 'npm' as const : 'github' as const }
+            : {}),
+          ...(plugin.declaredSource === 'npm' ? { version: plugin.version ?? undefined } : {}),
+        }, profileName)
       }
-      const receipt = await readFile(options.pluginReceiptsPath, 'utf8').catch(() => '')
-      void receipt
-      const actualSource = plugin.source === 'market' ? 'market' : plugin.source === 'local' ? 'local' : 'github'
-      await recordPluginInstall(options.pluginReceiptsPath, { repository: plugin.repository ?? `npm:${plugin.packageName}`, packageName: plugin.packageName, profileName, source: plugin.source === 'local' ? 'local-directory' : plugin.source === 'market' && !plugin.repository ? 'npm' : 'github', subdirectory: plugin.subdirectory, version: plugin.version, commit: plugin.commit ?? '', targetId: plugin.targetId ?? plugin.packageName, installedAt: new Date().toISOString(), packName: preview.name, packRepository: preview.repository, packCommit: preview.commit, componentId: plugin.componentId, actualSource })
-      if (!plugin.enabled) await togglePlugin(settings.dshHome, profileName, plugin.packageName, false)
+      // The installer may fall back from an unavailable exact npm version to
+      // `latest`. Read the target Profile after installation so the receipt
+      // records the version that is actually linked, rather than the stale
+      // version declared by the pack manifest. This also keeps Market and
+      // GitHub installs honest when a package publishes a different version
+      // than the pack snapshot advertised.
+      const installedProfile = await readProfile(settings.dshHome, profileName, options.pluginReceiptsPath)
+      const installedPlugin = installedProfile.plugins.find(item =>
+        item.packageName === installedPackageName || item.packageName === plugin.packageName || item.packageName === installedTargetId,
+      )
+      const installedVersion = installedPlugin?.version && installedPlugin.version !== '未知版本'
+        ? installedPlugin.version
+        : plugin.version ?? null
+      const actualSource = plugin.source === 'market' ? 'market' : plugin.source === 'local' ? 'local' : plugin.source === 'npm' ? 'npm' : 'github'
+      const receiptSource = plugin.source === 'local' ? 'local-directory' : plugin.source === 'npm' || plugin.source === 'market' ? 'npm' : 'github'
+      await recordPluginInstall(options.pluginReceiptsPath, { repository: plugin.repository ?? `npm:${installedPackageName}`, packageName: installedPackageName, profileName, source: receiptSource, subdirectory: plugin.subdirectory, version: installedVersion, commit: plugin.source === 'github' ? plugin.commit ?? '' : '', targetId: installedTargetId, installedAt: new Date().toISOString(), packName: preview.name, packRepository: preview.repository, packCommit: preview.commit, componentId: plugin.componentId, actualSource })
+      if (!plugin.enabled) await togglePlugin(settings.dshHome, profileName, installedPackageName, false, options.pluginReceiptsPath)
+      importedOrder.set(installedPackageName, plugin.order)
+      importedPluginCount += 1
     } catch (error) {
       failures.push(`${plugin.packageName}：${error instanceof Error ? error.message : '安装失败'}`)
     }
   }
   const installed = await readProfile(settings.dshHome, profileName, options.pluginReceiptsPath)
   const desiredOrder = installed.activeBundles.slice().sort((a, b) => {
-    const left = preview.plugins.find(plugin => plugin.packageName === a)?.order ?? Number.MAX_SAFE_INTEGER
-    const right = preview.plugins.find(plugin => plugin.packageName === b)?.order ?? Number.MAX_SAFE_INTEGER
+    const left = importedOrder.get(a)
+      ?? preview.plugins.find(plugin => plugin.packageName === a || plugin.targetId === a || plugin.componentId === a)?.order
+      ?? Number.MAX_SAFE_INTEGER
+    const right = importedOrder.get(b)
+      ?? preview.plugins.find(plugin => plugin.packageName === b || plugin.targetId === b || plugin.componentId === b)?.order
+      ?? Number.MAX_SAFE_INTEGER
     return left - right
   })
   if (desiredOrder.length > 0 && desiredOrder.length === installed.activeBundles.length) await reorderPlugins(settings.dshHome, profileName, desiredOrder, options.pluginReceiptsPath)
   // Successful items remain in the isolated Profile. Failed items are kept in
   // the caller's operation log; they are deliberately not added to bundles.
-  const finalState = failures.length === 0 ? 'complete' : installed.plugins.some(plugin => !plugin.builtin && plugin.compatible) ? 'partial' : 'failed'
+  const finalState = failures.length === 0 ? 'complete' : importedPluginCount > 0 ? 'partial' : 'failed'
+  await writeProfileMetadata(settings.dshHome, profileName, {
+    importState: finalState,
+    importFailures: failures,
+    dshSourceVersion: preview.dshSourceVersion,
+    importWarnings: preview.warnings,
+    source: { kind: 'import', format: 'distribution', reference: url, branch: preview.branch, ...(preview.commit ? { commit: preview.commit } : {}), packName: preview.name, distributionKind: preview.kind === 'meta-repo' ? 'meta-repo' : 'distribution' },
+  })
   const metadata = await options.profiles.metadata(profileName)
-  const profileDirectory = path.join(settings.dshHome, 'profiles', profileName)
-  await writeProfileYamlMetadata(profileDirectory, { importState: finalState, importFailures: failures })
-  return { ...metadata, importState: finalState, importFailures: failures }
-}
-
-async function writeProfileYamlMetadata(directory: string, fields: { importState: 'complete' | 'partial' | 'failed'; importFailures: string[] }): Promise<void> {
-  const filePath = path.join(directory, 'profile.yaml')
-  const current = await readJson(filePath) ?? {}
-  const fs = await import('node:fs/promises')
-  await fs.writeFile(filePath, `${JSON.stringify({ ...current, ...fields, updatedAt: new Date().toISOString() }, null, 2)}\n`, 'utf8')
+  return { ...metadata, importState: finalState, importFailures: failures, importedPluginCount }
 }
 
 export async function resolvePackPluginSources(preview: NonstandardPackImportPreview): Promise<NonstandardPackPluginPreview[]> {

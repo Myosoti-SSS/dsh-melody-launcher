@@ -219,6 +219,19 @@ export function useLauncherStore() {
           }
           appendRuntimeLog(entry)
         }
+
+        // Installation can be started by the catalog, DSH Market, a Profile
+        // import, or an external command.  Those paths do not all return a
+        // RepositoryInstallResult to this renderer, so the local Profile may
+        // otherwise remain stale even though the shared pool and receipt have
+        // already been updated.  Re-read only after a successful plugin
+        // completion; errors must not make a partially written dependency look
+        // like an installed Bundle.
+        if (progress.kind === 'plugin' && progress.phase === 'complete') {
+          void api.readProfile()
+            .then(next => { if (!disposed) adoptProfile(next) })
+            .catch(() => { /* the command result still owns the visible error */ })
+        }
       }
 
       const handleCatalogAnalysisProgress = (progress: CatalogAnalysisProgress) => {
@@ -266,7 +279,7 @@ export function useLauncherStore() {
       window.removeEventListener('focus', onWindowFocus)
       unsubscribers.forEach(unsubscribe => unsubscribe())
     }
-  }, [api, showToast])
+  }, [adoptProfile, api, appendRuntimeLog, showToast])
 
   const refreshProfile = useCallback(async () => {
     try {
@@ -629,8 +642,14 @@ export function useLauncherStore() {
   }, [api, profile, run, showToast])
 
   const uninstallPlugin = useCallback(async (plugin: ManagedPlugin) => {
-    const next = await run(plugin.packageName, () => api.uninstallPlugin(plugin.packageName), {
-      success: `${plugin.displayName} 已从本机完全卸载。`,
+    const next = await run(plugin.packageName, () => api.uninstallPlugin(plugin.packageName, { purgeStore: true }), {
+      success: `${plugin.displayName} 已彻底清除，未引用的源码与 pnpm 缓存也已清理。`,
+      // Profile 清理先于 pnpm store prune；如果缓存维护失败，仍要把已经
+      // 完成的本地卸载反映到界面，避免用户误以为插件仍然存在。
+      onError: error => {
+        void refreshProfile()
+        showToast({ kind: 'error', message: errorText(error) })
+      },
     })
     if (!next) return
     setProfile(next)
@@ -643,7 +662,7 @@ export function useLauncherStore() {
         return updated
       })
     }
-  }, [api, run, settings])
+  }, [api, refreshProfile, run, settings, showToast])
 
   const trialPlugin = useCallback(async (packageName: string, profileName?: string): Promise<PluginTrialResult | undefined> => {
     const result = await run(`plugin-trial:${packageName}`, () => api.trialPlugin(packageName, profileName))
@@ -711,9 +730,9 @@ export function useLauncherStore() {
 
   const deleteProfile = useCallback(async (profileName: string) => {
     const next = await run(`profile-delete:${profileName}`, () => api.deleteProfile(profileName), { success: `Profile「${profileName}」已删除。` })
-    if (next !== undefined) await refreshProfiles()
+    if (next !== undefined) await Promise.all([refreshProfiles(), refreshPacks()])
     return next !== undefined
-  }, [api, refreshProfiles, run])
+  }, [api, refreshPacks, refreshProfiles, run])
 
   const refreshPackSnapshots = useCallback(async () => {
     try {
@@ -753,11 +772,11 @@ export function useLauncherStore() {
   const removePack = useCallback(async (packId: string): Promise<boolean> => {
     const next = await run(`pack-remove:${packId}`, async () => {
       const result = await api.removePack(packId)
-      await refreshPacks()
+      await Promise.all([refreshPacks(), refreshProfiles()])
       return result
     }, { success: result => `已删除 ${result.removed} 个整合包。` })
     return next !== undefined
-  }, [api, refreshPacks, run])
+  }, [api, refreshPacks, refreshProfiles, run])
 
   const exportPack = useCallback(async (packId: string): Promise<string | null> => {
     const path = await run(`pack-export:${packId}`, () => api.exportPack(packId))

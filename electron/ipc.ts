@@ -2,7 +2,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC, IPC_EVENTS } from '../src/constants'
-import type { AiSessionCreateInput, ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, PresetInstallRequest, SkillInstallRequest, WindowMode, ProfileRepositoryImportMode, PackPluginEntry, NonstandardPackImportPreview } from '../src/types'
+import type { AiSessionCreateInput, ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, PresetInstallRequest, SkillInstallRequest, WindowMode, ProfileRepositoryImportMode, PackPluginEntry, NonstandardPackImportPreview, PluginUninstallOptions } from '../src/types'
 import type { ApplicationAddonManager } from './application-addons'
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
@@ -35,7 +35,7 @@ import type { RuntimeVersionService } from './runtime-versions'
 import type { ProfileService } from './profile-service'
 import { inspectPackZipFromPath } from './pack-zip'
 import { serializePackManifest } from './pack-manifest'
-import { writeProfileMetadata } from './profile-service'
+import { consolidatePluginPool, writeProfileMetadata } from './profile-service'
 import { readPluginReceipts } from './plugin-receipts'
 import { analyzeProfileRepository, applyReceiptMatches, applySelectedMatches, loadProfileRepositoryManifest, manifestText, readProfileRepositoryArchive, validateFullArchive } from './profile-repository-import'
 import type { NonstandardPackService } from './nonstandard-pack'
@@ -70,7 +70,10 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   const { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager, githubAuth, applicationAddons, catalogSync, dshMarket, runtimeVersions, profiles, nonstandardPack } = deps
   const linkedComponents = createLinkedComponentController({
     readSettings: () => settings.read(),
-    readProfile,
+    // Include the shared-pool inventory and profile-scoped receipts when
+    // validating a toggle. Without the receipt path, a plugin visible in the
+    // UI but not yet declared in this Profile can be rejected as missing.
+    readProfile: (dshHome, profileName) => readProfile(dshHome, profileName, pluginReceiptsPath),
     togglePlugin,
     applications: applicationAddons,
     isRuntimeRunning: () => runtime.isRunning(),
@@ -309,6 +312,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     let temporaryRoot: string | null = null
     let githubSource: { repository: string; branch?: string; commit?: string | null } | null = null
     let localPluginBodies: Record<string, string> = {}
+    let importedPluginNames: Set<string> | null = null
     try {
       if (!path.isAbsolute(importPath)) {
         // Legacy callers keep the lightweight default: a remote repository is
@@ -321,6 +325,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
         }
         const receipts = await readPluginReceipts(pluginReceiptsPath)
         const manifest = applyReceiptMatches(loaded.manifest, receipts)
+        importedPluginNames = new Set(manifest.plugins.map(entry => entry.packageName))
         const dshHome = (await settings.read()).dshHome
         localPluginBodies = await resolveLocalPluginBodies(dshHome, manifest.plugins.map(entry => entry.packageName), receipts)
         const unresolved = manifest.plugins.filter(entry => ((entry.source === 'npm' && !entry.version) || (entry.source !== 'npm' && (!entry.repository || !entry.commit))) && !localPluginBodies[entry.packageName])
@@ -332,11 +337,17 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       }
       if (!path.isAbsolute(importPath)) throw new Error('Profile 文件路径无效。')
       const result = await packManager.importPack(importPath, undefined, payload.name || payload.overwrite ? { name: payload.name, overwrite: payload.overwrite === true, localPluginBodies } : { localPluginBodies })
+      const importedSettings = await settings.read()
       if (githubSource) {
-        const importedSettings = await settings.read()
         await writeProfileMetadata(importedSettings.dshHome, result.id, { source: { kind: 'github', repository: githubSource.repository, ...(githubSource.branch ? { branch: githubSource.branch } : {}), ...(githubSource.commit ? { commit: githubSource.commit } : {}) } })
       }
-      return profiles.metadata(result.id)
+      await consolidatePluginPool(importedSettings.dshHome)
+      const summary = await profiles.metadata(result.id)
+      return {
+        ...summary,
+        ...(importedPluginNames ? { importedPluginCount: result.installed.filter(name => importedPluginNames!.has(name)).length } : {}),
+        importFailures: result.failures.map(failure => `${failure.packageName}：${failure.reason}`),
+      }
     } finally {
       if (temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined)
     }
@@ -412,7 +423,13 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       await writeProfileMetadata(current.dshHome, result.id, {
         source: { kind: 'github', repository: loaded.repository, branch: loaded.branch, ...(loaded.commit ? { commit: loaded.commit } : {}) },
       })
-      return profiles.metadata(result.id)
+      await consolidatePluginPool(current.dshHome)
+      const summary = await profiles.metadata(result.id)
+      return {
+        ...summary,
+        importedPluginCount: result.installed.filter(name => loaded.manifest.plugins.some(plugin => plugin.packageName === name)).length,
+        importFailures: result.failures.map(failure => `${failure.packageName}：${failure.reason}`),
+      }
     } finally {
       await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined)
     }
@@ -431,7 +448,10 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     assertProfileMutationAvailable()
     if (!payload || typeof payload.url !== 'string' || !payload.url.trim()) throw new Error('整合包仓库链接无效。')
     if (runtime.isRunning()) throw new Error('请先停止 DSH，再导入整合包。')
-    return nonstandardPack.import(payload.url.trim(), { name: payload.name, packageNames: payload.packageNames, installDsh: payload.installDsh !== false })
+    const result = await nonstandardPack.import(payload.url.trim(), { name: payload.name, packageNames: payload.packageNames, installDsh: payload.installDsh !== false })
+    const current = await settings.read()
+    await consolidatePluginPool(current.dshHome)
+    return result
   })
   ipcMain.handle(IPC.profilesMatchPlugin, async (_event, packageName: string) => {
     if (typeof packageName !== 'string' || !isSafePackageName(packageName)) throw new Error('插件名称无效。')
@@ -544,11 +564,11 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     )
   })
   ipcMain.handle(IPC.dshMarketLoad, () => dshMarket.load())
-  ipcMain.handle(IPC.dshMarketInstall, async (_event, payload: string | { name: string; profileName?: string }) => {
+  ipcMain.handle(IPC.dshMarketInstall, async (_event, payload: string | { name: string; profileName?: string; exactVersion?: string }) => {
     const name = typeof payload === 'string' ? payload : payload?.name
     assertProfileMutationAvailable()
     if (typeof name !== 'string' || name.length === 0 || name.length > 200) throw new Error('dsh-market 插件名称无效。')
-    return dshMarket.install(name, typeof payload === 'string' ? undefined : payload.profileName)
+    return dshMarket.install(name, typeof payload === 'string' ? undefined : payload.profileName, typeof payload === 'string' ? undefined : payload.exactVersion)
   })
   ipcMain.handle(IPC.dshMarketUpdate, async (_event, payload: string | { name: string; profileName?: string }) => {
     const name = typeof payload === 'string' ? payload : payload?.name
@@ -574,21 +594,29 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     const fullName = typeof request === 'string' ? request : request.repository
     if (!isSafeRepositoryName(fullName)) throw new Error('GitHub 仓库名称无效。')
     if (typeof request === 'string') return installer.install(fullName)
+    // 普通资源市场安装始终写入当前选中的 Profile。分析器会根据运行面
+    // 给 target.profileName 一个建议值（例如 Web -> web），但那只是展示
+    // 信息；只有整合包导入这类显式目标流程才应覆盖当前 Profile。
+    const current = await settings.read()
+    if (request.profileName !== undefined && !isSafeProfileName(request.profileName)) throw new Error('Profile 名称无效。')
     return installer.installPluginTarget({
       repository: request.repository,
       defaultBranch: request.defaultBranch,
       targetId: request.targetId,
+      source: request.source,
       // release 源插件：meta-repo 分析得到的 tgz 直链，覆盖重分析得到的 github 源。
       tarballUrl: typeof request.tarballUrl === 'string' ? request.tarballUrl : undefined,
-    })
+    }, request.profileName ?? current.profileName)
   })
-  ipcMain.handle(IPC.pluginsUninstall, async (_event, payload: string | { packageName: string; profileName?: string }) => {
+  ipcMain.handle(IPC.pluginsUninstall, async (_event, payload: string | (PluginUninstallOptions & { packageName: string })) => {
     assertProfileMutationAvailable()
-    const packageName = typeof payload === 'string' ? payload : payload?.packageName
-    if (!isSafePackageName(packageName)) throw new Error('插件名称无效。')
-    const profileName = typeof payload === 'object' ? payload.profileName : undefined
+    const objectPayload = payload && typeof payload === 'object' ? payload : null
+    const packageName = typeof payload === 'string' ? payload : objectPayload?.packageName
+    if (typeof packageName !== 'string' || !isSafePackageName(packageName)) throw new Error('插件名称无效。')
+    const profileName = objectPayload?.profileName
     if (profileName !== undefined && !isSafeProfileName(profileName)) throw new Error('Profile 名称无效。')
-    return installer.remove(packageName, profileName)
+    const purgeStore = objectPayload?.purgeStore === true
+    return installer.remove(packageName, profileName, { purgeStore })
   })
   ipcMain.handle(IPC.pluginsTrialRead, () => pluginTrial.list())
   ipcMain.handle(IPC.pluginsTrial, async (_event, payload: { packageName: string; profileName?: string }) => {
@@ -788,7 +816,10 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
       assertMeaningfulPackName(name) // 空名/纯中文等退化成无意义标识的名称会抛出中文错误
       nameOverride = name.trim()
     }
-    return packManager.importPack(target, items, nameOverride === undefined ? undefined : { name: nameOverride })
+    const result = await packManager.importPack(target, items, nameOverride === undefined ? undefined : { name: nameOverride })
+    const current = await settings.read()
+    await consolidatePluginPool(current.dshHome)
+    return result
   })
 
   ipcMain.handle(IPC.packsExport, async (_event, packId: string) => {

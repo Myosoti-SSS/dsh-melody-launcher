@@ -1,4 +1,4 @@
-import { AppWindow, CircleAlert, CircleCheck, CircleStop, ExternalLink, LoaderCircle, Pause, Play, SquareTerminal, Wrench } from 'lucide-react'
+import { AppWindow, CircleAlert, CircleCheck, CircleStop, Clipboard, ExternalLink, LoaderCircle, Pause, Play, SquareTerminal, Wrench } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { AppSettings, InstallProgress, InstalledApplicationAddon, RuntimeOutput, RuntimeState } from '../types'
 
@@ -38,6 +38,7 @@ export function RuntimeView({
   const logEnd = useRef<HTMLDivElement>(null)
   const progressSample = useRef<{ repository: string; bytes: number; timestamp: number } | null>(null)
   const [downloadSpeed, setDownloadSpeed] = useState(0)
+  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle')
 
   const downloadVisible = installProgress !== null && installProgress.phase !== 'complete'
   const downloadActive = downloadVisible && installProgress?.phase !== 'error'
@@ -73,6 +74,32 @@ export function RuntimeView({
   useEffect(() => {
     logEnd.current?.scrollIntoView?.({ block: 'nearest' })
   }, [logs])
+
+  const copyLogs = async () => {
+    if (logs.length === 0) return
+    const text = logs.map(log => {
+      const time = new Date(log.timestamp).toLocaleTimeString('zh-CN', { hour12: false })
+      const channel = log.channel === 'plugin' ? 'PLUGIN' : log.channel === 'test' ? 'TEST' : log.channel === 'ai' ? 'COPILOT' : 'DSH'
+      return `${time}\t${channel}\n${log.text}`
+    }).join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      // Electron normally exposes navigator.clipboard; keep a DOM fallback
+      // for older packaged builds and restricted browser contexts.
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      const copied = document.execCommand('copy')
+      textarea.remove()
+      if (!copied) throw new Error('clipboard unavailable')
+    }
+    setCopyState('copied')
+    window.setTimeout(() => setCopyState('idle'), 1800)
+  }
 
   if (compact) {
     // 保留完整终端输出，由半隐藏抽屉内的日志框负责滚动，调整抽屉高度时可显示更多记录。
@@ -121,7 +148,7 @@ export function RuntimeView({
       </div>
 
       <section className="log-panel">
-        <header><div><SquareTerminal size={17} /><strong>运行日志</strong><span>{logs.length} 条</span></div><button type="button" onClick={onClearLogs} disabled={logs.length === 0}>清空</button></header>
+        <header><div><SquareTerminal size={17} /><strong>运行日志</strong><span>{logs.length} 条</span></div><div className="log-header-actions"><button type="button" onClick={() => void copyLogs()} disabled={logs.length === 0} title="复制完整运行日志"><Clipboard size={13} />{copyState === 'copied' ? '已复制' : '复制日志'}</button><button type="button" onClick={onClearLogs} disabled={logs.length === 0}>清空</button></div></header>
         <div className="log-output" role="log" aria-live="polite">
           {logs.length === 0 ? (
             <div className="log-empty"><SquareTerminal size={22} /><span>启动 DSH 后，输出会显示在这里。</span></div>

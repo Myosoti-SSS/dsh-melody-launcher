@@ -1,4 +1,4 @@
-import { formatCommandLine, spawnCommand } from './process'
+import { formatCommandLine, spawnCommand, terminateProcessTree } from './process'
 
 /**
  * 「启动子进程 → 转发输出 → 收集输出 → 等待退出码」这套流程原本在
@@ -11,6 +11,10 @@ export type OutputLevel = 'info' | 'error'
 export interface CommandProcess {
   stdout: NodeJS.ReadableStream
   stderr: NodeJS.ReadableStream
+  pid?: number
+  exitCode?: number | null
+  signalCode?: NodeJS.Signals | null
+  kill?: (signal?: NodeJS.Signals | number) => boolean
   once(event: 'error', listener: (error: Error) => void): unknown
   once(event: 'exit', listener: (code: number | null) => void): unknown
 }
@@ -20,6 +24,10 @@ export interface CollectOptions {
   onOutput?: (text: string, level: OutputLevel) => void
   /** 保留的输出上限（字符数），只保留末尾部分。 */
   captureLimit?: number
+  /** 连续没有任何子进程输出时的保护时间；不设置则一直等待。 */
+  inactivityTimeoutMs?: number
+  /** 子进程无输出超时时的附加通知。 */
+  onTimeout?: (timeoutMs: number) => void
 }
 
 export interface CommandOptions extends CollectOptions {
@@ -37,22 +45,82 @@ export interface CommandResult {
 
 export const DEFAULT_CAPTURE_LIMIT = 48_000
 
+export class CommandTimeoutError extends Error {
+  readonly timeoutMs: number
+
+  constructor(timeoutMs: number) {
+    super(`命令连续 ${Math.ceil(timeoutMs / 1000)} 秒没有输出，已终止命令及其子进程。`)
+    this.name = 'CommandTimeoutError'
+    this.timeoutMs = timeoutMs
+  }
+}
+
 /** 监听一个已启动的子进程直到退出。子进程报错时 reject。 */
 export function collectCommandOutput(child: CommandProcess, options: CollectOptions = {}): Promise<CommandResult> {
   const limit = options.captureLimit ?? DEFAULT_CAPTURE_LIMIT
+  const inactivityTimeoutMs = options.inactivityTimeoutMs && options.inactivityTimeoutMs > 0
+    ? options.inactivityTimeoutMs
+    : undefined
   let output = ''
+  let timer: NodeJS.Timeout | undefined
+  let settled = false
+  let timedOut = false
+
+  const clearInactivityTimer = () => {
+    if (timer) clearTimeout(timer)
+    timer = undefined
+  }
+
+  const armInactivityTimer = (onTimeout: () => void) => {
+    if (!inactivityTimeoutMs || settled) return
+    clearInactivityTimer()
+    timer = setTimeout(onTimeout, inactivityTimeoutMs)
+    timer.unref?.()
+  }
 
   const handle = (level: OutputLevel) => (chunk: Buffer | string) => {
     const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
     output = `${output}${text}`.slice(-limit)
     options.onOutput?.(text, level)
+    armInactivityTimer(onIdleTimeout)
   }
+
+  const onIdleTimeout = () => {
+    if (settled || timedOut || !inactivityTimeoutMs) return
+    timedOut = true
+    clearInactivityTimer()
+    options.onTimeout?.(inactivityTimeoutMs)
+    const error = new CommandTimeoutError(inactivityTimeoutMs)
+    // Do not wait for a broken child to emit `exit`: on Windows a DSH CLI can
+    // synchronously wait for pnpm, while taskkill must terminate the full tree.
+    void terminateProcessTree(child as Parameters<typeof terminateProcessTree>[0])
+      .catch(() => undefined)
+      .finally(() => {
+        if (settled) return
+        settled = true
+        rejectPromise?.(error)
+      })
+  }
+
   child.stdout.on('data', handle('info'))
   child.stderr.on('data', handle('error'))
 
+  let rejectPromise: ((error: Error) => void) | undefined
   return new Promise<CommandResult>((resolve, reject) => {
-    child.once('error', reject)
-    child.once('exit', code => resolve({ exitCode: code ?? 1, output }))
+    rejectPromise = reject
+    armInactivityTimer(onIdleTimeout)
+    child.once('error', error => {
+      if (settled || timedOut) return
+      settled = true
+      clearInactivityTimer()
+      reject(error)
+    })
+    child.once('exit', code => {
+      if (settled || timedOut) return
+      settled = true
+      clearInactivityTimer()
+      resolve({ exitCode: code ?? 1, output })
+    })
   })
 }
 
@@ -66,7 +134,7 @@ export async function runCommand(
   options.onOutput?.(`命令：${commandLine}\n工作目录：${options.cwd}`, 'info')
   let child
   try {
-    child = spawnCommand(executable, args, { cwd: options.cwd, env: options.env })
+    child = spawnCommand(executable, args, { cwd: options.cwd, env: options.env, stdin: 'ignore' })
     options.onSpawn?.(child)
   } catch (error) {
     options.onOutput?.(`命令启动失败：${error instanceof Error ? error.message : String(error)}`, 'error')

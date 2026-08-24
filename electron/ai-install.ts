@@ -1331,6 +1331,7 @@ export async function prepareAcpRuntime(
   onOutput?.(`命令：${formatCommandLine(nodeRuntime.npm, args)}\n工作目录：${acpRuntimeRoot}`)
   const child = spawnCommand(nodeRuntime.npm, args, {
     cwd: acpRuntimeRoot,
+    stdin: 'ignore',
     env: nodeEnvironment(),
   })
   const stopInstallation = () => { void killChildProcessTree(child) }
@@ -1338,7 +1339,8 @@ export async function prepareAcpRuntime(
   let result
   try {
     result = await collectCommandOutput(child, {
-    onOutput: text => onOutput?.(text),
+      inactivityTimeoutMs: 5 * 60 * 1000,
+      onOutput: text => onOutput?.(text),
     })
   } finally {
     signal?.removeEventListener('abort', stopInstallation)

@@ -573,7 +573,7 @@ function PluginDetails({ plugin, profileName, trial, busy, locked, aiActive, ada
         <div><dt>加载优先级</dt><dd>{plugin.order ? `#${String(plugin.order).padStart(2, '0')}` : '不加载'}</dd></div>
         <div><dt>版本</dt><dd>{plugin.version}</dd></div>
         <div><dt>来源</dt><dd>{plugin.builtin ? 'DSH 内置' : 'Profile 依赖'}</dd></div>
-        {!plugin.builtin && plugin.actualSource && <div><dt>实际安装来源</dt><dd>{plugin.actualSource === 'market' ? 'DSH Market' : plugin.actualSource === 'local' ? '整合包本地源码' : 'GitHub'}</dd></div>}
+        {!plugin.builtin && plugin.actualSource && <div><dt>实际安装来源</dt><dd>{plugin.actualSource === 'market' ? 'DSH Market' : plugin.actualSource === 'npm' ? 'npm' : plugin.actualSource === 'local' ? '整合包本地源码' : 'GitHub'}</dd></div>}
         {plugin.packOrigin && <div><dt>来源整合包</dt><dd>{plugin.packOrigin.packName}</dd></div>}
         <div><dt>兼容性</dt><dd className={plugin.compatible ? 'good' : 'warning'}>{plugin.compatible ? 'Bundle 已识别' : '未检测到 Bundle'}</dd></div>
       </dl>

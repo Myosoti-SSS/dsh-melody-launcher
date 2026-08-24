@@ -17,7 +17,7 @@ export interface PluginInstallReceipt {
   packRepository?: string
   packCommit?: string | null
   componentId?: string
-  actualSource?: 'market' | 'github' | 'local'
+  actualSource?: 'market' | 'npm' | 'github' | 'local'
 }
 interface ReceiptFile {
   version: 1

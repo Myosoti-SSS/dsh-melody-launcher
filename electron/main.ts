@@ -1,4 +1,5 @@
 import { app, BrowserWindow, net, safeStorage, shell } from 'electron'
+import { existsSync } from 'node:fs'
 import { cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -20,7 +21,9 @@ import { createGitHubAuthService, type GitHubAuthService } from './github-auth'
 import {
   ensureNodeRuntime,
   ensurePnpmRuntime,
+  findManagedNodeRuntime,
   findSystemNodeRuntime,
+  pnpmExecutable,
   resolveNodeExecutable,
   type NodeRuntime,
   type NodeRuntimeProgress,
@@ -29,8 +32,9 @@ import {
 import { createProxyAwareFetch } from './network'
 import { createPackManager, type InstallInstaller, type PackInstallTarget, type PackManager } from './pack'
 import { createPluginTrialManager, type PluginTrialManager } from './plugin-trial'
+import { createPnpmStorePruner } from './plugin-store'
 import { readPluginReceipts, recordPluginInstall } from './plugin-receipts'
-import { configureProcessTracker, shutdownTrackedProcesses, withExecutableDirectoryOnPath } from './process'
+import { configureProcessTracker, shutdownTrackedProcesses, withExecutableDirectoryOnPath, withGitOnPath } from './process'
 import { createProcessSupervisor, type ProcessSupervisor } from './process-supervisor'
 import { readProfile, reorderPlugins, togglePlugin } from './profile'
 import { consolidatePluginPool, createProfileService, ensureProfileWorkspaceConfig, migrateLegacyPacks, type ProfileService } from './profile-service'
@@ -87,6 +91,7 @@ function createServices(): Services {
   const managedNodeRoot = path.join(userData, 'node-runtime')
   const managedPnpmRoot = path.join(userData, 'pnpm-runtime')
   const pluginSourceRoot = path.join(userData, 'plugin-sources')
+  const pluginStoreRoot = path.join(userData, 'plugin-store')
   const pluginReceiptsPath = path.join(userData, 'plugin-installs.json')
   const presetReceiptsPath = path.join(userData, 'preset-installs.json')
   const skillReceiptsPath = path.join(userData, 'skill-installs.json')
@@ -278,7 +283,7 @@ function createServices(): Services {
             offlinePnpm ??= await preparePnpmRuntime('plugin', offlineNode)
             const result = await runCommand(offlinePnpm.executable, ['install', '--dir', targetProfileDir, '--offline', '--no-frozen-lockfile', '--config.auto-install-peers=false', '--store-dir', pluginStoreRoot], {
               cwd: targetProfileDir,
-              env: withExecutableDirectoryOnPath(offlinePnpm.executable, withExecutableDirectoryOnPath(offlineNode.node, {
+              env: withGitOnPath(withExecutableDirectoryOnPath(offlinePnpm.executable, withExecutableDirectoryOnPath(offlineNode.node, {
                 ...process.env,
                 DSH_HOME: current.dshHome,
                 npm_config_store_dir: pluginStoreRoot,
@@ -286,7 +291,12 @@ function createServices(): Services {
                 pnpm_config_store_dir: pluginStoreRoot,
                 PNPM_CONFIG_STORE_DIR: pluginStoreRoot,
                 CI: 'true',
-              })),
+                npm_config_yes: 'true',
+                NPM_CONFIG_YES: 'true',
+                PNPM_CONFIG_YES: 'true',
+                COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+              }))),
+              inactivityTimeoutMs: 5 * 60 * 1000,
               onOutput: (text, level) => events.output('plugin', level, text),
             })
             if (result.exitCode !== 0) throw new Error(`插件「${packageName}」无法从共享插件池补齐，请检查来源记录。`)
@@ -346,7 +356,26 @@ function createServices(): Services {
     preparePnpmRuntime: (nodeRuntime, onProgress) => preparePnpmRuntime('plugin', nodeRuntime, onProgress),
     pluginSourceRoot,
     pluginReceiptsPath,
-    packageStoreRoot: path.join(userData, 'plugin-store'),
+    packageStoreRoot: pluginStoreRoot,
+    syncProfilePool: async dshHome => { await consolidatePluginPool(dshHome) },
+    purgePnpmStore: createPnpmStorePruner({
+      storeRoot: pluginStoreRoot,
+      readSettings: () => settings.read(),
+      prepareNodeRuntime: () => prepareNodeRuntime('plugin'),
+      preparePnpmRuntime: nodeRuntime => preparePnpmRuntime('plugin', nodeRuntime),
+      resolveNodeRuntime: async () => {
+        // Cache maintenance must never trigger a runtime download. Any
+        // compatible already-installed Node runtime is sufficient for pnpm.
+        const system = findSystemNodeRuntime()
+        if (system) return system
+        return (await findManagedNodeRuntime(managedNodeRoot)) ?? null
+      },
+      resolvePnpmRuntime: async () => {
+        const executable = pnpmExecutable(managedPnpmRoot)
+        return existsSync(executable) ? { root: managedPnpmRoot, executable } : null
+      },
+      emitOutput: (level, text) => events.output('plugin', level, text),
+    }),
     presetReceiptsPath,
     skillReceiptsPath,
     skillSourceRoot,
@@ -365,8 +394,10 @@ function createServices(): Services {
     preparePnpmRuntime: node => preparePnpmRuntime('plugin', node),
     fetchImpl: githubAuth.fetch,
     packageStoreRoot: path.join(userData, 'plugin-store'),
+    syncProfilePool: async dshHome => { await consolidatePluginPool(dshHome) },
     emitProgress: progress => events.dshMarketProgress(progress),
     emitOutput: (level, text) => events.output('plugin', level, text),
+    removePluginLocally: (packageName, profileName, removeOptions) => installer.remove(packageName, profileName, removeOptions),
   })
 
   const pluginTrial = createPluginTrialManager({
@@ -393,6 +424,7 @@ function createServices(): Services {
       const environment = await runtimeVersions.read(false)
       if (!environment.dshInstalled.some(item => item.version === version)) await runtimeVersions.installDsh(version)
     },
+    emitOutput: (level, text) => events.output('runtime', level, text),
   })
 
   let packManager: PackManager | null = null
@@ -451,7 +483,7 @@ function createServices(): Services {
     const commandArgs = buildPluginCommandArgs(current, executable, ['add', `file:${localDirectory}`], target.profileName)
     const result = await runCommand(executable, commandArgs, {
       cwd: current.workspace,
-        env: withExecutableDirectoryOnPath(
+        env: withGitOnPath(withExecutableDirectoryOnPath(
           pnpmRuntime.executable,
           withExecutableDirectoryOnPath(nodeRuntime.node, {
             ...process.env,
@@ -461,8 +493,14 @@ function createServices(): Services {
             pnpm_config_store_dir: path.join(app.getPath('userData'), 'plugin-store'),
             PNPM_CONFIG_STORE_DIR: path.join(app.getPath('userData'), 'plugin-store'),
             FORCE_COLOR: '0',
+            CI: 'true',
+            npm_config_yes: 'true',
+            NPM_CONFIG_YES: 'true',
+            PNPM_CONFIG_YES: 'true',
+            COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
           }),
-      ),
+        )),
+      inactivityTimeoutMs: 5 * 60 * 1000,
       onOutput: (text, level) => events.output('plugin', level, text),
     })
     if (result.exitCode !== 0) throw new Error(`插件安装失败（代码 ${result.exitCode}），请查看运行日志。`)
@@ -483,6 +521,7 @@ function createServices(): Services {
       commit: '',
       installedAt: new Date().toISOString(),
     })
+    await consolidatePluginPool(current.dshHome)
   }
 
   const packInstaller: InstallInstaller = {

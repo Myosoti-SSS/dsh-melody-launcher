@@ -62,14 +62,19 @@ export function DshMarketView({ onProfileChanged }: DshMarketViewProps) {
     try {
       if (action === 'install') await api.installDshMarketPlugin(plugin.name)
       else if (action === 'update') await api.updateDshMarketPlugin(plugin.name)
-      else if (action === 'uninstall') await api.uninstallDshMarketPlugin(plugin.name)
+      else if (action === 'uninstall') await api.uninstallPlugin(plugin.npm ?? plugin.name, { purgeStore: true })
       else await api.toggleDshMarketPlugin(plugin.name, enabled === true)
       // The market service and startup-item manager share the same Profile on
       // disk, but their renderer state is otherwise independent. Refresh the
       // shared Profile before redrawing the market so both switches agree.
       await onProfileChanged?.()
       await load()
-    } catch (cause) { setError(cause instanceof Error ? cause.message : '操作失败') }
+    } catch (cause) {
+      // Profile removal happens before the optional pnpm cache prune. Refresh
+      // the shared list even when cache maintenance reports an error.
+      if (action === 'uninstall') await onProfileChanged?.()
+      setError(cause instanceof Error ? cause.message : '操作失败')
+    }
     finally { setBusy(null) }
   }
 
@@ -105,7 +110,7 @@ export function DshMarketView({ onProfileChanged }: DshMarketViewProps) {
               <div className="dsh-market-card-head"><div><h2>{plugin.name}</h2><span>{plugin.owner}</span></div><span className="dsh-market-stars"><Star size={13} />{formatStars(plugin.stars)}</span></div>
               <div className="dsh-market-meta"><span>{plugin.category}</span>{plugin.npm ? <code>npm</code> : <code>GitHub</code>}{plugin.installed && <b className={plugin.enabled ? 'market-enabled' : 'market-disabled'}>{plugin.enabled ? '已启用' : '未启用'}</b>}</div>
               <p>{plugin.description.zh ?? plugin.description.en ?? '暂无描述'}</p>
-              <div className="dsh-market-card-foot"><button type="button" className="dsh-market-link" onClick={() => void api.openExternal(plugin.url)}><ExternalLink size={13} />仓库</button><span className="dsh-market-grow" />{plugin.installed && <button type="button" className="icon-button" title={plugin.enabled ? '停用插件' : '启用插件'} disabled={isBusy} onClick={() => void mutate(plugin, 'toggle', !plugin.enabled)}>{plugin.enabled ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}</button>}{plugin.installed && plugin.updateAvailable && <button type="button" className="secondary-button dsh-market-action" disabled={isBusy} onClick={() => void mutate(plugin, 'update')}>{isBusy ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}更新</button>}{plugin.installed ? <button type="button" className="danger-button dsh-market-action" disabled={isBusy} onClick={() => void mutate(plugin, 'uninstall')}><Trash2 size={13} />卸载</button> : <button type="button" className="primary-command dsh-market-action" disabled={isBusy} onClick={() => void mutate(plugin, 'install')}>{isBusy ? <LoaderCircle size={13} className="spin" /> : <Check size={13} />}安装</button>}</div>
+              <div className="dsh-market-card-foot"><button type="button" className="dsh-market-link" onClick={() => void api.openExternal(plugin.url)}><ExternalLink size={13} />仓库</button><span className="dsh-market-grow" />{plugin.installed && <button type="button" className="icon-button" title={plugin.enabled ? '停用插件' : '启用插件'} disabled={isBusy} onClick={() => void mutate(plugin, 'toggle', !plugin.enabled)}>{plugin.enabled ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}</button>}{plugin.installed && plugin.updateAvailable && <button type="button" className="secondary-button dsh-market-action" disabled={isBusy} onClick={() => void mutate(plugin, 'update')}>{isBusy ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}更新</button>}{plugin.installed ? <button type="button" className="danger-button dsh-market-action" title="彻底清除插件及未引用的 pnpm 缓存" disabled={isBusy} onClick={() => void mutate(plugin, 'uninstall')}><Trash2 size={13} />卸载</button> : <button type="button" className="primary-command dsh-market-action" disabled={isBusy} onClick={() => void mutate(plugin, 'install')}>{isBusy ? <LoaderCircle size={13} className="spin" /> : <Check size={13} />}安装</button>}</div>
             </article>
           )
         })}
