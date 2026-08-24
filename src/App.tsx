@@ -1,5 +1,5 @@
 import { Layers3, LoaderCircle, PanelRight } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { LauncherApiProvider, resolveLauncherApi, useLauncherApi } from './api/client'
 import { AppHeader } from './components/AppHeader'
 import { LauncherHome } from './components/LauncherHome'
@@ -50,6 +50,8 @@ function LauncherShell() {
   const api = useLauncherApi()
   const store = useLauncherStore()
   const navigation = useNavigation(message => store.showToast({ kind: 'error', message }))
+  // 稳定的错误上报入口：避免每次渲染产生新引用，令子视图的拉取 effect 被无谓重跑。
+  const showError = useCallback((message: string) => store.showToast({ kind: 'error', message }), [store.showToast])
   // AI 可能改 profile（安装组件），任务结束时刷新一次；toast 复用 store 的唯一实例。
   const ai = useAiInstall(() => { void store.refreshProfile() }, store.showToast)
   const copilot = useCopilotSessions()
@@ -142,7 +144,7 @@ function LauncherShell() {
   ].join('|')
   const runtimeActivityRef = useRef(false)
   const runtimeActivityInitializedRef = useRef(false)
-  const runtimeLogRef = useRef<string | null>(null)
+  const runtimeLogRef = useRef<number | null>(null)
   const runtimeLogInitializedRef = useRef(false)
 
   const revealRuntimeDrawer = () => {
@@ -181,18 +183,20 @@ function LauncherShell() {
   }, [runtimeActivity, store.loading])
 
   // Some plugin operations stream directly to the terminal without creating an
-  // InstallProgress record. Treat a new runtime log entry as activity as well.
+  // InstallProgress record. Treat a new process-output entry as activity as well —
+  // keyed on the real-output counter, so catalog/market sync's synthetic progress
+  // lines (also written to the log list) don't pop the drawer on page switch.
   useEffect(() => {
     if (store.loading) return
-    const timestamp = latestRuntimeLog?.timestamp ?? null
+    const version = store.processLogCount
     if (!runtimeLogInitializedRef.current) {
       runtimeLogInitializedRef.current = true
-      runtimeLogRef.current = timestamp
+      runtimeLogRef.current = version
       return
     }
-    if (timestamp && timestamp !== runtimeLogRef.current) revealRuntimeDrawer()
-    runtimeLogRef.current = timestamp
-  }, [latestRuntimeLog?.timestamp, store.loading])
+    if (version !== runtimeLogRef.current) revealRuntimeDrawer()
+    runtimeLogRef.current = version
+  }, [store.processLogCount, store.loading])
 
   useEffect(() => {
     if (!runtimeDrawerAutoOpened || runtimeDrawerMode !== 'half') return
@@ -466,7 +470,7 @@ function LauncherShell() {
                     store.applyCatalogPresetInstall(result)
                     store.showToast({ kind: 'success', message: `Agent 预设 ${result.installedPreset.name} 已安装到 DSH 预设目录。` })
                   }}
-                  onError={message => store.showToast({ kind: 'error', message })}
+                  onError={showError}
                   onOpenRepository={url => void api.openExternal(url)}
                   onAiInstall={repo => { setCopilotOpen(true); void ai.start(repo.fullName, repo.defaultBranch) }}
                   onTrialPlugin={(packageName, profileName) => { void store.trialPlugin(packageName, profileName) }}
@@ -532,7 +536,7 @@ function LauncherShell() {
                   authStatus={store.githubAuthStatus}
                   onLogin={() => setGitHubAccountOpen(true)}
                   onOpen={url => void api.openExternal(url)}
-                  onError={message => store.showToast({ kind: 'error', message })}
+                  onError={showError}
                 />
               )}
               </div>
@@ -565,6 +569,7 @@ function LauncherShell() {
               open={copilotOpen}
               width={copilotWidth}
               onResizeStateChange={setCopilotResizing}
+              onError={showError}
               onWidthChange={width => {
                 const next = Math.max(320, Math.min(720, width))
                 setCopilotWidth(next)

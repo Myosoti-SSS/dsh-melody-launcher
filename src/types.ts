@@ -712,10 +712,22 @@ export interface AiSessionSummary {
   messageCount: number
   pendingApproval: AiApprovalRequest | null
   hasSnapshot: boolean
+  /** 会话固定使用的模型（"provider|model"）；空表示自动选择。 */
+  model?: string | null
 }
 
 export interface AiSession extends AiSessionSummary {
   messages: AiMessage[]
+}
+
+/** Copilot 模型选择器候选。 */
+export interface CopilotModelOption {
+  /** 稳定标识：deepseek-official 或自定义 provider 路由。 */
+  provider: string
+  model: string
+  label: string
+  /** 当前是否可用（缺密钥或协议不兼容时不可用）。 */
+  available: boolean
 }
 
 export type AiSessionEvent =
@@ -1053,7 +1065,9 @@ export interface LauncherApi {
   aiHasSnapshot(): Promise<boolean>
   listAiSessions(): Promise<AiSession[]>
   createAiSession(input?: AiSessionCreateInput): Promise<AiSession>
-  sendAiSessionMessage(sessionId: string, text: string): Promise<AiSession>
+  sendAiSessionMessage(sessionId: string, text: string, model?: string | null): Promise<AiSession>
+  listCopilotModels(): Promise<CopilotModelOption[]>
+  setAiSessionModel(sessionId: string, model: string | null): Promise<AiSession>
   cancelAiSession(sessionId: string): Promise<void>
   approveAiSession(sessionId: string, requestId: string, allow: boolean): Promise<boolean>
   rollbackAiSession(sessionId: string): Promise<{ restored: number; profileName: string }>

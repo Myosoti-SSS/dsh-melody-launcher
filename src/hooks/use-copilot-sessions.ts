@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLauncherApi } from '../api/client'
-import type { AiSession, AiSessionCreateInput, AiSessionEvent } from '../types'
+import type { AiSession, AiSessionCreateInput, AiSessionEvent, CopilotModelOption } from '../types'
 
 function replaceSession(current: AiSession[], next: AiSession): AiSession[] {
   const index = current.findIndex(item => item.id === next.id)
@@ -13,6 +13,7 @@ export function useCopilotSessions() {
   const [sessions, setSessions] = useState<AiSession[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [models, setModels] = useState<CopilotModelOption[]>([])
 
   useEffect(() => {
     let mounted = true
@@ -48,6 +49,13 @@ export function useCopilotSessions() {
     return () => { mounted = false; unsubscribe() }
   }, [api])
 
+  // 模型候选可能随 API 配置变化（新增自定义 API、补密钥），由面板打开时触发重新拉取。
+  const reloadModels = useCallback(() => {
+    void api.listCopilotModels().then(setModels).catch(() => { /* 主进程配置缺失时保留上次列表 */ })
+  }, [api])
+
+  useEffect(() => { reloadModels() }, [reloadModels])
+
   const selected = useMemo(() => sessions.find(session => session.id === selectedId) ?? sessions[0] ?? null, [sessions, selectedId])
 
   const create = useCallback(async (input?: AiSessionCreateInput) => {
@@ -58,7 +66,21 @@ export function useCopilotSessions() {
 
   const send = useCallback(async (text: string) => {
     if (!selected) return null
-    return api.sendAiSessionMessage(selected.id, text)
+    return api.sendAiSessionMessage(selected.id, text, selected.model ?? null)
+  }, [api, selected])
+
+  const setModel = useCallback(async (modelKey: string | null) => {
+    if (!selected) return
+    const next = modelKey || null
+    const previous = selected.model ?? null
+    setSessions(current => current.map(session => session.id === selected.id ? { ...session, model: next } : session))
+    try {
+      await api.setAiSessionModel(selected.id, next)
+    } catch (error) {
+      // 主进程未接受：回滚乐观更新，让界面回到权威状态。
+      setSessions(current => current.map(session => session.id === selected.id ? { ...session, model: previous } : session))
+      throw error
+    }
   }, [api, selected])
 
   const cancel = useCallback(() => selected ? api.cancelAiSession(selected.id) : Promise.resolve(), [api, selected])
@@ -69,7 +91,7 @@ export function useCopilotSessions() {
     setSelectedId(current => current === sessionId ? null : current)
   }, [api])
 
-  return { sessions, selected, selectedId, setSelectedId, loading, create, send, cancel, approve, rollback, remove }
+  return { sessions, selected, selectedId, setSelectedId, loading, models, reloadModels, setModel, create, send, cancel, approve, rollback, remove }
 }
 
 export type CopilotSessionState = ReturnType<typeof useCopilotSessions>

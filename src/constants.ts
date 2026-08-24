@@ -103,6 +103,8 @@ export const IPC = {
   aiSessionsList: 'ai-sessions:list',
   aiSessionsCreate: 'ai-sessions:create',
   aiSessionsSend: 'ai-sessions:send',
+  aiSessionsModels: 'ai-sessions:models',
+  aiSessionsSetModel: 'ai-sessions:set-model',
   aiSessionsCancel: 'ai-sessions:cancel',
   aiSessionsApprove: 'ai-sessions:approve',
   aiSessionsRollback: 'ai-sessions:rollback',

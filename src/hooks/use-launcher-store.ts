@@ -82,6 +82,9 @@ export function useLauncherStore() {
   })
   const githubAuthRefreshVersion = useRef(0)
   const [logs, setLogs] = useState<RuntimeOutput[]>([])
+  // 真实进程输出（onRuntimeOutput）的计数：App 用它判断是否自动弹出运行日志，
+  // 市场/目录同步等合成的进度日志不会计入，避免切页时灵动岛被顶出来。
+  const [processLogCount, setProcessLogCount] = useState(0)
   const progressLogBuckets = useRef<Record<string, { phase: InstallProgress['phase']; bucket: number; message: string }>>({})
   const catalogProgressLogState = useRef<Record<string, string>>({})
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null)
@@ -237,19 +240,39 @@ export function useLauncherStore() {
       }
 
     const unsubscribers = [
-      api.onRuntimeOutput(output => appendRuntimeLog(output)),
+      api.onRuntimeOutput(output => {
+        appendRuntimeLog(output)
+        setProcessLogCount(current => current + 1)
+      }),
       api.onRuntimeState(setRuntime),
       api.onInstallProgress(handleInstallProgress),
       api.onCatalogAnalysisProgress(handleCatalogAnalysisProgress),
-      api.onDshMarketProgress(progress => handleInstallProgress({
-        repository: progress.name ? `dsh-market:${progress.name}` : 'dsh-market',
-        kind: 'plugin',
-        phase: progress.phase === 'loading' || progress.phase === 'checking' ? 'preparing' : progress.phase === 'resolving' ? 'resolving' : progress.phase,
-        percent: progress.percent ?? 0,
-        message: progress.message,
-        downloadedBytes: progress.downloadedBytes ?? undefined,
-        totalBytes: progress.totalBytes ?? undefined,
-      })),
+      api.onDshMarketProgress(progress => {
+        if (progress.name) {
+          // 市场里的插件级操作（安装/更新/卸载）是真实动作，参与活动检测与进度展示。
+          handleInstallProgress({
+            repository: `dsh-market:${progress.name}`,
+            kind: 'plugin',
+            phase: progress.phase === 'loading' || progress.phase === 'checking'
+              ? 'preparing'
+              : progress.phase === 'resolving' ? 'resolving' : progress.phase,
+            percent: progress.percent ?? 0,
+            message: progress.message,
+            downloadedBytes: progress.downloadedBytes ?? undefined,
+            totalBytes: progress.totalBytes ?? undefined,
+          })
+          return
+        }
+        // 目录同步/更新检查：只写日志行，不进入安装活动状态，
+        // 避免切到市场页时灵动岛被自动弹出、Profile 切换短暂被锁。
+        if (typeof progress.message === 'string' && progress.message.trim()) {
+          appendRuntimeLog({
+            channel: 'plugin',
+            level: progress.phase === 'error' ? 'error' : progress.phase === 'complete' ? 'success' : 'info',
+            text: `[dsh-market] ${progress.message} · ${progress.percent ?? 0}%`,
+          })
+        }
+      }),
       api.onLauncherUpdateProgress(progress => {
         setLauncherUpdateProgress(progress)
         setLauncherUpdate(current => current ? { ...current, state: progress.phase === 'applying' ? 'applying' : 'downloading' } : current)
@@ -929,6 +952,7 @@ export function useLauncherStore() {
     customApiLoading,
     githubAuthStatus,
     logs,
+    processLogCount,
     selectedPlugin,
     selected: profile?.plugins.find(plugin => plugin.packageName === selectedPlugin) ?? null,
     packs,

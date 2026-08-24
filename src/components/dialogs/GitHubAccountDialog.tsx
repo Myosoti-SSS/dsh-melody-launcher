@@ -113,9 +113,21 @@ export function GitHubAccountDialog({ status, onStatus, onClose, onMessage }: Gi
               </div>
 
               {status.rateLimit && (
-                <div className="github-rate-row">
-                  <span>GitHub API 额度</span>
-                  <strong>{status.rateLimit.remaining.toLocaleString('zh-CN')} / {status.rateLimit.limit.toLocaleString('zh-CN')}</strong>
+                <div className="github-account-section">
+                  <div className="github-account-heading">
+                    <strong>GitHub API 额度</strong>
+                    <span>{status.rateLimit.remaining.toLocaleString('zh-CN')} / {status.rateLimit.limit.toLocaleString('zh-CN')}</span>
+                  </div>
+                  <div
+                    className="github-rate-bar"
+                    role="progressbar"
+                    aria-label="GitHub API 剩余额度"
+                    aria-valuemin={0}
+                    aria-valuemax={status.rateLimit.limit}
+                    aria-valuenow={status.rateLimit.remaining}
+                  >
+                    <span style={{ width: `${Math.max(0, Math.min(100, status.rateLimit.remaining / status.rateLimit.limit * 100))}%` }} />
+                  </div>
                 </div>
               )}
             </>
