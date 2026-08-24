@@ -41,6 +41,7 @@ import { createRendererEvents } from './renderer-events'
 import { createRuntimeController, type RuntimeController } from './runtime'
 import { createRuntimeVersionService, type RuntimeVersionService } from './runtime-versions'
 import { createSettingsStore, defaultSettings, type SettingsStore } from './settings'
+import { createTray, type TrayController } from './tray'
 import { recoverLegacyCredentials } from './dsh-credentials-compat'
 
 /**
@@ -49,11 +50,17 @@ import { recoverLegacyCredentials } from './dsh-credentials-compat'
  */
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url))
+// 窗口图标与托盘图标共用同一资源；dev 取 public/，打包取 dist/。
+const launcherIconPath = path.join(moduleDirectory, app.isPackaged ? '../dist/launcher-icon.png' : '../public/launcher-icon.png')
 
 let mainWindow: BrowserWindow | null = null
 let processSupervisor: ProcessSupervisor | null = null
 let quitCleanupStarted = false
 let allowFinalQuit = false
+// 关闭按钮只隐藏到托盘；before-quit 置位后放行真正的关闭。
+let isQuitting = false
+let tray: TrayController | null = null
+let backgroundNoticeShown = false
 
 const getWindow = (): BrowserWindow | null => mainWindow
 const events = createRendererEvents(createRendererChannel(getWindow))
@@ -558,13 +565,47 @@ function createServices(): Services {
 }
 
 function openMainWindow(): void {
-  mainWindow = createMainWindow({
+  const window = createMainWindow({
     preloadPath: path.join(moduleDirectory, 'preload.mjs'),
-    iconPath: path.join(moduleDirectory, app.isPackaged ? '../dist/launcher-icon.png' : '../public/launcher-icon.png'),
+    iconPath: launcherIconPath,
     devServerUrl: process.env.VITE_DEV_SERVER_URL,
     indexPath: path.join(moduleDirectory, '../dist/index.html'),
     onClosed: () => { mainWindow = null },
   })
+  // 点 X 或 Alt+F4 只隐藏到托盘继续后台运行；托盘菜单「退出」经 app.quit()
+  // 触发 before-quit 置位 isQuitting 后，这里才放行关闭。
+  window.on('close', event => {
+    if (isQuitting) return
+    event.preventDefault()
+    window.hide()
+    if (!backgroundNoticeShown) {
+      backgroundNoticeShown = true
+      tray?.notifyBackground()
+    }
+  })
+  mainWindow = window
+}
+
+/** 从托盘或第二实例唤起主窗口；窗口不存在时重建。 */
+function showMainWindow(): void {
+  const window = getWindow()
+  if (!window || window.isDestroyed()) {
+    openMainWindow()
+    return
+  }
+  if (window.isMinimized()) window.restore()
+  // 无边框透明窗口从后台唤起时常抢不到焦点，短暂置顶可确保激活。
+  window.setAlwaysOnTop(true, 'screen-saver')
+  window.show()
+  window.focus()
+  window.setAlwaysOnTop(false, 'screen-saver')
+}
+
+// 第二个实例直接退出，由已运行实例通过 second-instance 唤起前台窗口。
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => showMainWindow())
 }
 
 app.whenReady().then(async () => {
@@ -588,6 +629,7 @@ app.whenReady().then(async () => {
   })
   await services.profilePoolReady
   openMainWindow()
+  tray = createTray({ iconPath: launcherIconPath, showMainWindow })
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) openMainWindow()
   })
@@ -658,8 +700,16 @@ app.on('before-quit', event => {
   event.preventDefault()
   if (quitCleanupStarted) return
   quitCleanupStarted = true
+  // 放行窗口 close：清理完成后窗口随退出流程正常关闭。
+  isQuitting = true
   void shutdownLauncherProcesses().finally(() => {
     allowFinalQuit = true
     app.quit()
   })
+})
+
+// will-quit 在 before-quit 清理完成后触发，此时移除托盘图标。
+app.on('will-quit', () => {
+  tray?.destroy()
+  tray = null
 })
