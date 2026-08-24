@@ -247,15 +247,32 @@ export function useLauncherStore() {
       api.onRuntimeState(setRuntime),
       api.onInstallProgress(handleInstallProgress),
       api.onCatalogAnalysisProgress(handleCatalogAnalysisProgress),
-      api.onDshMarketProgress(progress => handleInstallProgress({
-        repository: progress.name ? `dsh-market:${progress.name}` : 'dsh-market',
-        kind: 'plugin',
-        phase: progress.phase === 'loading' || progress.phase === 'checking' ? 'preparing' : progress.phase === 'resolving' ? 'resolving' : progress.phase,
-        percent: progress.percent ?? 0,
-        message: progress.message,
-        downloadedBytes: progress.downloadedBytes ?? undefined,
-        totalBytes: progress.totalBytes ?? undefined,
-      })),
+      api.onDshMarketProgress(progress => {
+        if (progress.name) {
+          // 市场里的插件级操作（安装/更新/卸载）是真实动作，参与活动检测与进度展示。
+          handleInstallProgress({
+            repository: `dsh-market:${progress.name}`,
+            kind: 'plugin',
+            phase: progress.phase === 'loading' || progress.phase === 'checking'
+              ? 'preparing'
+              : progress.phase === 'resolving' ? 'resolving' : progress.phase,
+            percent: progress.percent ?? 0,
+            message: progress.message,
+            downloadedBytes: progress.downloadedBytes ?? undefined,
+            totalBytes: progress.totalBytes ?? undefined,
+          })
+          return
+        }
+        // 目录同步/更新检查：只写日志行，不进入安装活动状态，
+        // 避免切到市场页时灵动岛被自动弹出、Profile 切换短暂被锁。
+        if (typeof progress.message === 'string' && progress.message.trim()) {
+          appendRuntimeLog({
+            channel: 'plugin',
+            level: progress.phase === 'error' ? 'error' : progress.phase === 'complete' ? 'success' : 'info',
+            text: `[dsh-market] ${progress.message} · ${progress.percent ?? 0}%`,
+          })
+        }
+      }),
       api.onLauncherUpdateProgress(progress => {
         setLauncherUpdateProgress(progress)
         setLauncherUpdate(current => current ? { ...current, state: progress.phase === 'applying' ? 'applying' : 'downloading' } : current)
