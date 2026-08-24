@@ -6289,6 +6289,36 @@ input:focus-visible {
   }
 }
 
+/* Copilot 打开且窗口宽度不足以同时容纳侧栏、内容下限与整列 Copilot 时，
+   把它切换为悬浮覆盖（默认 Copilot 420px + 侧栏 218px + 管理页行宽下限约 610px ≈ 1250px）。 */
+@media (max-width: 1250px) {
+  .app-body.copilot-open,
+  .app-body.sidebar-collapsed.copilot-open {
+    grid-template-columns: 218px minmax(0, 1fr);
+  }
+
+  .app-body.sidebar-collapsed.copilot-open {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .copilot-panel {
+    position: absolute;
+    z-index: 30;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(400px, calc(100% - 218px));
+  }
+
+  .app-body.sidebar-collapsed.copilot-open .copilot-panel {
+    width: min(400px, calc(100% - 64px));
+  }
+
+  .app-body.copilot-open .manager-edge-actions {
+    right: 1px;
+  }
+}
+
 /* 中等宽度：整合包标签与右侧按钮文字同步收缩，避免切换器被单独压扁。 */
 @media (max-width: 1320px) {
   .header-pack-switcher {
@@ -6338,12 +6368,28 @@ input:focus-visible {
     grid-template-columns: 190px minmax(0, 1fr) 0;
   }
 
-  .app-body.copilot-open {
-    grid-template-columns: 190px minmax(0, 1fr) var(--copilot-width, 380px);
+  /* Copilot 改为悬浮覆盖：启动项管理等页面内容按行宽下限（min 610px）排布，
+     窗口缩小时若仍占一个网格列会把工作区压到内容最小宽度以下，导致整体溢出错乱。 */
+  .app-body.copilot-open,
+  .app-body.sidebar-collapsed.copilot-open {
+    grid-template-columns: 190px minmax(0, 1fr);
   }
 
   .app-body.sidebar-collapsed.copilot-open {
-    grid-template-columns: 64px minmax(0, 1fr) var(--copilot-width, 380px);
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .copilot-panel {
+    position: absolute;
+    width: min(400px, calc(100% - 190px));
+  }
+
+  .app-body.sidebar-collapsed.copilot-open .copilot-panel {
+    width: min(400px, calc(100% - 64px));
+  }
+
+  .app-body.copilot-open .manager-edge-actions {
+    right: 1px;
   }
 
   .page {
@@ -6378,6 +6424,46 @@ input:focus-visible {
 
   .repository-headings,
   .repository-row {
+    grid-template-columns: minmax(280px, 1fr) 96px 120px minmax(220px, auto);
+  }
+}
+
+/* Copilot 占一个网格列时，工作区宽度 = 窗口宽 - 侧栏 218 - Copilot ~420。
+   默认 1380 管理窗口下只剩约 742px，管理页两列基础布局（min 940px）会横向溢出。
+   打开 Copilot 时把“中等宽度”适配提前到 1578px（218+420+940）生效，保证页面不被挤乱。 */
+@media (max-width: 1578px) {
+  .app-body.copilot-open .page {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+
+  .app-body.copilot-open .plugin-layout {
+    grid-template-columns: minmax(610px, 1fr);
+  }
+
+  .app-body.copilot-open .management-control-bar {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.9fr);
+  }
+
+  .app-body.copilot-open .management-surface {
+    grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+  }
+
+  .app-body.copilot-open .resource-details-panel {
+    --management-primary-ratio: 55%;
+    --management-metadata-offset: 7.5px;
+  }
+
+  .app-body.copilot-open .plugin-list-panel {
+    border-right: 0;
+  }
+
+  .app-body.copilot-open .plugin-details {
+    display: none;
+  }
+
+  .app-body.copilot-open .repository-headings,
+  .app-body.copilot-open .repository-row {
     grid-template-columns: minmax(280px, 1fr) 96px 120px minmax(220px, auto);
   }
 }
