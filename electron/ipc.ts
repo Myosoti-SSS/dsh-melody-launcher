@@ -7,6 +7,7 @@ import type { ApplicationAddonManager } from './application-addons'
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
 import { listCustomApiProviders, removeCustomApiProvider, saveCustomApiProvider } from './custom-api'
+import { listCopilotModels } from './copilot-api'
 import { searchCatalogRepositories, type DiscoverySort } from './discovery'
 import { importCatalogFromUrl } from './github-import'
 import type { Installer } from './installer'
@@ -692,9 +693,17 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
 
   ipcMain.handle(IPC.aiSessionsList, () => copilot.list())
   ipcMain.handle(IPC.aiSessionsCreate, (_event, input?: AiSessionCreateInput) => copilot.create(input))
-  ipcMain.handle(IPC.aiSessionsSend, (_event, payload: { sessionId: string; text: string }) => {
+  ipcMain.handle(IPC.aiSessionsSend, (_event, payload: { sessionId: string; text: string; model?: string | null }) => {
     if (!payload || typeof payload.sessionId !== 'string' || typeof payload.text !== 'string') throw new Error('Copilot 消息格式无效。')
-    return copilot.send(payload.sessionId, payload.text)
+    return copilot.send(payload.sessionId, payload.text, payload.model)
+  })
+  ipcMain.handle(IPC.aiSessionsModels, async () => {
+    const current = await settings.read()
+    return listCopilotModels(current.dshHome)
+  })
+  ipcMain.handle(IPC.aiSessionsSetModel, (_event, payload: { sessionId: string; model?: string | null }) => {
+    if (!payload || typeof payload.sessionId !== 'string') throw new Error('Copilot 会话无效。')
+    return copilot.setModel(payload.sessionId, payload.model ?? null)
   })
   ipcMain.handle(IPC.aiSessionsCancel, (_event, sessionId: string) => {
     if (typeof sessionId !== 'string') throw new Error('Copilot 会话无效。')

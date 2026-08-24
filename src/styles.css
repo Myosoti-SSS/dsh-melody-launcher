@@ -1408,6 +1408,9 @@ input:focus-visible {
   transform: translateX(0);
   transition: opacity 160ms ease, transform 220ms cubic-bezier(.2, .8, .2, 1), visibility 0s linear;
   will-change: transform;
+  /* 对话是面板的主要阅读内容：字号随窗口宽度自适应（约 12px → 15.5px）。 */
+  --copilot-font: clamp(12px, 0.55vw + 5.5px, 15.5px);
+  --copilot-font-small: clamp(10px, 0.3vw + 6.5px, 12px);
 }
 
 .copilot-panel.closed {
@@ -1550,8 +1553,8 @@ input:focus-visible {
 .copilot-session-copy { min-width: 0; }
 .copilot-session-copy strong,
 .copilot-session-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.copilot-session-copy strong { font-size: 11px; }
-.copilot-session-copy small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+.copilot-session-copy strong { font-size: var(--copilot-font-small); }
+.copilot-session-copy small { margin-top: 2px; color: var(--muted); font-size: calc(var(--copilot-font-small) - 1px); }
 
 .copilot-session-dot {
   width: 7px;
@@ -1587,8 +1590,8 @@ input:focus-visible {
 }
 .copilot-task-head strong,
 .copilot-task-head small { display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.copilot-task-head strong { font-size: 11px; }
-.copilot-task-head small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+.copilot-task-head strong { font-size: var(--copilot-font-small); }
+.copilot-task-head small { margin-top: 2px; color: var(--muted); font-size: calc(var(--copilot-font-small) - 1px); }
 .copilot-task-actions { display: flex; align-items: center; gap: 5px; }
 .copilot-queue-note { flex: none; padding: 5px 12px; color: #765b16; background: #fff7dc; font-size: 10px; }
 
@@ -1605,7 +1608,7 @@ input:focus-visible {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #fff;
-  font-size: 11px;
+  font-size: var(--copilot-font);
 }
 .copilot-message.assistant {
   margin-bottom: 12px;
@@ -1615,9 +1618,9 @@ input:focus-visible {
 }
 .copilot-message.assistant .copilot-message-role { margin-bottom: 3px; color: var(--accent); }
 .copilot-message.user { margin-left: 26px; border-color: #bfd7c8; background: #f4fbf6; }
-.copilot-message.tool { padding: 5px 8px; color: var(--muted); background: #f1f3f1; font-size: 10px; }
-.copilot-message-role { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; font-weight: 700; }
-.copilot-message .ai-markdown { font-size: 11px; line-height: 17px; }
+.copilot-message.tool { padding: 5px 8px; color: var(--muted); background: #f1f3f1; font-size: var(--copilot-font-small); }
+.copilot-message-role { display: block; margin-bottom: 4px; color: var(--muted); font-size: var(--copilot-font-small); font-weight: 700; }
+.copilot-message .ai-markdown { font-size: var(--copilot-font); line-height: 1.6; }
 
 .copilot-empty {
   display: grid;
@@ -1627,14 +1630,27 @@ input:focus-visible {
   gap: 8px;
   padding: 20px;
   color: var(--quiet);
-  font-size: 11px;
+  font-size: var(--copilot-font-small);
   text-align: center;
 }
 
 .copilot-approval { flex: none; margin: 0 10px 8px; max-height: 185px; overflow: auto; }
 .copilot-composer { display: block; flex: none; padding: 8px 10px; border-top: 1px solid var(--line); }
+.copilot-model-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--quiet); }
+.copilot-model-bar select {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 0 22px 0 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: var(--ink);
+  background: #fff;
+  font-size: var(--copilot-font-small);
+}
+.copilot-model-bar select:disabled { color: var(--quiet); opacity: .6; cursor: default; }
 .copilot-input-wrap { position: relative; width: 100%; min-width: 0; }
-.copilot-composer textarea { display: block; width: 100%; min-width: 0; min-height: 58px; max-height: 120px; resize: vertical; padding: 8px 43px 8px 9px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; font: inherit; font-size: 11px; line-height: 16px; }
+.copilot-composer textarea { display: block; width: 100%; min-width: 0; min-height: 58px; max-height: 120px; resize: vertical; padding: 8px 43px 8px 9px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; font: inherit; font-size: var(--copilot-font); line-height: 1.55; }
 .copilot-send-button { position: absolute; right: 6px; bottom: 6px; display: grid; width: 30px; height: 30px; padding: 0; place-items: center; border: 1px solid var(--line-strong); border-radius: 5px; color: #fff; background: var(--accent); cursor: pointer; }
 .copilot-send-button:hover:not(:disabled) { background: var(--accent-hover); }
 .copilot-send-button.stop { border-color: #e8cdca; background: var(--danger); }
@@ -1642,7 +1658,7 @@ input:focus-visible {
 .copilot-send-button.pending { color: var(--accent); border-color: #bfd8c7; background: var(--accent-soft); }
 .copilot-send-button:disabled { cursor: default; opacity: .45; }
 .copilot-footer { display: flex; min-height: 43px; flex: none; align-items: center; padding: 6px 10px; gap: 7px; border-top: 1px solid var(--line); }
-.copilot-footer button { min-height: 30px; padding: 0 8px; font-size: 10px; }
+.copilot-footer button { min-height: 30px; padding: 0 8px; font-size: var(--copilot-font-small); }
 .copilot-footer-spacer { flex: 1; }
 .copilot-complete { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: 9px; }
 
@@ -1807,6 +1823,14 @@ input:focus-visible {
 .github-pr-list > header h2 {
   margin: 0;
   font-size: 15px;
+}
+
+/* 空列表提示：与「最近提交」标题文字齐头（标题内边距 + 图标 + 间距，实测 47px）。 */
+.github-empty-list {
+  padding: 16px 18px 18px 47px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .github-pr-list > header > span {
@@ -5767,6 +5791,23 @@ input:focus-visible {
   background: var(--surface-soft);
 }
 
+/* API 额度进度条：与授权范围节统一的标题行 + 剩余量可视化。 */
+.github-rate-bar {
+  height: 5px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #e3e9e5;
+}
+
+.github-rate-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
 .github-browser-login {
   display: grid;
   width: 100%;
@@ -6884,7 +6925,7 @@ input:focus-visible {
 .ai-markdown {
   min-width: 0;
   overflow-wrap: anywhere;
-  line-height: 18px;
+  line-height: 1.6;
 }
 
 .ai-markdown > :first-child {
@@ -6904,22 +6945,23 @@ input:focus-visible {
   margin: 5px 0;
 }
 
+/* 标题用相对单位：在 Copilot 等使用自适应字号的容器里随正文同步缩放。 */
 .ai-markdown h1,
 .ai-markdown h2,
 .ai-markdown h3,
 .ai-markdown h4 {
   margin: 8px 0 4px;
   color: #26352b;
-  font-size: 13px;
-  line-height: 18px;
+  font-size: 1.08em;
+  line-height: 1.45;
 }
 
 .ai-markdown h1 {
-  font-size: 15px;
+  font-size: 1.28em;
 }
 
 .ai-markdown h2 {
-  font-size: 14px;
+  font-size: 1.18em;
 }
 
 .ai-markdown ul,

@@ -1176,13 +1176,17 @@ function nodeEnvironment(): NodeJS.ProcessEnv {
   return env
 }
 
-/** ACP server 子进程环境：白名单 + DSH_HOME + DEEPSEEK_API_KEY（唯一注入的密钥，绝不落日志）。 */
+/** ACP server 子进程环境：白名单 + DSH_HOME + 密钥环境变量（唯一注入的密钥，绝不落日志）。 */
 export function acpEnvironment(
   dshHome: string,
   apiKey: string,
   baseEnvironment: NodeJS.ProcessEnv = process.env,
+  apiKeyEnvName: string = 'DEEPSEEK_API_KEY',
+  baseUrl?: string,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { DSH_HOME: dshHome, DEEPSEEK_API_KEY: apiKey, FORCE_COLOR: '0' }
+  const env: NodeJS.ProcessEnv = { DSH_HOME: dshHome, [apiKeyEnvName]: apiKey, FORCE_COLOR: '0' }
+  // 自定义 API 端点：deepseek adapter 支持 DEEPSEEK_BASE_URL 覆盖默认官方端点。
+  if (baseUrl) env.DEEPSEEK_BASE_URL = baseUrl
   for (const key of ACP_ENV_ALLOWLIST) {
     const actualKey = Object.keys(baseEnvironment).find(candidate => candidate.toLowerCase() === key.toLowerCase())
     const value = actualKey ? baseEnvironment[actualKey] : undefined

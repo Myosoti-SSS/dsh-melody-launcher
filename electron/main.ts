@@ -12,6 +12,7 @@ import { createCopilotSessionManager, type CopilotSessionManager } from './copil
 import { createDshMarketService, type DshMarketService } from './dsh-market'
 import { runCommand } from './command'
 import { readDeepSeekApiKey } from './credentials'
+import { resolveAgentApiForModel, resolveCopilotAgentApi } from './copilot-api'
 import { findInstalledDsh } from './dsh-install'
 import { buildPluginCommandArgs, createInstaller, validateLocalPluginDirectory, type Installer } from './installer'
 import { registerIpcHandlers } from './ipc'
@@ -387,6 +388,8 @@ function createServices(): Services {
     packageStoreRoot: path.join(userData, 'plugin-store'),
     readSettings: () => settings.read(),
     readApiKey: dshHome => readDeepSeekApiKey(dshHome),
+    resolveAgentApi: dshHome => resolveCopilotAgentApi(dshHome),
+    resolveAgentApiForModel: (dshHome, provider, model) => resolveAgentApiForModel(dshHome, provider, model),
     prepareNodeRuntime: () => prepareNodeRuntime('ai'),
     preparePnpmRuntime: nodeRuntime => preparePnpmRuntime('ai', nodeRuntime),
     emitEvent: event => events.aiSessionEvent(event),

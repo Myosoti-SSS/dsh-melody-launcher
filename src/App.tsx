@@ -1,5 +1,5 @@
 import { Layers3, LoaderCircle, PanelRight } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { LauncherApiProvider, resolveLauncherApi, useLauncherApi } from './api/client'
 import { AppHeader } from './components/AppHeader'
 import { LauncherHome } from './components/LauncherHome'
@@ -50,6 +50,8 @@ function LauncherShell() {
   const api = useLauncherApi()
   const store = useLauncherStore()
   const navigation = useNavigation(message => store.showToast({ kind: 'error', message }))
+  // 稳定的错误上报入口：避免每次渲染产生新引用，令子视图的拉取 effect 被无谓重跑。
+  const showError = useCallback((message: string) => store.showToast({ kind: 'error', message }), [store.showToast])
   // AI 可能改 profile（安装组件），任务结束时刷新一次；toast 复用 store 的唯一实例。
   const ai = useAiInstall(() => { void store.refreshProfile() }, store.showToast)
   const copilot = useCopilotSessions()
@@ -466,7 +468,7 @@ function LauncherShell() {
                     store.applyCatalogPresetInstall(result)
                     store.showToast({ kind: 'success', message: `Agent 预设 ${result.installedPreset.name} 已安装到 DSH 预设目录。` })
                   }}
-                  onError={message => store.showToast({ kind: 'error', message })}
+                  onError={showError}
                   onOpenRepository={url => void api.openExternal(url)}
                   onAiInstall={repo => { setCopilotOpen(true); void ai.start(repo.fullName, repo.defaultBranch) }}
                   onTrialPlugin={(packageName, profileName) => { void store.trialPlugin(packageName, profileName) }}
@@ -532,7 +534,7 @@ function LauncherShell() {
                   authStatus={store.githubAuthStatus}
                   onLogin={() => setGitHubAccountOpen(true)}
                   onOpen={url => void api.openExternal(url)}
-                  onError={message => store.showToast({ kind: 'error', message })}
+                  onError={showError}
                 />
               )}
               </div>
@@ -565,6 +567,7 @@ function LauncherShell() {
               open={copilotOpen}
               width={copilotWidth}
               onResizeStateChange={setCopilotResizing}
+              onError={showError}
               onWidthChange={width => {
                 const next = Math.max(320, Math.min(720, width))
                 setCopilotWidth(next)

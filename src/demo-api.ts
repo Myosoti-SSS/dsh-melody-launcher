@@ -1376,6 +1376,18 @@ export const demoApi: LauncherApi = {
     }, 600)
     return session
   },
+  listCopilotModels: async () => [
+    { provider: 'deepseek-official', model: 'deepseek-v4-flash', label: 'DeepSeek 官方 · deepseek-v4-flash', available: true },
+    { provider: 'ali', model: 'deepseek-v4-flash-0731', label: '阿里云 DashScope · deepseek-v4-flash-0731', available: true },
+  ],
+  setAiSessionModel: async (sessionId, model) => {
+    const session = demoAiSessions.find(item => item.id === sessionId)
+    if (!session) throw new Error('DSH Copilot 会话不存在。')
+    session.model = model || null
+    session.updatedAt = new Date().toISOString()
+    emitDemoSession({ kind: 'session-updated', session })
+    return session
+  },
   cancelAiSession: async sessionId => {
     const session = demoAiSessions.find(item => item.id === sessionId)
     if (session) {
