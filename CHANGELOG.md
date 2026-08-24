@@ -2,6 +2,17 @@
 
 本文件记录 DSH 旋律启动器（dsh-melody-launcher）的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本语义遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.3.7] - 2026-08-24
+
+### 新增功能
+
+- **系统托盘与后台运行**：新增系统托盘图标（悬停提示「DSH 旋律启动器」），左键单击唤起主窗口，右键菜单提供「显示主窗口」与「退出」。点击标题栏 × 或 Alt+F4 不再结束进程，仅隐藏到托盘继续后台运行（DSH 运行时等子进程不受影响）；首次隐藏时弹一次气泡提示。真正的退出只走托盘右键「退出」，复用既有 `before-quit` 清理链路（停止 DSH 运行时、回收子进程树、还原 AI 凭据锁），并在 `will-quit` 移除托盘图标避免通知区残留。
+- **单实例唤起**：启动时通过 `requestSingleInstanceLock()` 加锁，再次双击 exe 时新进程立即退出，已运行实例收到 `second-instance` 事件后唤起前台窗口（恢复最小化并短暂置顶抢焦点），不再多开。
+
+### 测试
+
+- 全套 569 项测试通过（47 项 e2e 依赖真实环境按惯例跳过），`tsc --noEmit` 与 `vite build` 通过。
+
 ## [v0.3.6] - 2026-08-24
 
 ### 新增功能
