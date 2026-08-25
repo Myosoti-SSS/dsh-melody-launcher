@@ -383,7 +383,9 @@ export function createDshMarketService(options: DshMarketOptions) {
     const spec = version ? `${packageName}@${version}` : packageName
     options.emitOutput('info', `dsh-market：${entry.name} 无法按 git 子包安装，改用 npm 源安装（${spec}）。`)
     progress(entry.name, 'resolving', `改用 npm 源安装（${packageName}）`, 22)
-    const retry = await runPlugin(entry.name, ['add', spec], entry.url)
+    // 跳过 postinstall：回退安装的目标是"下载并启用"，原生包（cloudflared/ssh2 等）
+    // 的 postinstall 常去 GitHub 拉二进制，大陆直连会被拖死。
+    const retry = await runPlugin(entry.name, ['add', spec, '--ignore-scripts'], entry.url)
     if (retry.exitCode !== 0) {
       options.emitOutput('error', `dsh-market：npm 回退安装失败（代码 ${retry.exitCode}）：${retry.output.slice(-600)}`)
       return false

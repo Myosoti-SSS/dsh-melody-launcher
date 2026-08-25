@@ -232,7 +232,7 @@ describe('dsh-market network & recovery paths', () => {
     expect(addRuns).toBe(2)
     expect(calls).toEqual([
       'plugin --profile web add github:a/b#path:/packages/demo',
-      'plugin --profile web add @linxin/demo@0.2.0',
+      'plugin --profile web add @linxin/demo@0.2.0 --ignore-scripts',
     ])
     await rm(root, { recursive: true, force: true })
   })
@@ -280,7 +280,7 @@ describe('dsh-market npm fallback search & activation', () => {
     expect(addRuns).toBe(2)
     expect(calls).toEqual([
       'plugin --profile web add github:a/b#path:/packages/demo',
-      'plugin --profile web add @linxin/demo',
+      'plugin --profile web add @linxin/demo --ignore-scripts',
     ])
     await rm(root, { recursive: true, force: true })
   })
