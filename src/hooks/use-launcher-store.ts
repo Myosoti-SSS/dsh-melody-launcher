@@ -27,6 +27,7 @@ import type {
   PluginTrialResult,
   PresetInstallResult,
   ProfileState,
+  RecommendedWebUiStatus,
   RepositoryInstallResult,
   RuntimeOutput,
   RuntimeEnvironmentState,
@@ -54,6 +55,7 @@ export function useLauncherStore() {
   const { busy, run } = useAsyncAction(showToast)
 
   const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [recommendedWebUi, setRecommendedWebUi] = useState<RecommendedWebUiStatus | null>(null)
   const [profile, setProfile] = useState<ProfileState | null>(null)
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME_STATE)
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
@@ -248,23 +250,8 @@ export function useLauncherStore() {
       api.onInstallProgress(handleInstallProgress),
       api.onCatalogAnalysisProgress(handleCatalogAnalysisProgress),
       api.onDshMarketProgress(progress => {
-        if (progress.name) {
-          // 市场里的插件级操作（安装/更新/卸载）是真实动作，参与活动检测与进度展示。
-          handleInstallProgress({
-            repository: `dsh-market:${progress.name}`,
-            kind: 'plugin',
-            phase: progress.phase === 'loading' || progress.phase === 'checking'
-              ? 'preparing'
-              : progress.phase === 'resolving' ? 'resolving' : progress.phase,
-            percent: progress.percent ?? 0,
-            message: progress.message,
-            downloadedBytes: progress.downloadedBytes ?? undefined,
-            totalBytes: progress.totalBytes ?? undefined,
-          })
-          return
-        }
-        // 目录同步/更新检查：只写日志行，不进入安装活动状态，
-        // 避免切到市场页时灵动岛被自动弹出、Profile 切换短暂被锁。
+        // 市场的插件级操作（安装/更新/卸载）与目录同步一样，只写日志行，
+        // 不进入安装活动状态：避免触发灵动岛自动弹出、Profile 切换/启动被短时锁定。
         if (typeof progress.message === 'string' && progress.message.trim()) {
           appendRuntimeLog({
             channel: 'plugin',
@@ -597,6 +584,32 @@ export function useLauncherStore() {
     setInstalledApplications(next.installedApplications)
     return true
   }, [adoptProfile, api, installedApplications, run])
+
+  const readRecommendedWebUi = useCallback(async (): Promise<RecommendedWebUiStatus> => {
+    const statusValue = await api.recommendedWebUiStatus()
+    setRecommendedWebUi(statusValue)
+    return statusValue
+  }, [api])
+
+  const installRecommendedWebUi = useCallback(async (options: { suspendOthers?: boolean }): Promise<boolean> => {
+    const result = await run('recommended-web-ui', () => api.recommendedWebUiInstall(options), {
+      success: options.suspendOthers
+        ? '官方推荐整合包已安装并启用，其它插件暂不启用。'
+        : '官方推荐整合包已安装并启用。',
+    })
+    if (result) {
+      setRecommendedWebUi(result)
+      await refreshProfile()
+    }
+    return result !== undefined
+  }, [api, refreshProfile, run])
+
+  const markRecommendedWebUiPrompted = useCallback(async (): Promise<void> => {
+    if (!settings || settings.recommendedWebUiPrompted) return
+    const next = { ...settings, recommendedWebUiPrompted: true }
+    await api.saveSettings(next)
+    setSettings(next)
+  }, [api, settings])
 
   const toggleSkill = useCallback(async (skill: InstalledSkill, enabled: boolean) => {
     const next = await run(`skill:${skill.name}`, () => api.toggleSkill(skill.name, enabled), {
@@ -1000,6 +1013,10 @@ export function useLauncherStore() {
       setGitHubAuthStatus(next)
     },
     togglePlugin,
+    recommendedWebUi,
+    readRecommendedWebUi,
+    installRecommendedWebUi,
+    markRecommendedWebUiPrompted,
     toggleSkill,
     toggleApplication,
     uninstallApplication,

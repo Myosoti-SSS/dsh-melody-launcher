@@ -1,4 +1,4 @@
-import { formatCommandLine, spawnCommand } from './process'
+import { formatCommandLine, killChildProcessTree, spawnCommand } from './process'
 
 /**
  * 「启动子进程 → 转发输出 → 收集输出 → 等待退出码」这套流程原本在
@@ -20,6 +20,8 @@ export interface CollectOptions {
   onOutput?: (text: string, level: OutputLevel) => void
   /** 保留的输出上限（字符数），只保留末尾部分。 */
   captureLimit?: number
+  /** 超过该时长（毫秒）后终止整个子进程树，并以 exitCode -1 返回。 */
+  timeoutMs?: number
 }
 
 export interface CommandOptions extends CollectOptions {
@@ -51,8 +53,20 @@ export function collectCommandOutput(child: CommandProcess, options: CollectOpti
   child.stderr.on('data', handle('error'))
 
   return new Promise<CommandResult>((resolve, reject) => {
-    child.once('error', reject)
-    child.once('exit', code => resolve({ exitCode: code ?? 1, output }))
+    let didTimeout = false
+    const timer = options.timeoutMs && options.timeoutMs > 0
+      ? setTimeout(() => {
+          didTimeout = true
+          output = `${output}[命令执行超时（${Math.round(options.timeoutMs! / 1000)} 秒），已自动终止]\n`.slice(-limit)
+          void killChildProcessTree(child as unknown as Parameters<typeof killChildProcessTree>[0])
+        }, options.timeoutMs)
+      : undefined
+    const finish = () => { if (timer) clearTimeout(timer) }
+    child.once('error', error => { finish(); reject(error) })
+    child.once('exit', code => {
+      finish()
+      resolve({ exitCode: didTimeout ? -1 : code ?? 1, output })
+    })
   })
 }
 

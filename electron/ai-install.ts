@@ -41,7 +41,9 @@ import {
 import { prepareAiRepositorySource, type AiRepositorySource, type SubmoduleInfo } from './ai-repository-source'
 import { collectCommandOutput } from './command'
 import type { NodeRuntime, PnpmRuntime } from './node-runtime'
-import { formatCommandLine, spawnCommand, withExecutableDirectoryOnPath } from './process'
+import { formatCommandLine, killChildProcessTree, spawnCommand, withExecutableDirectoryOnPath } from './process'
+
+export { killChildProcessTree }
 
 // ---------------------------------------------------------------------------
 // 常量：ACP 运行时与超时
@@ -1316,7 +1318,11 @@ export async function prepareAcpRuntime(
   signal?: AbortSignal,
 ): Promise<void> {
   if (signal?.aborted) throw new Error('AI 任务已取消。')
-  if (await isAcpRuntimeReady(acpRuntimeRoot)) return
+  if (await isAcpRuntimeReady(acpRuntimeRoot)) {
+    await patchAcpLlmDeepseek(acpRuntimeRoot)
+    await patchAcpStreaming(acpRuntimeRoot)
+    return
+  }
   await mkdir(acpRuntimeRoot, { recursive: true })
   await atomicWrite(path.join(acpRuntimeRoot, 'package.json'), '{"name":"dsh-acp-runtime","private":true}\n')
   const specifiers = ACP_RUNTIME_PACKAGES.map(([name, version]) => `${name}@${version}`)
@@ -1352,6 +1358,125 @@ export async function prepareAcpRuntime(
   if (result.exitCode !== 0) {
     throw new Error(formatAcpRuntimeInstallFailure(result.exitCode, result.output))
   }
+  await patchAcpLlmDeepseek(acpRuntimeRoot)
+  await patchAcpStreaming(acpRuntimeRoot)
+}
+
+/**
+ * 修补 @deepseek-ai/dsh-llm-deepseek 的流式 tool_call 合并逻辑。
+ *
+ * rc.8 适配器按 DeepSeek 官方线格式编写（tool_call 的 name/id 只在首个
+ * delta 出现）。自定义 API（如阿里 DashScope 兼容模式）被映射到该适配器后，
+ * 后续 delta 会重复携带 `function.name: null`（`null !== void 0` 为真），把
+ * 首分片捕获的真实工具名覆盖成 null，收尾序列化时兜底成 `""`，工具执行就报
+ * `unknown tool ""`。这里把两处「后到覆盖」改为「首个真实值生效」。
+ * 幂等：已补丁、文件缺失或版本不含原文时直接返回，不重复写。
+ */
+export async function patchAcpLlmDeepseek(acpRuntimeRoot: string): Promise<boolean> {
+  const file = path.join(acpRuntimeRoot, 'node_modules', '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js')
+  if (!existsSync(file)) return false
+  const source = await readFile(file, 'utf8')
+  const fixes: ReadonlyArray<readonly [before: string, after: string]> = [
+    ['if (call.id !== void 0) block.callId = call.id;', 'if (call.id) block.callId = call.id;'],
+    ['if (call.function?.name !== void 0) block.name = call.function.name;', 'if (call.function?.name) block.name = call.function.name;'],
+  ]
+  let next = source
+  for (const [before, after] of fixes) {
+    if (next.includes(after)) continue
+    if (!next.includes(before)) continue
+    next = next.split(before).join(after)
+  }
+  if (next === source) return false
+  await writeFile(file, next, 'utf8')
+  return true
+}
+
+/** dsh-acp 事件处理块原文（含补丁前的精准缩进），供幂等补丁与单测使用。 */
+export const ACP_STREAM_BEFORE = [
+  '\t\t\tif (event.type === "assistant/message") {',
+  '\t\t\t\tconst inflight = record.inflight?.turn === event.data.turn ? record.inflight : void 0;',
+  '\t\t\t\trecord.outputTail = record.outputTail.then(async () => {',
+  '\t\t\t\t\tfor (const block of event.data.message.content) {',
+  '\t\t\t\t\t\tconst content = await assistantBlockToAcp(ctx, block);',
+  '\t\t\t\t\t\tif (content === void 0) continue;',
+  '\t\t\t\t\t\tawait notify({',
+  '\t\t\t\t\t\t\tsessionId: record.agent.session.id,',
+  '\t\t\t\t\t\t\tupdate: {',
+  '\t\t\t\t\t\t\t\tsessionUpdate: "agent_message_chunk",',
+  '\t\t\t\t\t\t\t\tcontent',
+  '\t\t\t\t\t\t\t}',
+  '\t\t\t\t\t\t});',
+  '\t\t\t\t\t}',
+  '\t\t\t\t}).catch((error) => {',
+  '\t\t\t\t\tconst failure = error;',
+  '\t\t\t\t\tif (inflight !== void 0) inflight.outputError ??= failure;',
+  '\t\t\t\t\tlogger.warn(`acp: assistant output conversion failed: ${errorChain(error)}`);',
+  '\t\t\t\t});',
+  '\t\t\t}',
+].join('\n')
+
+const ACP_STREAM_AFTER = [
+  '\t\t\tif (event.type === "assistant/chunk") {',
+  '\t\t\t\tconst streamKey = record.agent.session.id + ":" + String(event.data.turn) + ":" + String(event.data.step);',
+  '\t\t\t\tconst chunkBlock = event.data?.chunk;',
+  '\t\t\t\tlet chunkContent = void 0;',
+  '\t\t\t\tif (chunkBlock?.type === "text-delta" && typeof chunkBlock.text === "string" && chunkBlock.text.length > 0) {',
+  '\t\t\t\t\tchunkContent = { type: "text", text: chunkBlock.text };',
+  '\t\t\t\t} else if (chunkBlock?.type === "reasoning-delta" && typeof chunkBlock.text === "string" && chunkBlock.text.length > 0) {',
+  '\t\t\t\t\tchunkContent = { type: "reasoning", text: chunkBlock.text };',
+  '\t\t\t\t}',
+  '\t\t\t\tif (chunkContent !== void 0 && record.inflight?.turn === event.data.turn) {',
+  '\t\t\t\t\tconst inflight = record.inflight;',
+  '\t\t\t\t\t(record.streamedChunkKeys ??= new Set()).add(streamKey);',
+  '\t\t\t\t\trecord.outputTail = record.outputTail.then(async () => {',
+  '\t\t\t\t\t\tawait notify({',
+  '\t\t\t\t\t\t\tsessionId: record.agent.session.id,',
+  '\t\t\t\t\t\t\tupdate: { sessionUpdate: "agent_message_chunk", content: chunkContent }',
+  '\t\t\t\t\t\t});',
+  '\t\t\t\t\t}).catch((error) => {',
+  '\t\t\t\t\t\tconst failure = error;',
+  '\t\t\t\t\t\tif (inflight !== void 0) inflight.outputError ??= failure;',
+  '\t\t\t\t\t});',
+  '\t\t\t\t}',
+  '\t\t\t} else if (event.type === "assistant/message") {',
+  '\t\t\t\tconst inflight = record.inflight?.turn === event.data.turn ? record.inflight : void 0;',
+  '\t\t\t\trecord.outputTail = record.outputTail.then(async () => {',
+  '\t\t\t\t\t// [dsh-launcher] 已通过 assistant/chunk 增量推送时跳过整条消息，避免重复。',
+  '\t\t\t\t\tif ((record.streamedChunkKeys ?? new Set()).has(record.agent.session.id + ":" + String(event.data.turn) + ":" + String(event.data.step))) return;',
+  '\t\t\t\t\tfor (const block of event.data.message.content) {',
+  '\t\t\t\t\t\tconst content = await assistantBlockToAcp(ctx, block);',
+  '\t\t\t\t\t\tif (content === void 0) continue;',
+  '\t\t\t\t\t\tawait notify({',
+  '\t\t\t\t\t\t\tsessionId: record.agent.session.id,',
+  '\t\t\t\t\t\t\tupdate: {',
+  '\t\t\t\t\t\t\t\tsessionUpdate: "agent_message_chunk",',
+  '\t\t\t\t\t\t\t\tcontent',
+  '\t\t\t\t\t\t\t}',
+  '\t\t\t\t\t\t});',
+  '\t\t\t\t\t}',
+  '\t\t\t\t}).catch((error) => {',
+  '\t\t\t\t\tconst failure = error;',
+  '\t\t\t\t\tif (inflight !== void 0) inflight.outputError ??= failure;',
+  '\t\t\t\t\tlogger.warn(`acp: assistant output conversion failed: ${errorChain(error)}`);',
+  '\t\t\t\t});',
+  '\t\t\t}',
+].join('\n')
+
+/**
+ * 修补 dsh-acp，把 agent 的逐块 `assistant/chunk` 增量转发成 `agent_message_chunk`
+ * 通知。agent-loop 会为 LLM 流的每个分片 append assistant/chunk，但 dsh-acp 只监听
+ * 结尾的 assistant/message，导致启动器一次拿到整条文本、看不到流式输出。补丁：
+ *   - 监听 assistant/chunk，将 text-delta / reasoning-delta 转成 ACP content 增量推送；
+ *   - 已推送过 chunk 的同 turn/step 的整条 assistant/message 跳过，避免正文重复。
+ * 幂等：已含补丁标记时直接返回。
+ */
+export async function patchAcpStreaming(acpRuntimeRoot: string): Promise<boolean> {
+  const file = path.join(acpRuntimeRoot, 'node_modules', '@deepseek-ai', 'dsh-acp', 'lib', 'index.js')
+  if (!existsSync(file)) return false
+  const source = await readFile(file, 'utf8')
+  if (!source.includes(ACP_STREAM_BEFORE) || source.includes('streamedChunkKeys')) return false
+  await writeFile(file, source.split(ACP_STREAM_BEFORE).join(ACP_STREAM_AFTER), 'utf8')
+  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -1496,27 +1621,6 @@ async function abortTask(current: ActiveTask, reason: string): Promise<void> {
     }
   }
   current.acp?.close()
-}
-
-export async function killChildProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null) return
-  if (process.platform === 'win32' && child.pid) {
-    const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true })
-    await new Promise<void>(resolve => {
-      const timeout = setTimeout(() => {
-        killer.kill()
-        resolve()
-      }, 5_000)
-      const finish = () => {
-        clearTimeout(timeout)
-        resolve()
-      }
-      killer.once('error', finish)
-      killer.once('exit', finish)
-    })
-  } else {
-    child.kill('SIGTERM')
-  }
 }
 
 export function createAiInstaller(options: AiInstallerOptions): AiInstaller {

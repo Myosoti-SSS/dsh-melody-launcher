@@ -1,4 +1,4 @@
-import { Check, Folder, LoaderCircle, Palette, Settings, X } from 'lucide-react'
+import { Check, Download, Folder, Globe, LoaderCircle, Palette, Settings, X } from 'lucide-react'
 import { useState } from 'react'
 import { useLauncherApi } from '../../api/client'
 import type { AppSettings, UiTheme } from '../../types'
@@ -10,6 +10,8 @@ interface SettingsDialogProps {
   busy: boolean
   onClose: () => void
   onSave: (settings: AppSettings) => void
+  /** 一键下载并启用官方推荐整合包（DSH Web UI）。 */
+  onDownloadRecommendedWebUi?: () => void
 }
 
 const UI_THEMES: Array<{ id: UiTheme; label: string }> = [
@@ -19,7 +21,7 @@ const UI_THEMES: Array<{ id: UiTheme; label: string }> = [
   { id: 'graphite', label: '石墨' },
 ]
 
-export function SettingsDialog({ settings, busy, onClose, onSave }: SettingsDialogProps) {
+export function SettingsDialog({ settings, busy, onClose, onSave, onDownloadRecommendedWebUi }: SettingsDialogProps) {
   const api = useLauncherApi()
   const [draft, setDraft] = useState(settings)
   // 参数在界面上是一整行文本，保存时才切成数组。
@@ -66,6 +68,13 @@ export function SettingsDialog({ settings, busy, onClose, onSave }: SettingsDial
           <label className="check-field"><input type="checkbox" checked={Boolean(draft.aiDeveloperMode)} onChange={event => setDraft({ ...draft, aiDeveloperMode: event.target.checked })} /><span><strong>开发者模式</strong><small>允许使用下面的内容替换 Copilot 基础 persona。</small></span></label>
           <label className="form-field copilot-prompt-field"><span>AI 分析提示词</span><textarea rows={7} value={draft.aiPrompt ?? ''} placeholder="留空使用内置 DSH Copilot 提示词。" onChange={event => setDraft({ ...draft, aiPrompt: event.target.value })} /><small>{draft.aiDeveloperMode ? '当前：替换基础 persona；固定安全规则仍会自动追加。' : '当前：作为附加开发指引追加到内置提示词。'}</small></label>
           <div className="settings-inline-actions"><button type="button" className="secondary-button" onClick={() => setDraft({ ...draft, aiPrompt: '' })}>恢复默认提示词</button></div>
+          <div className="form-section divided"><h3>网络</h3><p>默认使用国内 npm 镜像（npmmirror），并自动跟随 Windows 系统代理；留空即可。</p></div>
+          <label className="form-field"><span>npm 镜像</span><input value={draft.network?.npmRegistry ?? ''} placeholder="https://registry.npmmirror.com" onChange={event => setDraft({ ...draft, network: { ...draft.network, npmRegistry: event.target.value } })} /></label>
+          <label className="form-field"><span>代理地址</span><input value={draft.network?.proxy ?? ''} placeholder="留空自动探测系统代理；如 http://127.0.0.1:7890" onChange={event => setDraft({ ...draft, network: { ...draft.network, proxy: event.target.value } })} /></label>
+          <label className="form-field"><span>GitHub 镜像</span><input value={draft.network?.githubMirror ?? ''} placeholder="可选，留空不启用；如 https://gh-proxy.com" onChange={event => setDraft({ ...draft, network: { ...draft.network, githubMirror: event.target.value } })} /></label>
+          <label className="check-field"><Globe size={15} /><small>直连 GitHub 不稳时，可配置代理或 GitHub 镜像后重试 DSH Market 安装；npm 安装始终优先镜像。</small></label>
+          <div className="form-section divided"><h3>官方推荐</h3><p>一键安装官方推荐的「DSH Web UI」全家桶整合包，获得更佳使用体验。</p></div>
+          {onDownloadRecommendedWebUi && <div className="recommended-action-row"><button type="button" className="primary-command" disabled={busy} onClick={onDownloadRecommendedWebUi}><Download size={16} />下载官方推荐整合包 DSH Web UI</button><small>可能与您已安装的其它插件冲突，建议首次尝试只启用这一个插件（可在启动项管理中调整）。</small></div>}
         </div>
         <footer><button type="button" className="secondary-button" onClick={onClose}>取消</button><button type="button" className="primary-command" disabled={busy} onClick={() => onSave({ ...draft, launchArgs: argsText.trim().split(/\s+/).filter(Boolean) })}>{busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}保存设置</button></footer>
       </section>

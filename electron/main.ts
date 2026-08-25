@@ -14,10 +14,11 @@ import { runCommand } from './command'
 import { readDeepSeekApiKey } from './credentials'
 import { resolveAgentApiForModel, resolveCopilotAgentApi } from './copilot-api'
 import { findInstalledDsh } from './dsh-install'
-import { buildPluginCommandArgs, createInstaller, validateLocalPluginDirectory, type Installer } from './installer'
+import { buildPluginCommandArgs, createInstaller, syncProfilePnpmConfig, validateLocalPluginDirectory, type Installer } from './installer'
 import { registerIpcHandlers } from './ipc'
 import { createLauncherUpdater, type LauncherUpdater } from './launcher-update'
 import { createGitHubAuthService, type GitHubAuthService } from './github-auth'
+import { buildNetworkEnvironment } from './proxy'
 import {
   ensureNodeRuntime,
   ensurePnpmRuntime,
@@ -34,6 +35,7 @@ import { readPluginReceipts, recordPluginInstall } from './plugin-receipts'
 import { configureProcessTracker, shutdownTrackedProcesses, withExecutableDirectoryOnPath } from './process'
 import { createProcessSupervisor, type ProcessSupervisor } from './process-supervisor'
 import { readProfile, reorderPlugins, togglePlugin } from './profile'
+import { createRecommendedWebUiService, type RecommendedWebUiService } from './recommended-web-ui'
 import { consolidatePluginPool, createProfileService, ensureProfileWorkspaceConfig, migrateLegacyPacks, type ProfileService } from './profile-service'
 import { installPresetFromDirectory } from './preset-install'
 import { installSkillFromDirectory } from './skill-install'
@@ -79,6 +81,7 @@ interface Services {
   applicationAddons: ApplicationAddonManager
   catalogSync: CatalogSyncService
   dshMarket: DshMarketService
+  recommendedWebUi: RecommendedWebUiService
   runtimeVersions: RuntimeVersionService
   profiles: ProfileService
   profilePoolReady: Promise<void>
@@ -179,6 +182,7 @@ function createServices(): Services {
     openExternal: url => void shell.openExternal(url),
     resolveApplicationLaunchPlan: () => applicationAddons.launchPlan(),
     legacyCredentialsBackupRoot: path.join(userData, 'dsh-credentials-compat'),
+    packageStoreRoot: path.join(userData, 'plugin-store'),
   })
   const profileService = createProfileService({
     dshHome: () => settings.read().then(value => value.dshHome),
@@ -282,6 +286,7 @@ function createServices(): Services {
             offlineInstallAttempted = true
             offlineNode ??= await prepareNodeRuntime('plugin')
             offlinePnpm ??= await preparePnpmRuntime('plugin', offlineNode)
+            await syncProfilePnpmConfig(targetProfileDir, buildNetworkEnvironment(current).npmRegistry, pluginStoreRoot)
             const result = await runCommand(offlinePnpm.executable, ['install', '--dir', targetProfileDir, '--offline', '--no-frozen-lockfile', '--config.auto-install-peers=false', '--store-dir', pluginStoreRoot], {
               cwd: targetProfileDir,
               env: withExecutableDirectoryOnPath(offlinePnpm.executable, withExecutableDirectoryOnPath(offlineNode.node, {
@@ -360,6 +365,13 @@ function createServices(): Services {
     emitProgress: progress => events.installProgress(progress),
     isRuntimeRunning: () => runtime.isRunning(),
     githubFetch: githubAuth.fetch,
+  })
+
+  // 官方推荐整合包（DSH Web UI 全家桶）：用 installer 装 latest，
+  // 避免依赖市场目录与 git 子路径回退。
+  const recommendedWebUi = createRecommendedWebUiService({
+    readSettings: () => settings.read(),
+    installer,
   })
 
   // This service deliberately does not use the unified resource-market
@@ -561,7 +573,7 @@ function createServices(): Services {
     if (result.dependencies > 0) events.output('plugin', 'info', `已将 ${result.dependencies} 个 Profile 插件依赖归并到共享插件池。`)
   }).catch(error => events.output('plugin', 'error', `旧整合包/插件池迁移失败：${error instanceof Error ? error.message : String(error)}`))
 
-  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager: packManager!, githubAuth, applicationAddons, catalogSync, dshMarket, runtimeVersions, profiles: profileService, profilePoolReady }
+  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager: packManager!, githubAuth, applicationAddons, catalogSync, dshMarket, recommendedWebUi, runtimeVersions, profiles: profileService, profilePoolReady }
 }
 
 function openMainWindow(): void {

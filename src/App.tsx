@@ -14,6 +14,7 @@ import { CreatePackDialog } from './components/dialogs/CreatePackDialog'
 import { PackInstallDialog } from './components/dialogs/PackInstallDialog'
 import { ProfileRepositoryImportDialog } from './components/dialogs/ProfileRepositoryImportDialog'
 import { SettingsDialog } from './components/dialogs/SettingsDialog'
+import { RecommendedWebUiDialog } from './components/dialogs/RecommendedWebUiDialog'
 import { UpdateDialog } from './components/dialogs/UpdateDialog'
 import { DSH_REPOSITORY } from './constants'
 import { useAiInstall } from './hooks/use-ai-install'
@@ -100,6 +101,8 @@ function LauncherShell() {
     }
   })
   const [confirmingRemoval, setConfirmingRemoval] = useState<ManagedPlugin | null>(null)
+  const [recommendedPrompt, setRecommendedPrompt] = useState<'new' | 'existing' | null>(null)
+  const recommendedChoiceRef = useRef<((accept: boolean) => void) | null>(null)
   const managerVisited = useRef(false)
   const discoverVisited = useRef(false)
   const previousManagerViewRef = useRef(navigation.view)
@@ -121,7 +124,7 @@ function LauncherShell() {
   // installer is still active; only an in-flight Profile switch disables it.
   const profileSwitcherLocked = store.busy?.startsWith('profile-switch:') === true
   const runtimeBusy = store.busy === BUSY.runtime || installingResource || installingApplication || Boolean(store.busy?.startsWith('application'))
-  const runtimeActivity = Boolean(store.runtime.running || isInstallProgressActive(store.installProgress))
+  const runtimeActivity = Boolean(store.runtime.running)
   const latestRuntimeLog = store.logs.at(-1)
   const runtimeUpdateKey = [
     store.busy ?? '',
@@ -144,8 +147,6 @@ function LauncherShell() {
   ].join('|')
   const runtimeActivityRef = useRef(false)
   const runtimeActivityInitializedRef = useRef(false)
-  const runtimeLogRef = useRef<number | null>(null)
-  const runtimeLogInitializedRef = useRef(false)
 
   const revealRuntimeDrawer = () => {
     if (runtimeDrawerMode === 'expanded') return
@@ -182,22 +183,6 @@ function LauncherShell() {
     runtimeActivityRef.current = runtimeActivity
   }, [runtimeActivity, store.loading])
 
-  // Some plugin operations stream directly to the terminal without creating an
-  // InstallProgress record. Treat a new process-output entry as activity as well —
-  // keyed on the real-output counter, so catalog/market sync's synthetic progress
-  // lines (also written to the log list) don't pop the drawer on page switch.
-  useEffect(() => {
-    if (store.loading) return
-    const version = store.processLogCount
-    if (!runtimeLogInitializedRef.current) {
-      runtimeLogInitializedRef.current = true
-      runtimeLogRef.current = version
-      return
-    }
-    if (version !== runtimeLogRef.current) revealRuntimeDrawer()
-    runtimeLogRef.current = version
-  }, [store.processLogCount, store.loading])
-
   useEffect(() => {
     if (!runtimeDrawerAutoOpened || runtimeDrawerMode !== 'half') return
     const timer = window.setTimeout(() => {
@@ -218,6 +203,33 @@ function LauncherShell() {
   }
 
   const toggleRuntime = async () => {
+    const needsInstallation = !store.runtime.running && !store.dshInstallation.installed && !store.activeRuntimeReplacement
+    if (!settings.recommendedWebUiPrompted) {
+      const recommended = await store.readRecommendedWebUi()
+      const kind: 'new' | 'existing' | null = needsInstallation
+        ? 'new'
+        : store.runtime.running ? null : 'existing'
+      if (!recommended.installed && kind && !store.busy) {
+        const accept = await new Promise<boolean>(resolve => {
+          recommendedChoiceRef.current = resolve
+          setRecommendedPrompt(kind)
+        })
+        setRecommendedPrompt(null)
+        recommendedChoiceRef.current = null
+        await store.markRecommendedWebUiPrompted()
+        if (!accept) {
+          if (kind === 'new') return
+        } else if (kind === 'new') {
+          // 新用户：先安装 DSH，再安装官方推荐整合包，本次不自动启动。
+          await store.toggleRuntime()
+          await store.installRecommendedWebUi({ suspendOthers: false })
+          return
+        } else {
+          // 老用户：先安装并启用推荐整合包（临时停用其它插件），随后照常启动。
+          await store.installRecommendedWebUi({ suspendOthers: true })
+        }
+      }
+    }
     if (await store.toggleRuntime() === 'started') revealRuntimeDrawer()
   }
 
@@ -420,6 +432,8 @@ function LauncherShell() {
                   onRefresh={() => { void store.refreshProfile(); void store.refreshSecondaryResources() }}
                   onBrowse={() => navigation.setView('discover')}
                   onOpenRepository={url => void api.openExternal(url)}
+                  onOpenPluginFolder={packageName => { void api.openProfilePluginFolder(packageName) }}
+                  onInstallRecommendedWebUi={() => { void store.installRecommendedWebUi({ suspendOthers: false }) }}
                   onToggleRuntime={toggleRuntime}
                   onOpenHarness={openHarness}
                   onOpenRuntimeSettings={() => changeRuntimeDrawerMode('expanded')}
@@ -599,6 +613,7 @@ function LauncherShell() {
           busy={store.busy === BUSY.settings || profileMutationLocked}
           onClose={() => setSettingsOpen(false)}
           onSave={async next => { if (await store.saveSettings(next)) setSettingsOpen(false) }}
+          onDownloadRecommendedWebUi={() => { void store.installRecommendedWebUi({ suspendOthers: false }) }}
         />
       )}
       {credentialOpen && (
@@ -631,6 +646,13 @@ function LauncherShell() {
             setConfirmingRemoval(null)
             void store.uninstallPlugin(plugin)
           }}
+        />
+      )}
+      {recommendedPrompt && (
+        <RecommendedWebUiDialog
+          kind={recommendedPrompt}
+          onDownload={() => recommendedChoiceRef.current?.(true)}
+          onDismiss={() => recommendedChoiceRef.current?.(false)}
         />
       )}
       {createPackOpen && packInstall.phase === 'idle' && (

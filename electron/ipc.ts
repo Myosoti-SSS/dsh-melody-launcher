@@ -1,9 +1,11 @@
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { existsSync } from 'node:fs'
 import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC, IPC_EVENTS } from '../src/constants'
 import type { AiSessionCreateInput, ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, PresetInstallRequest, SkillInstallRequest, WindowMode, ProfileRepositoryImportMode, PackPluginEntry } from '../src/types'
 import type { ApplicationAddonManager } from './application-addons'
+import type { RecommendedWebUiService } from './recommended-web-ui'
 import { isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
 import { listCustomApiProviders, removeCustomApiProvider, saveCustomApiProvider } from './custom-api'
@@ -59,6 +61,7 @@ export interface IpcDependencies {
   applicationAddons: ApplicationAddonManager
   catalogSync: CatalogSyncService
   dshMarket: DshMarketService
+  recommendedWebUi: RecommendedWebUiService
   runtimeVersions: RuntimeVersionService
   profiles: ProfileService
   getWindow: () => BrowserWindow | null
@@ -66,7 +69,7 @@ export interface IpcDependencies {
 }
 
 export function registerIpcHandlers(deps: IpcDependencies): void {
-  const { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager, githubAuth, applicationAddons, catalogSync, dshMarket, runtimeVersions, profiles } = deps
+  const { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager, githubAuth, applicationAddons, catalogSync, dshMarket, recommendedWebUi, runtimeVersions, profiles } = deps
   const linkedComponents = createLinkedComponentController({
     readSettings: () => settings.read(),
     readProfile,
@@ -85,6 +88,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     if (copilot.isMutationBusy()) throw new Error('DSH Copilot 修改任务进行中，请等待完成。')
     if (applicationAddons.isBusy()) throw new Error('应用加载项操作进行中，请等待完成。')
     if (dshMarket.isBusy()) throw new Error('DSH Market 插件操作进行中，请等待完成。')
+    if (recommendedWebUi.isBusy()) throw new Error('官方推荐整合包安装进行中，请等待完成。')
     if (runtimeVersions.isBusy()) throw new Error('运行环境版本操作进行中，请等待完成。')
   }
 
@@ -548,6 +552,11 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     return dshMarket.toggle(payload.name, Boolean(payload.enabled))
   })
   ipcMain.handle(IPC.dshMarketUpdates, (_event, force?: boolean) => dshMarket.updates(Boolean(force)))
+  ipcMain.handle(IPC.recommendedStatus, () => recommendedWebUi.status())
+  ipcMain.handle(IPC.recommendedInstall, async (_event, payload: { suspendOthers?: boolean }) => {
+    assertProfileMutationAvailable()
+    return recommendedWebUi.ensureInstall({ suspendOthers: Boolean(payload?.suspendOthers) })
+  })
 
   ipcMain.handle(IPC.pluginsInstall, async (_event, request: string | PluginInstallRequest) => {
     assertProfileMutationAvailable()
@@ -930,6 +939,13 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
   ipcMain.handle(IPC.openPath, async (_event, target: string) => {
     if (!path.isAbsolute(target)) throw new Error('路径无效。')
+    await shell.openPath(target)
+  })
+  ipcMain.handle(IPC.openProfilePluginFolder, async (_event, packageName: string) => {
+    if (typeof packageName !== 'string' || !isSafePackageName(packageName)) throw new Error('插件名称无效。')
+    const current = await settings.read()
+    const target = path.join(current.dshHome, 'profiles', current.profileName, 'node_modules', ...packageName.split('/'))
+    if (!existsSync(target)) throw new Error(`插件目录不存在：${target}`)
     await shell.openPath(target)
   })
 }

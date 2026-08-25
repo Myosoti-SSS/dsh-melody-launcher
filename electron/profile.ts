@@ -171,7 +171,7 @@ export async function readProfile(dshHome: string, profileName: string, pluginRe
   }
 }
 
-async function updateBundles(
+export async function updateBundles(
   dshHome: string,
   profileName: string,
   transform: (bundles: string[], manifest: PackageManifest) => string[],

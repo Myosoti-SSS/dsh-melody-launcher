@@ -147,6 +147,7 @@ export function LauncherHome({
 
       <footer className="launcher-footer">
         <span>DSH Launcher {packageMetadata.version}</span>
+        <span>官方用户QQ群：625155044</span>
         <span>{profile.initialized ? `${profile.plugins.length} 个插件` : 'Profile 等待初始化'}</span>
       </footer>
     </div>

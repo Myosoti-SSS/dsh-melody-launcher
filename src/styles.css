@@ -864,6 +864,8 @@ input:focus-visible {
   grid-template-columns: max-content minmax(0, 1fr) minmax(0, max-content) max-content;
   align-items: center;
   gap: 8px;
+  /* 与右侧「停止 DSH」等操作簇保留呼吸距离，避免运行中芯片贴住按钮。 */
+  margin-right: 16px;
   container: header-management / inline-size;
 }
 
@@ -876,6 +878,7 @@ input:focus-visible {
   padding: 0 11px;
   gap: 7px;
   border: 1px solid var(--line);
+  margin-right: 16px;
   border-radius: 6px;
   color: var(--muted);
   background: var(--surface-soft);
@@ -1622,6 +1625,24 @@ input:focus-visible {
 .copilot-message-role { display: block; margin-bottom: 4px; color: var(--muted); font-size: var(--copilot-font-small); font-weight: 700; }
 .copilot-message .ai-markdown { font-size: var(--copilot-font); line-height: 1.6; }
 
+.copilot-thinking {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+.copilot-thinking summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--copilot-font-small);
+  font-weight: 650;
+  user-select: none;
+}
+.copilot-thinking summary::before { content: '💭 '; }
+.copilot-thinking[open] summary { margin-bottom: 6px; }
+.copilot-thinking .ai-markdown { color: var(--muted); font-size: var(--copilot-font-small); }
+
 .copilot-empty {
   display: grid;
   height: 100%;
@@ -1651,6 +1672,7 @@ input:focus-visible {
 .copilot-model-bar select:disabled { color: var(--quiet); opacity: .6; cursor: default; }
 .copilot-input-wrap { position: relative; width: 100%; min-width: 0; }
 .copilot-composer textarea { display: block; width: 100%; min-width: 0; min-height: 58px; max-height: 120px; resize: vertical; padding: 8px 43px 8px 9px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; font: inherit; font-size: var(--copilot-font); line-height: 1.55; }
+.copilot-composer-hint { margin-top: 4px; padding-left: 2px; color: var(--quiet); font-size: 9px; }
 .copilot-send-button { position: absolute; right: 6px; bottom: 6px; display: grid; width: 30px; height: 30px; padding: 0; place-items: center; border: 1px solid var(--line-strong); border-radius: 5px; color: #fff; background: var(--accent); cursor: pointer; }
 .copilot-send-button:hover:not(:disabled) { background: var(--accent-hover); }
 .copilot-send-button.stop { border-color: #e8cdca; background: var(--danger); }
@@ -3563,7 +3585,7 @@ input:focus-visible {
 
 .column-headings {
   display: grid;
-  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 52px;
+  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 90px;
   min-height: 31px;
   align-items: center;
   padding: 0 8px;
@@ -3580,7 +3602,7 @@ input:focus-visible {
 
 .plugin-row {
   display: grid;
-  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 52px;
+  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 90px;
   min-width: 0;
   min-height: 40px;
   align-items: center;
@@ -6466,6 +6488,42 @@ input:focus-visible {
   .app-body.copilot-open .repository-row {
     grid-template-columns: minmax(280px, 1fr) 96px 120px minmax(220px, auto);
   }
+
+  /* Profile / 整合包页：样式在 PacksView 内联块里，单类规则挡不住挤压。
+     这里用 ≥3 类的选择器压过内联规则，让标题/按钮可换行、双栏合并为单列、
+     统计卡等宽收缩。 */
+  .app-body.copilot-open .packs-page .page-heading {
+    flex-wrap: wrap;
+    gap: 12px 24px;
+  }
+
+  .app-body.copilot-open .packs-page .page-heading h1 {
+    overflow-wrap: anywhere;
+  }
+
+  .app-body.copilot-open .packs-page .page-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .app-body.copilot-open .packs-page .packs-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-body.copilot-open .packs-page .packs-layout .packs-list-panel {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .app-body.copilot-open .packs-page .packs-stats,
+  .app-body.copilot-open .packs-page .stats-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .app-body.copilot-open .packs-page .profile-environment-heading,
+  .app-body.copilot-open .packs-page .profile-environment-row {
+    flex-wrap: wrap;
+  }
 }
 
 @media (max-width: 860px) {
@@ -6862,7 +6920,10 @@ input:focus-visible {
 .dsh-market-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 11px; }
 .dsh-market-toolbar select { height: 34px; min-width: 0; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--ink); background: #fff; font-size: 11px; }
 .dsh-market-progress { display: flex; min-height: 34px; align-items: center; margin-bottom: 10px; padding: 0 11px; gap: 7px; border: 1px solid #c3d7ca; border-radius: 5px; color: var(--accent); background: var(--accent-soft); font-size: 11px; }
-.dsh-market-progress strong { margin-left: auto; font-family: Consolas, monospace; font-size: 10px; }
+.dsh-market-progress-track { flex: 1; min-width: 110px; height: 4px; border-radius: 2px; background: #dfe6e1; overflow: hidden; }
+.dsh-market-progress-track.determinate span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 180ms ease; }
+.dsh-market-progress-track.indeterminate span { display: block; width: 38%; height: 100%; border-radius: inherit; background: var(--accent); animation: install-progress-slide 1.25s ease-in-out infinite; }
+.dsh-market-progress strong { flex: 0 0 auto; font-family: Consolas, monospace; font-size: 10px; }
 .dsh-market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); align-items: start; gap: 10px; }
 .dsh-market-card { display: flex; min-width: 0; min-height: 190px; flex-direction: column; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 2px 7px rgb(40 55 45 / 4%); }
 .dsh-market-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; }
@@ -7231,3 +7292,153 @@ input:focus-visible {
 .profile-import-differences { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 10px 0; color: var(--muted); font-size: 10px; }
 .profile-import-differences strong { width: 100%; color: var(--ink); font-size: 11px; }
 @media (max-width: 620px) { .profile-import-mode-picker { grid-template-columns: 1fr; } .profile-repository-url-row { flex-direction: column; } .profile-import-plugin-list > div { flex-direction: column; gap: 2px; } .profile-import-plugin-list small { max-width: none; text-align: left; } }
+
+/* ---- 官方推荐整合包（DSH Web UI） ---- */
+.plugin-row-recommended { background: var(--accent-soft); }
+.plugin-row-recommended .plugin-name-cell strong { color: var(--accent); }
+.recommended-badge {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 5px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 10px;
+  font-weight: 750;
+}
+.recommended-download {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+.recommended-download:hover:not(:disabled) { background: var(--accent-hover); }
+.recommended-download:disabled { cursor: default; opacity: .5; }
+.recommended-state { color: var(--muted); font-size: 10px; }
+.recommended-state.on { color: var(--accent); font-weight: 650; }
+
+.recommended-dialog {
+  position: relative;
+  width: min(460px, calc(100vw - 40px));
+}
+.recommended-dialog-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  border-color: rgba(120, 140, 128, .28);
+  background: rgba(255, 255, 255, .7);
+  backdrop-filter: blur(4px);
+}
+.recommended-dialog-close:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: #fff;
+}
+.recommended-dialog-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 26px 24px 20px;
+  text-align: center;
+  background: linear-gradient(180deg, var(--accent-soft), rgba(255, 255, 255, 0) 130%);
+  border-bottom: 1px solid var(--line);
+}
+.recommended-dialog-badge {
+  display: inline-grid;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 12px;
+  place-items: center;
+  border-radius: 16px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  box-shadow: 0 8px 16px -8px var(--accent);
+}
+.recommended-dialog-hero h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 750;
+  letter-spacing: .02em;
+}
+.recommended-dialog-hero p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: .04em;
+}
+.recommended-dialog-body { padding: 4px 22px 0; }
+.recommended-dialog-body > p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.recommended-dialog-sub {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.recommended-dialog-points {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.recommended-dialog-points li {
+  position: relative;
+  padding-left: 20px;
+  color: var(--ink);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+.recommended-dialog-points li::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  left: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: .8;
+}
+.recommended-dialog-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid #e8caca;
+  border-radius: 7px;
+  color: #7e2222;
+  background: var(--danger-soft);
+  font-size: 11px;
+  line-height: 1.65;
+}
+.recommended-dialog-warning strong {
+  flex: 0 0 auto;
+  font-weight: 750;
+}
+.recommended-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 22px 20px;
+}
+.recommended-dialog-footer .primary-command { min-width: 132px; }
+.recommended-action-row { display: grid; gap: 6px; padding: 2px 0 10px; }
+.recommended-action-row small { color: var(--muted); font-size: 10px; line-height: 1.6; }

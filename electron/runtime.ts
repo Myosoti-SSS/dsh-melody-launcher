@@ -7,6 +7,7 @@ import type { ApplicationLaunchPlan, ApplicationLaunchSpec } from './application
 import { requiresNodeRuntime, resolveNodeExecutable, type NodeRuntime } from './node-runtime'
 import { pathExists } from './profile'
 import { formatCommandLine, spawnCommand, withExecutableDirectoryOnPath } from './process'
+import { buildNetworkEnvironment } from './proxy'
 import {
   detectDshCredentialsFormat,
   isLegacyCredentialsFormatError,
@@ -23,8 +24,25 @@ export function extractLocalUrl(text: string): string | null {
 }
 
 /** 构造 DSH 子进程的环境变量。 */
-export function runtimeEnvironment(settings: AppSettings, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return { ...base, DSH_HOME: settings.dshHome, FORCE_COLOR: '0' }
+export function runtimeEnvironment(
+  settings: AppSettings,
+  base: NodeJS.ProcessEnv,
+  pnpm?: { storeRoot?: string; registry?: string },
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, DSH_HOME: settings.dshHome, FORCE_COLOR: '0' }
+  // Web 端内置更新器 spawn 的系统 pnpm 会继承本进程环境；把 store/registry
+  // 与启动器对齐，避免 ERR_PNPM_UNEXPECTED_STORE 或绕开镜像源直连 npmjs。
+  if (pnpm?.storeRoot) {
+    env.npm_config_store_dir = pnpm.storeRoot
+    env.NPM_CONFIG_STORE_DIR = pnpm.storeRoot
+    env.pnpm_config_store_dir = pnpm.storeRoot
+    env.PNPM_CONFIG_STORE_DIR = pnpm.storeRoot
+  }
+  if (pnpm?.registry) {
+    env.npm_config_registry = pnpm.registry
+    env.NPM_CONFIG_REGISTRY = pnpm.registry
+  }
+  return env
 }
 
 export const PORT_FALLBACK_ATTEMPTS = 10
@@ -98,6 +116,10 @@ export interface RuntimeControllerOptions {
   stopProcess?: (processToStop: ChildProcessWithoutNullStreams) => Promise<void>
   /** 启动旧版 DSH 时使用的临时凭据兼容备份目录。 */
   legacyCredentialsBackupRoot?: string
+  /** 启动器 pnpm 插件仓库根目录（插件装在 plugin-store 下），供 DSH 子进程继承。 */
+  packageStoreRoot?: string
+  /** DSH 子进程应使用的 npm 镜像源（默认 npmmirror）。 */
+  npmRegistry?: string
 }
 
 export interface RuntimeController {
@@ -110,6 +132,11 @@ export interface RuntimeController {
 
 export function createRuntimeController(options: RuntimeControllerOptions): RuntimeController {
   const startProcess = options.spawnProcess ?? spawnCommand
+  const runtimeEnv = (settings: AppSettings, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
+    runtimeEnvironment(settings, base, {
+      storeRoot: options.packageStoreRoot || undefined,
+      registry: options.npmRegistry ?? buildNetworkEnvironment(settings).npmRegistry,
+    })
   let child: ChildProcessWithoutNullStreams | null = null
   const companions = new Map<string, ChildProcessWithoutNullStreams>()
   let companionTimer: NodeJS.Timeout | null = null
@@ -187,7 +214,7 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
     for (const spec of specs) {
       if (companions.has(spec.id)) continue
       try {
-        const environment = withExecutableDirectoryOnPath(spec.executable, runtimeEnvironment(settings, process.env))
+        const environment = withExecutableDirectoryOnPath(spec.executable, runtimeEnv(settings, process.env))
         const companion = startProcess(spec.executable, spec.args, { cwd: spec.cwd, env: environment })
         companions.set(spec.id, companion)
         options.emitOutput('info', `伴随应用命令：${formatCommandLine(spec.executable, spec.args)}\n工作目录：${spec.cwd}`)
@@ -217,7 +244,7 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
     const cwd = replacement?.cwd ?? defaultCwd
 
     let executable = replacement?.executable ?? settings.launchExecutable
-    let environment = runtimeEnvironment(settings, process.env)
+    let environment = runtimeEnv(settings, process.env)
     let launchArgs = replacement?.args ?? settings.launchArgs
     if (requiresNodeRuntime(executable, launchArgs)) {
       const nodeRuntime = await options.prepareNodeRuntime()
