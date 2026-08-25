@@ -14,10 +14,11 @@ import { runCommand } from './command'
 import { readDeepSeekApiKey } from './credentials'
 import { resolveAgentApiForModel, resolveCopilotAgentApi } from './copilot-api'
 import { findInstalledDsh } from './dsh-install'
-import { buildPluginCommandArgs, createInstaller, validateLocalPluginDirectory, type Installer } from './installer'
+import { buildPluginCommandArgs, createInstaller, syncProfilePnpmConfig, validateLocalPluginDirectory, type Installer } from './installer'
 import { registerIpcHandlers } from './ipc'
 import { createLauncherUpdater, type LauncherUpdater } from './launcher-update'
 import { createGitHubAuthService, type GitHubAuthService } from './github-auth'
+import { buildNetworkEnvironment } from './proxy'
 import {
   ensureNodeRuntime,
   ensurePnpmRuntime,
@@ -174,6 +175,7 @@ function createServices(): Services {
     openExternal: url => void shell.openExternal(url),
     resolveApplicationLaunchPlan: () => applicationAddons.launchPlan(),
     legacyCredentialsBackupRoot: path.join(userData, 'dsh-credentials-compat'),
+    packageStoreRoot: path.join(userData, 'plugin-store'),
   })
   const profileService = createProfileService({
     dshHome: () => settings.read().then(value => value.dshHome),
@@ -277,6 +279,7 @@ function createServices(): Services {
             offlineInstallAttempted = true
             offlineNode ??= await prepareNodeRuntime('plugin')
             offlinePnpm ??= await preparePnpmRuntime('plugin', offlineNode)
+            await syncProfilePnpmConfig(targetProfileDir, buildNetworkEnvironment(current).npmRegistry, pluginStoreRoot)
             const result = await runCommand(offlinePnpm.executable, ['install', '--dir', targetProfileDir, '--offline', '--no-frozen-lockfile', '--config.auto-install-peers=false', '--store-dir', pluginStoreRoot], {
               cwd: targetProfileDir,
               env: withExecutableDirectoryOnPath(offlinePnpm.executable, withExecutableDirectoryOnPath(offlineNode.node, {

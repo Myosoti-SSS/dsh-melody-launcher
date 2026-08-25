@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { DEFAULT_PROFILE_NAME, DSH_PACKAGE_NAME } from '../src/constants'
 import type {
@@ -213,6 +213,42 @@ const DOWNLOAD_PROGRESS_FLOOR = 28
 
 /** Release 插件 tgz 安装包体积上限（插件可能比 Skill 大，放宽到 256 MiB）。 */
 const MAX_RELEASE_BYTES = 256 * 1024 * 1024
+
+/**
+ * 让 Profile 目录里的 pnpm 与启动器保持一致：Web 端内置更新器用系统 pnpm
+ * 直接操作 Profile（不经过启动器进程），若它的 store/registry 与启动器不同，
+ * pnpm 会以 ERR_PNPM_UNEXPECTED_STORE 拒绝工作，或绕开镜像源直连 npmjs。
+ * 这里把项目级 .npmrc 的 store-dir 固定到启动器插件仓库、registry 同步为
+ * 网络设置的镜像，其余用户已写的配置原样保留。
+ */
+export async function syncProfilePnpmConfig(
+  profileDir: string,
+  registry: string,
+  storeRoot?: string,
+): Promise<void> {
+  if (!storeRoot) return
+  const managed = new Set(['store-dir', 'registry'])
+  const npmrcPath = path.join(profileDir, '.npmrc')
+  const existing = await readFile(npmrcPath, 'utf8').catch(() => '')
+  const kept: string[] = []
+  for (const line of existing.split(/\r?\n/)) {
+    const key = /^[ \t]*([^=#][^=]*?)[ \t]*=/.exec(line)?.[1]?.trim().toLowerCase()
+    if (line.trim() === '' || line.trim().startsWith('#') || key === undefined || !managed.has(key)) kept.push(line)
+  }
+  while (kept.length > 0 && kept[kept.length - 1].trim() === '') kept.pop()
+  kept.push(`store-dir=${storeRoot.replace(/\\/g, '/')}`)
+  kept.push(`registry=${registry}`)
+  const content = `${kept.join('\n')}\n`
+  const temporary = `${npmrcPath}.dsh-launcher.tmp`
+  await mkdir(profileDir, { recursive: true })
+  await writeFile(temporary, content, 'utf8')
+  try {
+    await rename(temporary, npmrcPath)
+  } catch {
+    await writeFile(npmrcPath, content, 'utf8')
+    await rm(temporary, { force: true }).catch(() => undefined)
+  }
+}
 
 export function createInstaller(options: InstallerOptions): Installer {
   let active: InstallProgress | null = null
@@ -495,6 +531,7 @@ export function createInstaller(options: InstallerOptions): Installer {
     const workspacePath = path.join(settings.dshHome, 'profiles', targetProfile, 'pnpm-workspace.yaml')
     if (deniedRegistryBuildKeys.length > 0) await mkdir(path.dirname(workspacePath), { recursive: true })
     if (deniedRegistryBuildKeys.length > 0) await denyBuildKeys(workspacePath, deniedRegistryBuildKeys)
+    await syncProfilePnpmConfig(path.join(settings.dshHome, 'profiles', targetProfile), network.npmRegistry, options.packageStoreRoot)
 
     options.emitOutput('info', `插件操作：${args.join(' ')}`)
     if (installingRepository) {
