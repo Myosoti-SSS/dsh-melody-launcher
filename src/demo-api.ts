@@ -1253,6 +1253,10 @@ export const demoApi: LauncherApi = {
     demoInstalledPresets = demoInstalledPresets.map(preset => preset.name === name ? { ...preset, enabled } : preset)
     return demoInstalledPresets
   },
+  uninstallPreset: async name => {
+    demoInstalledPresets = demoInstalledPresets.filter(preset => preset.name !== name)
+    return demoInstalledPresets
+  },
   getRuntimeState: async () => demoRuntime,
   startRuntime: async () => {
     const replacement = demoInstalledApplications.find(application => application.enabled && application.launchMode === 'runtime-replacement')
@@ -1270,6 +1274,9 @@ export const demoApi: LauncherApi = {
   },
   openExternal: async () => undefined,
   openPath: async () => undefined,
+  openProfilePluginFolder: async () => undefined,
+  recommendedWebUiStatus: async () => ({ installed: false, enabled: false }),
+  recommendedWebUiInstall: async () => ({ installed: false, enabled: false }),
   setWindowMode: async () => undefined,
   minimizeWindow: async () => undefined,
   toggleMaximizeWindow: async () => false,
@@ -1390,6 +1397,18 @@ export const demoApi: LauncherApi = {
       emitDemoSession({ kind: 'message', sessionId, message })
       emitDemoSession({ kind: 'session-updated', session })
     }, 600)
+    return session
+  },
+  listCopilotModels: async () => [
+    { provider: 'deepseek-official', model: 'deepseek-v4-flash', label: 'DeepSeek 官方 · deepseek-v4-flash', available: true },
+    { provider: 'ali', model: 'deepseek-v4-flash-0731', label: '阿里云 DashScope · deepseek-v4-flash-0731', available: true },
+  ],
+  setAiSessionModel: async (sessionId, model) => {
+    const session = demoAiSessions.find(item => item.id === sessionId)
+    if (!session) throw new Error('DSH Copilot 会话不存在。')
+    session.model = model || null
+    session.updatedAt = new Date().toISOString()
+    emitDemoSession({ kind: 'session-updated', session })
     return session
   },
   cancelAiSession: async sessionId => {

@@ -34,6 +34,7 @@ import {
   type ProfileSnapshot,
 } from './ai-install'
 import type { NodeRuntime, PnpmRuntime } from './node-runtime'
+import type { CopilotAgentApi, CopilotModelResolution } from './copilot-api'
 import { formatCommandLine, spawnCommand, withExecutableDirectoryOnPath } from './process'
 
 const MAX_CONCURRENT_ANALYSES = 4
@@ -70,6 +71,8 @@ interface ActiveAgent {
   assistantMessageId: string | null
   approvals: Map<string, ApprovalWaiter>
   mutationRelease: (() => void) | null
+  /** 本 agent 启动时的模型标识（provider/model）；会话切换模型时据此重生。 */
+  modelKey: string
 }
 
 interface AnalysisJob {
@@ -90,6 +93,13 @@ export interface CopilotSessionManagerOptions {
   packageStoreRoot?: string
   readSettings: () => Promise<AppSettings>
   readApiKey: (dshHome: string) => Promise<string | null>
+  /**
+   * DeepSeek Key 缺失时解析自定义 API 供 Copilot 使用：
+   * 返回 provider 路由、模型与密钥环境变量；无可用配置返回 null。
+   */
+  resolveAgentApi?: (dshHome: string) => Promise<CopilotAgentApi | null>
+  /** 把模型选择器里的 provider/model 解析为 agent API（用户显式选择）。 */
+  resolveAgentApiForModel?: (dshHome: string, provider: string, model: string) => Promise<CopilotModelResolution>
   prepareNodeRuntime: () => Promise<NodeRuntime>
   preparePnpmRuntime: (nodeRuntime: NodeRuntime) => Promise<PnpmRuntime>
   emitEvent: (event: AiSessionEvent) => void
@@ -100,7 +110,8 @@ export interface CopilotSessionManagerOptions {
 export interface CopilotSessionManager {
   list(): Promise<AiSession[]>
   create(input?: AiSessionCreateInput): Promise<AiSession>
-  send(sessionId: string, text: string): Promise<AiSession>
+  send(sessionId: string, text: string, model?: string | null): Promise<AiSession>
+  setModel(sessionId: string, model: string | null): Promise<AiSession>
   approve(sessionId: string, requestId: string, allow: boolean): Promise<boolean>
   cancel(sessionId: string): Promise<void>
   rollback(sessionId: string): Promise<{ restored: number; profileName: string }>
@@ -244,9 +255,16 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
     options.emitEvent({ kind: 'session-updated', session: cloneSession(session) })
   }
 
-  function appendMessage(sessionId: string, role: AiMessage['role'], text: string, streaming = false, id = randomUUID()): AiMessage {
+  function appendMessage(sessionId: string, role: AiMessage['role'], text: string, streaming = false, id = randomUUID(), reasoning?: string): AiMessage {
     const session = record(sessionId).session
-    const message: AiMessage = { id, role, text: text.slice(-MAX_MESSAGE_CHARS), createdAt: now(), streaming }
+    const message: AiMessage = {
+      id,
+      role,
+      text: text.slice(-MAX_MESSAGE_CHARS),
+      createdAt: now(),
+      streaming,
+      ...(reasoning ? { reasoning } : {}),
+    }
     session.messages.push(message)
     session.messages = trimMessages(session.messages)
     session.messageCount = session.messages.length
@@ -260,6 +278,16 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
     const message = session.messages.find(item => item.id === messageId)
     if (!message) return
     message.text = `${message.text}${chunk}`.slice(-MAX_MESSAGE_CHARS)
+    message.streaming = true
+    session.updatedAt = now()
+    options.emitEvent({ kind: 'message', sessionId, message: { ...message } })
+  }
+
+  function updateAssistantReasoning(sessionId: string, messageId: string, chunk: string): void {
+    const session = record(sessionId).session
+    const message = session.messages.find(item => item.id === messageId)
+    if (!message) return
+    message.reasoning = `${message.reasoning ?? ''}${chunk}`.slice(-MAX_MESSAGE_CHARS)
     message.streaming = true
     session.updatedAt = now()
     options.emitEvent({ kind: 'message', sessionId, message: { ...message } })
@@ -450,18 +478,58 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
   }
 
   async function ensureAgent(sessionId: string): Promise<{ agent: ActiveAgent; fresh: boolean }> {
-    const existing = agents.get(sessionId)
-    if (existing) return { agent: existing, fresh: false }
+    const value = record(sessionId)
     const settings = await options.readSettings()
-    const apiKey = await options.readApiKey(settings.dshHome)
-    if (!apiKey) throw new Error('未配置 DeepSeek API Key，请先在设置中配置。')
+    let provider = ACP_DEFAULT_PROVIDER
+    let model = ACP_DEFAULT_MODEL
+    let apiKeyEnvName = 'DEEPSEEK_API_KEY'
+    let baseUrl: string | undefined
+    let apiKey: string | null = null
+
+    // 模型解析：会话显式选择优先，否则按 agent-default-model → DeepSeek → 自定义 API 自动链。
+    const sessionModel = value.session.model ?? null
+    if (sessionModel && options.resolveAgentApiForModel) {
+      const separator = sessionModel.indexOf('|')
+      if (separator <= 0) throw new Error('模型配置无效，请重新选择。')
+      const resolution = await options.resolveAgentApiForModel(settings.dshHome, sessionModel.slice(0, separator), sessionModel.slice(separator + 1))
+      if (resolution.kind === 'unavailable') throw new Error(resolution.reason)
+      if (resolution.kind === 'custom') {
+        provider = resolution.api.provider
+        model = resolution.api.model
+        apiKeyEnvName = resolution.api.apiKeyEnvName
+        baseUrl = resolution.api.baseUrl
+        apiKey = resolution.api.apiKey
+      } else {
+        apiKey = await options.readApiKey(settings.dshHome)
+        model = sessionModel.slice(separator + 1)
+        if (!apiKey) throw new Error('DeepSeek 官方 Key 未配置，请先在 API 配置中填写。')
+      }
+    } else {
+      const fallback = await options.resolveAgentApi?.(settings.dshHome) ?? null
+      if (fallback) {
+        provider = fallback.provider
+        model = fallback.model
+        apiKeyEnvName = fallback.apiKeyEnvName
+        baseUrl = fallback.baseUrl
+        apiKey = fallback.apiKey
+      } else {
+        apiKey = await options.readApiKey(settings.dshHome)
+      }
+      if (!apiKey) throw new Error('未配置模型 API：请先在 API 配置中填写 DeepSeek Key 或自定义 API。')
+    }
+
+    const modelKey = `${provider}/${model}`
+    const existing = agents.get(sessionId)
+    if (existing && existing.modelKey === modelKey) return { agent: existing, fresh: false }
+    // 会话切换了模型：停掉旧 agent，下一条消息用新配置重生。
+    if (existing) await stopAgent(sessionId)
     const prepared = await runtime()
     const taskRoot = path.join(options.runtimeRoot, 'copilot-sessions', sessionId)
     const configPath = path.join(taskRoot, 'cordis.yml')
     await mkdir(taskRoot, { recursive: true })
     await atomicWrite(configPath, renderAcpComposition({
-      provider: ACP_DEFAULT_PROVIDER,
-      model: ACP_DEFAULT_MODEL,
+      provider,
+      model,
       persona: resolveAcpPersona(settings),
       persistenceRoot: path.join(taskRoot, 'agent-state'),
       workspaceRoot: settings.dshHome,
@@ -483,7 +551,7 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
     )
     const child = spawnCommand(command.executable, command.args, {
       cwd: taskRoot,
-      env: acpEnvironment(settings.dshHome, apiKey, environment),
+      env: acpEnvironment(settings.dshHome, apiKey, environment, apiKeyEnvName, baseUrl),
     })
     options.emitOutput('info', `[copilot:${sessionId}] 命令：${formatCommandLine(command.executable, command.args)}\n工作目录：${taskRoot}`)
     const active: ActiveAgent = {
@@ -495,15 +563,18 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
       assistantMessageId: null,
       approvals: new Map(),
       mutationRelease: null,
+      modelKey,
     }
     const acp = createAcpClient({
       transport: createSpawnAcpTransport(child, text => options.emitOutput('info', `[copilot:${sessionId}] ${text}`)),
       clientInfo: { name: 'dsh-melody-launcher', version: '0.2.6' },
       onPermissionRequest: request => permission(sessionId, request),
       onSessionUpdate: update => {
-        if (update.text) {
+        if (update.text || update.reasoning) {
+          // 思考可能先于正文到达：有任一内容就先把助手消息建出来再累加。
           if (!active.assistantMessageId) active.assistantMessageId = appendMessage(sessionId, 'assistant', '', true).id
-          updateAssistantMessage(sessionId, active.assistantMessageId, update.text)
+          if (update.text) updateAssistantMessage(sessionId, active.assistantMessageId, update.text)
+          if (update.reasoning) updateAssistantReasoning(sessionId, active.assistantMessageId, update.reasoning)
         } else if (update.title && update.kind === 'tool_call') {
           appendMessage(sessionId, 'tool', `工具调用：${update.title}`)
         }
@@ -594,15 +665,36 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
     return cloneSession(session)
   }
 
-  async function send(sessionId: string, text: string): Promise<AiSession> {
+  async function send(sessionId: string, text: string, model?: string | null): Promise<AiSession> {
     await initialize()
     const value = record(sessionId)
     const cleaned = text.trim()
     if (!cleaned) throw new Error('请输入消息。')
     if (cleaned.length > 20_000) throw new Error('单条消息不能超过 20000 个字符。')
     if (['queued', 'preparing', 'running'].includes(value.session.phase)) throw new Error('当前会话仍在处理上一条消息。')
+    if (model !== undefined && model !== value.session.model) {
+      value.session.model = model || null
+      options.emitEvent({ kind: 'session-updated', session: cloneSession(value.session) })
+    }
     appendMessage(sessionId, 'user', cleaned)
     queueAnalysis(sessionId, () => executePrompt(sessionId, cleaned))
+    await persist()
+    return cloneSession(value.session)
+  }
+
+  async function setModel(sessionId: string, model: string | null): Promise<AiSession> {
+    await initialize()
+    const value = record(sessionId)
+    const nextModel = typeof model === 'string' && model.trim() ? model : null
+    if (nextModel === value.session.model) return cloneSession(value.session)
+    if (nextModel && !nextModel.includes('|')) throw new Error('模型配置无效，请重新选择。')
+    value.session.model = nextModel
+    // 模型变了：停掉已起的 agent，让下一条消息按新模型重生；运行中的会话不打断，发送时统一处理。
+    const agent = agents.get(sessionId)
+    if (agent && !['queued', 'preparing', 'running'].includes(value.session.phase)) {
+      await stopAgent(sessionId)
+    }
+    emitSession(sessionId)
     await persist()
     return cloneSession(value.session)
   }
@@ -762,6 +854,7 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
     },
     create,
     send,
+    setModel,
     approve,
     cancel,
     rollback,

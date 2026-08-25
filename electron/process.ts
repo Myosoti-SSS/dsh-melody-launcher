@@ -32,6 +32,28 @@ export function trackSpawnedProcess<T extends ChildProcess>(child: T): T {
   return child
 }
 
+/** 终止整个子进程树（Windows 用 taskkill /T /F，其他平台 SIGTERM）。 */
+export async function killChildProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null) return
+  if (process.platform === 'win32' && child.pid) {
+    const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true })
+    await new Promise<void>(resolve => {
+      const timeout = setTimeout(() => {
+        killer.kill()
+        resolve()
+      }, 5_000)
+      const finish = () => {
+        clearTimeout(timeout)
+        resolve()
+      }
+      killer.once('error', finish)
+      killer.once('exit', finish)
+    })
+  } else {
+    child.kill('SIGTERM')
+  }
+}
+
 function waitForExit(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
   return new Promise(resolve => {

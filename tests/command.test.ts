@@ -106,3 +106,17 @@ describe('runCommand execution log', () => {
     expect(seen.some(([level, text]) => level === 'info' && text.includes('命令退出：0'))).toBe(true)
   })
 })
+
+describe('runCommand timeout', () => {
+  it('terminates a hung subprocess after the timeout and reports exitCode -1', async () => {
+    const startedAt = Date.now()
+    const result = await runCommand(process.execPath, ['-e', 'setTimeout(() => {}, 30_000)'], {
+      cwd: process.cwd(),
+      env: process.env,
+      timeoutMs: 500,
+    })
+    expect(result.exitCode).toBe(-1)
+    expect(result.output).toContain('命令执行超时')
+    expect(Date.now() - startedAt).toBeLessThan(10_000)
+  })
+})

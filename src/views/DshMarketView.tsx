@@ -97,7 +97,14 @@ export function DshMarketView({ onProfileChanged }: DshMarketViewProps) {
         <select value={sort} onChange={event => setSort(event.target.value as Sort)} aria-label="排序"><option value="stars">星数最多</option><option value="updated">最近加入</option><option value="name">名称排序</option></select>
       </div>
       {progress && progress.phase !== 'complete' && progress.phase !== 'error' && (
-        <div className="dsh-market-progress"><LoaderCircle size={14} className="spin" /><span>{progress.message}</span>{progress.percent !== null && <strong>{progress.percent}%</strong>}</div>
+        <div className="dsh-market-progress">
+          <LoaderCircle size={14} className="spin" />
+          <span>{progress.message}</span>
+          <div className={`dsh-market-progress-track ${progress.percent !== null ? 'determinate' : 'indeterminate'}`}>
+            {progress.percent !== null && <span style={{ width: `${progress.percent}%` }} />}
+          </div>
+          {progress.percent !== null && <strong>{progress.percent}%</strong>}
+        </div>
       )}
       {error && <div className="error-banner"><span>{error}</span><button type="button" onClick={() => void load()}>重试</button></div>}
       {loading && catalog === null && <div className="empty-state"><LoaderCircle size={22} className="spin" /><span>正在读取 DSH Market 目录…</span></div>}

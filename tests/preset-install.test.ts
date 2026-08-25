@@ -3,7 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import AdmZip from 'adm-zip'
 import { afterEach, describe, expect, it } from 'vitest'
-import { installPresetFromDirectory, installPresetFromRepository, readInstalledPresets, toggleInstalledPreset } from '../electron/preset-install'
+import { installPresetFromDirectory, installPresetFromRepository, readInstalledPresets, toggleInstalledPreset, uninstallInstalledPreset } from '../electron/preset-install'
+import { readPresetReceipts, recordPresetInstall } from '../electron/preset-receipts'
 import type { PresetInstallTarget } from '../src/types'
 
 const temporaryRoots: string[] = []
@@ -176,3 +177,53 @@ it('预设文件数量超过安全上限时拒绝', async () => {
     cacheRoot, dshHome, 'yjh051108/dsh-router-standard', presetTarget(), () => undefined, fetchFor(archive),
   )).rejects.toThrow(/安全限制|安全上限/)
 }, 30_000)
+
+async function seedPreset(dshHome: string, name: string): Promise<void> {
+  await mkdir(path.join(dshHome, '.agent-presets', name), { recursive: true })
+  await writeFile(path.join(dshHome, '.agent-presets', name, 'preset.yml'), `name: ${name}\n`)
+}
+
+it('uninstallInstalledPreset 删除目录与安装凭据，保留其他预设', async () => {
+  const { dshHome } = await freshRoots()
+  const receiptsPath = path.join(dshHome, 'preset-receipts.json')
+  await seedPreset(dshHome, 'router-standard')
+  await seedPreset(dshHome, 'websearch-pro')
+  await recordPresetInstall(receiptsPath, {
+    name: 'router-standard',
+    repository: 'yjh051108/dsh-router-standard',
+    sourcePath: 'preset/router-standard',
+    revision: 'e'.repeat(40),
+    installedAt: '2026-08-23T00:00:00.000Z',
+  })
+
+  const remaining = await uninstallInstalledPreset(dshHome, 'router-standard', receiptsPath)
+
+  expect(remaining.map(preset => preset.name)).toEqual(['websearch-pro'])
+  await expect(readFile(path.join(dshHome, '.agent-presets', 'router-standard', 'preset.yml'), 'utf8'))
+    .rejects.toMatchObject({ code: 'ENOENT' })
+  await expect(readFile(path.join(dshHome, '.agent-presets', 'websearch-pro', 'preset.yml'), 'utf8')).resolves.toContain('websearch-pro')
+  expect((await readPresetReceipts(receiptsPath)).map(receipt => receipt.name)).toEqual([])
+})
+
+it('uninstallInstalledPreset 可删除停用状态的预设（.disabled 位置）', async () => {
+  const { dshHome } = await freshRoots()
+  const receiptsPath = path.join(dshHome, 'preset-receipts.json')
+  await seedPreset(dshHome, 'router-standard')
+  await toggleInstalledPreset(dshHome, 'router-standard', false)
+
+  const remaining = await uninstallInstalledPreset(dshHome, 'router-standard', receiptsPath)
+
+  expect(remaining).toEqual([])
+  await expect(readFile(path.join(dshHome, '.agent-presets', '.disabled', 'router-standard', 'preset.yml'), 'utf8'))
+    .rejects.toMatchObject({ code: 'ENOENT' })
+})
+
+it('uninstallInstalledPreset 未知或非法预设名报错', async () => {
+  const { dshHome } = await freshRoots()
+  const receiptsPath = path.join(dshHome, 'preset-receipts.json')
+  await seedPreset(dshHome, 'router-standard')
+
+  await expect(uninstallInstalledPreset(dshHome, 'not-installed', receiptsPath)).rejects.toThrow('未找到本地预设')
+  await expect(uninstallInstalledPreset(dshHome, 'Bad_Name', receiptsPath)).rejects.toThrow('预设名称无效')
+  expect((await readInstalledPresets(dshHome)).map(preset => preset.name)).toEqual(['router-standard'])
+})

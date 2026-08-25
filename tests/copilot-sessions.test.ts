@@ -73,6 +73,38 @@ describe('Copilot session persistence', () => {
     expect(await manager.list()).toEqual([])
   })
 
+  it('send 携带 model 时把模型绑定并持久化到会话', async () => {
+    const { filePath, manager } = await fixture()
+    const session = await manager.create({ title: '模型测试' })
+    await manager.send(session.id, '你好', 'ali|deepseek-v4-flash-0731')
+
+    const updated = (await manager.list()).find(item => item.id === session.id)!
+    expect(updated.model).toBe('ali|deepseek-v4-flash-0731')
+
+    // 等后台分析收尾（fixture 的运行时准备会立即失败），再核对落盘内容。
+    await new Promise(resolve => setTimeout(resolve, 30))
+    const persisted = JSON.parse(await readFile(filePath, 'utf8')) as Array<{ session: AiSession }>
+    expect(persisted.find(item => item.session.id === session.id)?.session.model).toBe('ali|deepseek-v4-flash-0731')
+  })
+
+  it('setModel 绑定会话模型并支持清空回自动选择', async () => {
+    const { manager } = await fixture()
+    const session = await manager.create({ title: '模型测试' })
+    const bound = await manager.setModel(session.id, 'ali|deepseek-v4-flash-0731')
+    expect(bound.model).toBe('ali|deepseek-v4-flash-0731')
+    expect((await manager.list()).find(item => item.id === session.id)?.model).toBe('ali|deepseek-v4-flash-0731')
+
+    const cleared = await manager.setModel(session.id, null)
+    expect(cleared.model).toBeNull()
+    expect((await manager.list()).find(item => item.id === session.id)?.model).toBeNull()
+  })
+
+  it('setModel 拒绝不含 provider|model 分隔符的模型键', async () => {
+    const { manager } = await fixture()
+    const session = await manager.create({ title: '模型测试' })
+    await expect(manager.setModel(session.id, 'nonsense')).rejects.toThrow('模型配置无效')
+  })
+
   it('serializes legacy mutation tasks in FIFO order', async () => {
     const { manager } = await fixture()
     const first = await manager.beginLegacy('plugin-adaptation', '适配 A', 'plugin-a')

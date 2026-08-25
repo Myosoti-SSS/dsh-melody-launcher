@@ -1,4 +1,4 @@
-import { Bot, Check, CircleCheck, CornerDownLeft, History, LoaderCircle, MessageSquarePlus, OctagonX, Trash2 } from 'lucide-react'
+import { Bot, BrainCircuit, Check, CircleCheck, CornerDownLeft, History, LoaderCircle, MessageSquarePlus, OctagonX, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -17,8 +17,19 @@ function kindLabel(session: AiSession): string {
   return 'Copilot 对话'
 }
 
-function Message({ role, text }: { role: string; text: string }) {
-  return <div className={`copilot-message ${role}`}><span className="copilot-message-role">{role === 'user' ? '你' : role === 'tool' ? '系统' : 'DSH Copilot'}</span><div className="ai-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div></div>
+function Message({ role, text, reasoning }: { role: string; text: string; reasoning?: string }) {
+  return (
+    <div className={`copilot-message ${role}`}>
+      <span className="copilot-message-role">{role === 'user' ? '你' : role === 'tool' ? '系统' : 'DSH Copilot'}</span>
+      {reasoning ? (
+        <details className="copilot-thinking">
+          <summary>思考过程</summary>
+          <div className="ai-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{reasoning}</ReactMarkdown></div>
+        </details>
+      ) : null}
+      <div className="ai-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div>
+    </div>
+  )
 }
 
 interface DSHCopilotPanelProps {
@@ -31,10 +42,11 @@ interface DSHCopilotPanelProps {
   width: number
   onWidthChange: (width: number) => void
   onResizeStateChange?: (resizing: boolean) => void
+  onError?: (message: string) => void
 }
 
-export function DSHCopilotPanel({ state, legacyAi, onLegacyApprove, onLegacyCancel, onLegacyRollback, open, width, onWidthChange, onResizeStateChange }: DSHCopilotPanelProps) {
-  const { sessions, selected, selectedId, setSelectedId, loading, create, send, cancel, approve, rollback, remove } = state
+export function DSHCopilotPanel({ state, legacyAi, onLegacyApprove, onLegacyCancel, onLegacyRollback, open, width, onWidthChange, onResizeStateChange, onError }: DSHCopilotPanelProps) {
+  const { sessions, selected, selectedId, setSelectedId, loading, models, setModel, create, send, cancel, approve, rollback, remove } = state
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [pendingSubmission, setPendingSubmission] = useState<{ sessionId: string; text: string } | null>(null)
@@ -61,6 +73,8 @@ export function DSHCopilotPanel({ state, legacyAi, onLegacyApprove, onLegacyCanc
   useEffect(() => {
     if (!loading && sessions.length === 0) void create()
   }, [create, loading, sessions.length])
+
+  useEffect(() => { if (open) state.reloadModels() }, [open, state.reloadModels])
 
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [selected?.messages.length, selected?.messages.at(-1)?.text])
 
@@ -124,6 +138,11 @@ export function DSHCopilotPanel({ state, legacyAi, onLegacyApprove, onLegacyCanc
     else void cancel()
   }
 
+  const handleModelChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const key = event.target.value || null
+    void setModel(key).catch(() => onError?.('模型切换失败，请检查 API 配置。'))
+  }
+
   const handleRollback = () => {
     void rollback().catch(() => { if (legacySession) onLegacyRollback() })
   }
@@ -161,7 +180,7 @@ export function DSHCopilotPanel({ state, legacyAi, onLegacyApprove, onLegacyCanc
               {selected.queue.position !== null && <div className="copilot-queue-note">修改队列第 {selected.queue.position} 项，共 {selected.queue.total} 项{selected.queue.reason ? ` · ${selected.queue.reason}` : ''}</div>}
               <div className="copilot-messages" role="log" aria-live="polite">
                 {selected.messages.length === 0 && <div className="copilot-empty"><Bot size={24} /><span>输入问题，让 DSH Copilot 分析当前 DSH 环境。</span></div>}
-                {selected.messages.map(message => <Message key={message.id} role={message.role} text={message.text} />)}
+                {selected.messages.map(message => <Message key={message.id} role={message.role} text={message.text} reasoning={message.reasoning} />)}
                 <div ref={endRef} />
               </div>
               {activePending && (
@@ -172,7 +191,26 @@ export function DSHCopilotPanel({ state, legacyAi, onLegacyApprove, onLegacyCanc
                   <div className="ai-approval-actions"><button type="button" className="danger-button" onClick={() => handleApproval(activePending, false)}>拒绝</button><button type="button" className="primary-command" onClick={() => handleApproval(activePending, true)}><Check size={15} />允许</button></div>
                 </div>
               )}
-              <div className="copilot-composer"><div className="copilot-input-wrap"><textarea value={draft} placeholder={legacySession ? '该任务由原页面启动，完成后可新建对话。' : pendingForSelected ? '已准备提交，等待当前回答完成…' : processing ? '继续输入，提交将在当前回答完成后发送…' : '向 DSH Copilot 输入问题…'} disabled={legacySession || Boolean(pendingForSelected)} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); handleComposerAction() } }} /><button type="button" className={`copilot-send-button ${!hasDraft && canStop ? 'stop' : ''} ${pendingForSelected ? 'pending' : ''}`} title={composerButtonTitle} aria-label={composerButtonTitle} disabled={(legacySession && !legacyTaskActive) || pendingForSelected !== null || busy || (!hasDraft && !canStop)} onClick={handleComposerAction}>{pendingForSelected || busy ? <LoaderCircle size={15} className="spin" /> : !hasDraft && canStop ? <OctagonX size={15} /> : <CornerDownLeft size={15} />}</button></div></div>
+              <div className="copilot-composer">
+                {!legacySession && (
+                  <div className="copilot-model-bar">
+                    <BrainCircuit size={13} aria-hidden="true" />
+                    <select
+                      aria-label="Copilot 模型"
+                      title={processing ? '当前回答完成后可切换模型' : '选择 Copilot 对话使用的模型'}
+                      value={selected.model ?? ''}
+                      disabled={processing || busy || Boolean(pendingForSelected)}
+                      onChange={handleModelChange}
+                    >
+                      <option value="">自动选择</option>
+                      {models.map(option => {
+                        const key = `${option.provider}|${option.model}`
+                        return <option key={key} value={key} disabled={!option.available}>{option.label}{option.available ? '' : '（未配置密钥）'}</option>
+                      })}
+                    </select>
+                  </div>
+                )}
+                <div className="copilot-input-wrap"><textarea value={draft} placeholder={legacySession ? '该任务由原页面启动，完成后可新建对话。' : pendingForSelected ? '已准备提交，等待当前回答完成…' : processing ? '继续输入，提交将在当前回答完成后发送…' : '向 DSH Copilot 输入问题…'} disabled={legacySession || Boolean(pendingForSelected)} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !(event.ctrlKey || event.metaKey || event.shiftKey)) { event.preventDefault(); handleComposerAction() } }} /><button type="button" className={`copilot-send-button ${!hasDraft && canStop ? 'stop' : ''} ${pendingForSelected ? 'pending' : ''}`} title={composerButtonTitle} aria-label={composerButtonTitle} disabled={(legacySession && !legacyTaskActive) || pendingForSelected !== null || busy || (!hasDraft && !canStop)} onClick={handleComposerAction}>{pendingForSelected || busy ? <LoaderCircle size={15} className="spin" /> : !hasDraft && canStop ? <OctagonX size={15} /> : <CornerDownLeft size={15} />}</button></div><div className="copilot-composer-hint">↵ 发送 · Ctrl+Enter / Shift+Enter 换行</div></div>
               {showResultFooter && <footer className="copilot-footer">
                   <button type="button" className="danger-button" disabled={!selected.hasSnapshot} onClick={handleRollback}><History size={15} />还原快照</button><span className="copilot-footer-spacer" /><span className="copilot-complete"><CircleCheck size={14} />结果已保留</span>
                 </footer>}

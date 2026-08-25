@@ -864,6 +864,8 @@ input:focus-visible {
   grid-template-columns: max-content minmax(0, 1fr) minmax(0, max-content) max-content;
   align-items: center;
   gap: 8px;
+  /* 与右侧「停止 DSH」等操作簇保留呼吸距离，避免运行中芯片贴住按钮。 */
+  margin-right: 16px;
   container: header-management / inline-size;
 }
 
@@ -876,6 +878,7 @@ input:focus-visible {
   padding: 0 11px;
   gap: 7px;
   border: 1px solid var(--line);
+  margin-right: 16px;
   border-radius: 6px;
   color: var(--muted);
   background: var(--surface-soft);
@@ -890,21 +893,19 @@ input:focus-visible {
 
 .header-pack-switcher {
   display: grid;
-  width: 100%;
-  flex: none;
-  height: 38px;
+  width: min(260px, 100%);
+  height: 32px;
   min-width: 0;
-  grid-template-columns: 18px minmax(0, auto) minmax(0, 1fr);
+  grid-template-columns: 18px auto minmax(96px, 1fr);
   align-items: center;
-  padding: 3px 4px 3px 12px;
-  gap: 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 19px;
+  padding: 0 4px 0 10px;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
   color: var(--accent);
   background: var(--surface-soft);
-  box-shadow: 0 2px 8px rgba(31, 47, 37, 0.07);
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 650;
   overflow: hidden;
 }
 
@@ -916,10 +917,10 @@ input:focus-visible {
 .header-pack-switcher select {
   width: 100%;
   min-width: 0;
-  height: 30px;
-  padding: 0 27px 0 10px;
+  height: 24px;
+  padding: 0 22px 0 8px;
   border: 0;
-  border-radius: 15px;
+  border-radius: 4px;
   color: var(--ink);
   background: var(--surface);
   font-size: 11px;
@@ -934,9 +935,7 @@ input:focus-visible {
 
 .header-management-stats {
   display: flex;
-  width: max-content;
-  max-width: 100%;
-  justify-self: end;
+  flex: none;
   min-width: 0;
   height: 32px;
   align-items: center;
@@ -981,6 +980,7 @@ input:focus-visible {
 
 .header-runtime-status {
   display: inline-flex;
+  flex: none;
   height: 32px;
   align-items: center;
   padding: 0 9px;
@@ -1411,6 +1411,9 @@ input:focus-visible {
   transform: translateX(0);
   transition: opacity 160ms ease, transform 220ms cubic-bezier(.2, .8, .2, 1), visibility 0s linear;
   will-change: transform;
+  /* 对话是面板的主要阅读内容：字号随窗口宽度自适应（约 12px → 15.5px）。 */
+  --copilot-font: clamp(12px, 0.55vw + 5.5px, 15.5px);
+  --copilot-font-small: clamp(10px, 0.3vw + 6.5px, 12px);
 }
 
 .copilot-panel.closed {
@@ -1553,8 +1556,8 @@ input:focus-visible {
 .copilot-session-copy { min-width: 0; }
 .copilot-session-copy strong,
 .copilot-session-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.copilot-session-copy strong { font-size: 11px; }
-.copilot-session-copy small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+.copilot-session-copy strong { font-size: var(--copilot-font-small); }
+.copilot-session-copy small { margin-top: 2px; color: var(--muted); font-size: calc(var(--copilot-font-small) - 1px); }
 
 .copilot-session-dot {
   width: 7px;
@@ -1590,8 +1593,8 @@ input:focus-visible {
 }
 .copilot-task-head strong,
 .copilot-task-head small { display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.copilot-task-head strong { font-size: 11px; }
-.copilot-task-head small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+.copilot-task-head strong { font-size: var(--copilot-font-small); }
+.copilot-task-head small { margin-top: 2px; color: var(--muted); font-size: calc(var(--copilot-font-small) - 1px); }
 .copilot-task-actions { display: flex; align-items: center; gap: 5px; }
 .copilot-queue-note { flex: none; padding: 5px 12px; color: #765b16; background: #fff7dc; font-size: 10px; }
 
@@ -1608,7 +1611,7 @@ input:focus-visible {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #fff;
-  font-size: 11px;
+  font-size: var(--copilot-font);
 }
 .copilot-message.assistant {
   margin-bottom: 12px;
@@ -1618,9 +1621,27 @@ input:focus-visible {
 }
 .copilot-message.assistant .copilot-message-role { margin-bottom: 3px; color: var(--accent); }
 .copilot-message.user { margin-left: 26px; border-color: #bfd7c8; background: #f4fbf6; }
-.copilot-message.tool { padding: 5px 8px; color: var(--muted); background: #f1f3f1; font-size: 10px; }
-.copilot-message-role { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; font-weight: 700; }
-.copilot-message .ai-markdown { font-size: 11px; line-height: 17px; }
+.copilot-message.tool { padding: 5px 8px; color: var(--muted); background: #f1f3f1; font-size: var(--copilot-font-small); }
+.copilot-message-role { display: block; margin-bottom: 4px; color: var(--muted); font-size: var(--copilot-font-small); font-weight: 700; }
+.copilot-message .ai-markdown { font-size: var(--copilot-font); line-height: 1.6; }
+
+.copilot-thinking {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+.copilot-thinking summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--copilot-font-small);
+  font-weight: 650;
+  user-select: none;
+}
+.copilot-thinking summary::before { content: '💭 '; }
+.copilot-thinking[open] summary { margin-bottom: 6px; }
+.copilot-thinking .ai-markdown { color: var(--muted); font-size: var(--copilot-font-small); }
 
 .copilot-empty {
   display: grid;
@@ -1630,14 +1651,28 @@ input:focus-visible {
   gap: 8px;
   padding: 20px;
   color: var(--quiet);
-  font-size: 11px;
+  font-size: var(--copilot-font-small);
   text-align: center;
 }
 
 .copilot-approval { flex: none; margin: 0 10px 8px; max-height: 185px; overflow: auto; }
 .copilot-composer { display: block; flex: none; padding: 8px 10px; border-top: 1px solid var(--line); }
+.copilot-model-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--quiet); }
+.copilot-model-bar select {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 0 22px 0 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: var(--ink);
+  background: #fff;
+  font-size: var(--copilot-font-small);
+}
+.copilot-model-bar select:disabled { color: var(--quiet); opacity: .6; cursor: default; }
 .copilot-input-wrap { position: relative; width: 100%; min-width: 0; }
-.copilot-composer textarea { display: block; width: 100%; min-width: 0; min-height: 58px; max-height: 120px; resize: vertical; padding: 8px 43px 8px 9px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; font: inherit; font-size: 11px; line-height: 16px; }
+.copilot-composer textarea { display: block; width: 100%; min-width: 0; min-height: 58px; max-height: 120px; resize: vertical; padding: 8px 43px 8px 9px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; font: inherit; font-size: var(--copilot-font); line-height: 1.55; }
+.copilot-composer-hint { margin-top: 4px; padding-left: 2px; color: var(--quiet); font-size: 9px; }
 .copilot-send-button { position: absolute; right: 6px; bottom: 6px; display: grid; width: 30px; height: 30px; padding: 0; place-items: center; border: 1px solid var(--line-strong); border-radius: 5px; color: #fff; background: var(--accent); cursor: pointer; }
 .copilot-send-button:hover:not(:disabled) { background: var(--accent-hover); }
 .copilot-send-button.stop { border-color: #e8cdca; background: var(--danger); }
@@ -1645,7 +1680,7 @@ input:focus-visible {
 .copilot-send-button.pending { color: var(--accent); border-color: #bfd8c7; background: var(--accent-soft); }
 .copilot-send-button:disabled { cursor: default; opacity: .45; }
 .copilot-footer { display: flex; min-height: 43px; flex: none; align-items: center; padding: 6px 10px; gap: 7px; border-top: 1px solid var(--line); }
-.copilot-footer button { min-height: 30px; padding: 0 8px; font-size: 10px; }
+.copilot-footer button { min-height: 30px; padding: 0 8px; font-size: var(--copilot-font-small); }
 .copilot-footer-spacer { flex: 1; }
 .copilot-complete { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: 9px; }
 
@@ -1810,6 +1845,14 @@ input:focus-visible {
 .github-pr-list > header h2 {
   margin: 0;
   font-size: 15px;
+}
+
+/* 空列表提示：与「最近提交」标题文字齐头（标题内边距 + 图标 + 间距，实测 47px）。 */
+.github-empty-list {
+  padding: 16px 18px 18px 47px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .github-pr-list > header > span {
@@ -3542,7 +3585,7 @@ input:focus-visible {
 
 .column-headings {
   display: grid;
-  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 52px;
+  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 90px;
   min-height: 31px;
   align-items: center;
   padding: 0 8px;
@@ -3559,7 +3602,7 @@ input:focus-visible {
 
 .plugin-row {
   display: grid;
-  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 52px;
+  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 90px;
   min-width: 0;
   min-height: 40px;
   align-items: center;
@@ -4157,7 +4200,8 @@ input:focus-visible {
 .repository-headings,
 .repository-row {
   display: grid;
-  grid-template-columns: minmax(330px, 1fr) 100px 125px minmax(280px, auto);
+  grid-template-columns: minmax(300px, 1fr) 104px 132px minmax(300px, auto);
+  column-gap: 16px;
   min-width: 0;
 }
 
@@ -4619,7 +4663,7 @@ input:focus-visible {
   display: flex;
   width: 100%;
   min-width: 0;
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .install-button {
@@ -4695,24 +4739,23 @@ input:focus-visible {
   padding: 0 10px;
 }
 
-/* Keep catalog row actions in a stable slot.  Rows can expose a single
- * install/update command, a trial plus install pair, or an in-progress
- * state; the right edge should stay fixed and the controls should not
- * resize when their labels change. */
+/* 目录行操作左对齐：紧随语言/活跃度列，空白留在行右缘。
+ * 按钮定宽（96px），标签在「检测/检测中/管理」间切换不改变列宽。 */
 .repository-row .installed-actions,
 .repository-row .ai-ready-actions {
   width: 100%;
-  align-items: flex-end;
+  align-items: flex-start;
 }
 
 .repository-row .installed-label {
   width: 100%;
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .repository-row .installed-command-row,
 .repository-row .ai-ready-actions {
   width: 100%;
+  justify-content: flex-start;
 }
 
 .repository-row .installed-command-row > .install-button,
@@ -5271,6 +5314,8 @@ input:focus-visible {
 }
 
 .credential-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(700px, calc(100vw - 32px));
 }
 
@@ -5321,6 +5366,7 @@ input:focus-visible {
 }
 
 .api-config-content {
+  flex: 1 1 auto;
   min-height: 270px;
   max-height: min(66vh, 610px);
 }
@@ -5460,6 +5506,29 @@ input:focus-visible {
 }
 
 .custom-api-remove.confirming {
+  color: #fff;
+  background: var(--danger);
+}
+
+.preset-management-column .skill-row {
+  grid-template-columns: 35px minmax(110px, 0.8fr) minmax(90px, 1fr) 28px;
+}
+
+.preset-remove {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  color: var(--quiet);
+  background: transparent;
+}
+
+.preset-remove:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: transparent;
+  background: rgba(179, 38, 30, 0.08);
+}
+
+.preset-remove.confirming {
   color: #fff;
   background: var(--danger);
 }
@@ -5745,6 +5814,23 @@ input:focus-visible {
   border: 1px solid var(--line);
   border-radius: 5px;
   background: var(--surface-soft);
+}
+
+/* API 额度进度条：与授权范围节统一的标题行 + 剩余量可视化。 */
+.github-rate-bar {
+  height: 5px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #e3e9e5;
+}
+
+.github-rate-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.4s ease;
 }
 
 .github-browser-login {
@@ -6228,9 +6314,56 @@ input:focus-visible {
   }
 }
 
+/* Copilot 打开且窗口宽度不足以同时容纳侧栏、内容下限与整列 Copilot 时，
+   把它切换为悬浮覆盖（默认 Copilot 420px + 侧栏 218px + 管理页行宽下限约 610px ≈ 1250px）。 */
+@media (max-width: 1250px) {
+  .app-body.copilot-open,
+  .app-body.sidebar-collapsed.copilot-open {
+    grid-template-columns: 218px minmax(0, 1fr);
+  }
+
+  .app-body.sidebar-collapsed.copilot-open {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .copilot-panel {
+    position: absolute;
+    z-index: 30;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(400px, calc(100% - 218px));
+  }
+
+  .app-body.sidebar-collapsed.copilot-open .copilot-panel {
+    width: min(400px, calc(100% - 64px));
+  }
+
+  .app-body.copilot-open .manager-edge-actions {
+    right: 1px;
+  }
+}
+
+/* 中等宽度：整合包标签与右侧按钮文字同步收缩，避免切换器被单独压扁。 */
+@media (max-width: 1320px) {
+  .header-pack-switcher {
+    grid-template-columns: 18px minmax(96px, 1fr);
+    padding: 0 4px 0 8px;
+  }
+
+  .header-pack-switcher > span {
+    display: none;
+  }
+
+  .credential-button > span:first-of-type,
+  .github-account-button > span:first-of-type {
+    display: none;
+  }
+}
+
 @media (max-width: 1160px) {
   .app-header {
-    grid-template-columns: 218px minmax(0, 1fr) auto;
+    grid-template-columns: 180px minmax(0, 1fr) auto;
   }
 
   .header-context .context-label,
@@ -6239,7 +6372,16 @@ input:focus-visible {
     display: none;
   }
 
-  .header-runtime-status > span:last-child {
+  /* 窄窗口：中间只保留整合包切换与配置目录入口，右侧按钮收成图标，防止中间列溢出被裁。 */
+  .header-pack-switcher {
+    grid-template-columns: 18px minmax(80px, 1fr);
+  }
+
+  .header-runtime-status {
+    display: none;
+  }
+
+  .header-management-stats > span {
     display: none;
   }
 
@@ -6251,12 +6393,28 @@ input:focus-visible {
     grid-template-columns: 190px minmax(0, 1fr) 0;
   }
 
-  .app-body.copilot-open {
-    grid-template-columns: 190px minmax(0, 1fr) var(--copilot-width, 380px);
+  /* Copilot 改为悬浮覆盖：启动项管理等页面内容按行宽下限（min 610px）排布，
+     窗口缩小时若仍占一个网格列会把工作区压到内容最小宽度以下，导致整体溢出错乱。 */
+  .app-body.copilot-open,
+  .app-body.sidebar-collapsed.copilot-open {
+    grid-template-columns: 190px minmax(0, 1fr);
   }
 
   .app-body.sidebar-collapsed.copilot-open {
-    grid-template-columns: 64px minmax(0, 1fr) var(--copilot-width, 380px);
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .copilot-panel {
+    position: absolute;
+    width: min(400px, calc(100% - 190px));
+  }
+
+  .app-body.sidebar-collapsed.copilot-open .copilot-panel {
+    width: min(400px, calc(100% - 64px));
+  }
+
+  .app-body.copilot-open .manager-edge-actions {
+    right: 1px;
   }
 
   .page {
@@ -6291,7 +6449,83 @@ input:focus-visible {
 
   .repository-headings,
   .repository-row {
-    grid-template-columns: minmax(320px, 1fr) 85px 105px 280px;
+    grid-template-columns: minmax(280px, 1fr) 96px 120px minmax(220px, auto);
+  }
+}
+
+/* Copilot 占一个网格列时，工作区宽度 = 窗口宽 - 侧栏 218 - Copilot ~420。
+   默认 1380 管理窗口下只剩约 742px，管理页两列基础布局（min 940px）会横向溢出。
+   打开 Copilot 时把“中等宽度”适配提前到 1578px（218+420+940）生效，保证页面不被挤乱。 */
+@media (max-width: 1578px) {
+  .app-body.copilot-open .page {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+
+  .app-body.copilot-open .plugin-layout {
+    grid-template-columns: minmax(610px, 1fr);
+  }
+
+  .app-body.copilot-open .management-control-bar {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.9fr);
+  }
+
+  .app-body.copilot-open .management-surface {
+    grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+  }
+
+  .app-body.copilot-open .resource-details-panel {
+    --management-primary-ratio: 55%;
+    --management-metadata-offset: 7.5px;
+  }
+
+  .app-body.copilot-open .plugin-list-panel {
+    border-right: 0;
+  }
+
+  .app-body.copilot-open .plugin-details {
+    display: none;
+  }
+
+  .app-body.copilot-open .repository-headings,
+  .app-body.copilot-open .repository-row {
+    grid-template-columns: minmax(280px, 1fr) 96px 120px minmax(220px, auto);
+  }
+
+  /* Profile / 整合包页：样式在 PacksView 内联块里，单类规则挡不住挤压。
+     这里用 ≥3 类的选择器压过内联规则，让标题/按钮可换行、双栏合并为单列、
+     统计卡等宽收缩。 */
+  .app-body.copilot-open .packs-page .page-heading {
+    flex-wrap: wrap;
+    gap: 12px 24px;
+  }
+
+  .app-body.copilot-open .packs-page .page-heading h1 {
+    overflow-wrap: anywhere;
+  }
+
+  .app-body.copilot-open .packs-page .page-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .app-body.copilot-open .packs-page .packs-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-body.copilot-open .packs-page .packs-layout .packs-list-panel {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .app-body.copilot-open .packs-page .packs-stats,
+  .app-body.copilot-open .packs-page .stats-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .app-body.copilot-open .packs-page .profile-environment-heading,
+  .app-body.copilot-open .packs-page .profile-environment-row {
+    flex-wrap: wrap;
   }
 }
 
@@ -6314,11 +6548,6 @@ input:focus-visible {
   }
 
   .brand-subtitle {
-    display: none;
-  }
-
-  .credential-button > span:first-of-type,
-  .github-account-button > span:first-of-type {
     display: none;
   }
 
@@ -6694,7 +6923,10 @@ input:focus-visible {
 .dsh-market-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 11px; }
 .dsh-market-toolbar select { height: 34px; min-width: 0; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--ink); background: #fff; font-size: 11px; }
 .dsh-market-progress { display: flex; min-height: 34px; align-items: center; margin-bottom: 10px; padding: 0 11px; gap: 7px; border: 1px solid #c3d7ca; border-radius: 5px; color: var(--accent); background: var(--accent-soft); font-size: 11px; }
-.dsh-market-progress strong { margin-left: auto; font-family: Consolas, monospace; font-size: 10px; }
+.dsh-market-progress-track { flex: 1; min-width: 110px; height: 4px; border-radius: 2px; background: #dfe6e1; overflow: hidden; }
+.dsh-market-progress-track.determinate span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 180ms ease; }
+.dsh-market-progress-track.indeterminate span { display: block; width: 38%; height: 100%; border-radius: inherit; background: var(--accent); animation: install-progress-slide 1.25s ease-in-out infinite; }
+.dsh-market-progress strong { flex: 0 0 auto; font-family: Consolas, monospace; font-size: 10px; }
 .dsh-market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); align-items: start; gap: 10px; }
 .dsh-market-card { display: flex; min-width: 0; min-height: 190px; flex-direction: column; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 2px 7px rgb(40 55 45 / 4%); }
 .dsh-market-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; }
@@ -6843,7 +7075,7 @@ input:focus-visible {
 .ai-markdown {
   min-width: 0;
   overflow-wrap: anywhere;
-  line-height: 18px;
+  line-height: 1.6;
 }
 
 .ai-markdown > :first-child {
@@ -6863,22 +7095,23 @@ input:focus-visible {
   margin: 5px 0;
 }
 
+/* 标题用相对单位：在 Copilot 等使用自适应字号的容器里随正文同步缩放。 */
 .ai-markdown h1,
 .ai-markdown h2,
 .ai-markdown h3,
 .ai-markdown h4 {
   margin: 8px 0 4px;
   color: #26352b;
-  font-size: 13px;
-  line-height: 18px;
+  font-size: 1.08em;
+  line-height: 1.45;
 }
 
 .ai-markdown h1 {
-  font-size: 15px;
+  font-size: 1.28em;
 }
 
 .ai-markdown h2 {
-  font-size: 14px;
+  font-size: 1.18em;
 }
 
 .ai-markdown ul,
@@ -7068,3 +7301,153 @@ input:focus-visible {
 .profile-import-differences { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 10px 0; color: var(--muted); font-size: 10px; }
 .profile-import-differences strong { width: 100%; color: var(--ink); font-size: 11px; }
 @media (max-width: 620px) { .profile-import-mode-picker { grid-template-columns: 1fr; } .profile-repository-url-row { flex-direction: column; } .profile-import-plugin-list > div { flex-direction: column; gap: 2px; } .profile-import-plugin-list small { max-width: none; text-align: left; } }
+
+/* ---- 官方推荐整合包（DSH Web UI） ---- */
+.plugin-row-recommended { background: var(--accent-soft); }
+.plugin-row-recommended .plugin-name-cell strong { color: var(--accent); }
+.recommended-badge {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 5px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 10px;
+  font-weight: 750;
+}
+.recommended-download {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+.recommended-download:hover:not(:disabled) { background: var(--accent-hover); }
+.recommended-download:disabled { cursor: default; opacity: .5; }
+.recommended-state { color: var(--muted); font-size: 10px; }
+.recommended-state.on { color: var(--accent); font-weight: 650; }
+
+.recommended-dialog {
+  position: relative;
+  width: min(460px, calc(100vw - 40px));
+}
+.recommended-dialog-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  border-color: rgba(120, 140, 128, .28);
+  background: rgba(255, 255, 255, .7);
+  backdrop-filter: blur(4px);
+}
+.recommended-dialog-close:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: #fff;
+}
+.recommended-dialog-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 26px 24px 20px;
+  text-align: center;
+  background: linear-gradient(180deg, var(--accent-soft), rgba(255, 255, 255, 0) 130%);
+  border-bottom: 1px solid var(--line);
+}
+.recommended-dialog-badge {
+  display: inline-grid;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 12px;
+  place-items: center;
+  border-radius: 16px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  box-shadow: 0 8px 16px -8px var(--accent);
+}
+.recommended-dialog-hero h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 750;
+  letter-spacing: .02em;
+}
+.recommended-dialog-hero p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: .04em;
+}
+.recommended-dialog-body { padding: 4px 22px 0; }
+.recommended-dialog-body > p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.recommended-dialog-sub {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.recommended-dialog-points {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.recommended-dialog-points li {
+  position: relative;
+  padding-left: 20px;
+  color: var(--ink);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+.recommended-dialog-points li::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  left: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: .8;
+}
+.recommended-dialog-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid #e8caca;
+  border-radius: 7px;
+  color: #7e2222;
+  background: var(--danger-soft);
+  font-size: 11px;
+  line-height: 1.65;
+}
+.recommended-dialog-warning strong {
+  flex: 0 0 auto;
+  font-weight: 750;
+}
+.recommended-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 22px 20px;
+}
+.recommended-dialog-footer .primary-command { min-width: 132px; }
+.recommended-action-row { display: grid; gap: 6px; padding: 2px 0 10px; }
+.recommended-action-row small { color: var(--muted); font-size: 10px; line-height: 1.6; }

@@ -28,6 +28,8 @@ export interface CollectOptions {
   inactivityTimeoutMs?: number
   /** 子进程无输出超时时的附加通知。 */
   onTimeout?: (timeoutMs: number) => void
+  /** 超过该时长（毫秒）后终止整个子进程树，并以 exitCode -1 返回。 */
+  timeoutMs?: number
 }
 
 export interface CommandOptions extends CollectOptions {
@@ -62,20 +64,22 @@ export function collectCommandOutput(child: CommandProcess, options: CollectOpti
     ? options.inactivityTimeoutMs
     : undefined
   let output = ''
-  let timer: NodeJS.Timeout | undefined
+  let inactivityTimer: NodeJS.Timeout | undefined
+  let absoluteTimer: NodeJS.Timeout | undefined
   let settled = false
-  let timedOut = false
+  let idleTimedOut = false
+  let absoluteTimedOut = false
 
   const clearInactivityTimer = () => {
-    if (timer) clearTimeout(timer)
-    timer = undefined
+    if (inactivityTimer) clearTimeout(inactivityTimer)
+    inactivityTimer = undefined
   }
 
   const armInactivityTimer = (onTimeout: () => void) => {
     if (!inactivityTimeoutMs || settled) return
     clearInactivityTimer()
-    timer = setTimeout(onTimeout, inactivityTimeoutMs)
-    timer.unref?.()
+    inactivityTimer = setTimeout(onTimeout, inactivityTimeoutMs)
+    inactivityTimer.unref?.()
   }
 
   const handle = (level: OutputLevel) => (chunk: Buffer | string) => {
@@ -86,8 +90,8 @@ export function collectCommandOutput(child: CommandProcess, options: CollectOpti
   }
 
   const onIdleTimeout = () => {
-    if (settled || timedOut || !inactivityTimeoutMs) return
-    timedOut = true
+    if (settled || idleTimedOut || absoluteTimedOut || !inactivityTimeoutMs) return
+    idleTimedOut = true
     clearInactivityTimer()
     options.onTimeout?.(inactivityTimeoutMs)
     const error = new CommandTimeoutError(inactivityTimeoutMs)
@@ -109,17 +113,40 @@ export function collectCommandOutput(child: CommandProcess, options: CollectOpti
   return new Promise<CommandResult>((resolve, reject) => {
     rejectPromise = reject
     armInactivityTimer(onIdleTimeout)
+    const absoluteTimeoutMs = options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : undefined
+    const onAbsoluteTimeout = () => {
+      if (settled || idleTimedOut || absoluteTimedOut || !absoluteTimeoutMs) return
+      absoluteTimedOut = true
+      clearInactivityTimer()
+      output = `${output}[命令执行超时（${Math.round(absoluteTimeoutMs / 1000)} 秒），已自动终止]\n`.slice(-limit)
+      // Do not wait for a wrapper process to forward its exit event. The
+      // process-tree helper terminates pnpm/dsh descendants as well.
+      void terminateProcessTree(child as Parameters<typeof terminateProcessTree>[0])
+        .catch(() => undefined)
+        .finally(() => {
+          if (settled) return
+          settled = true
+          if (absoluteTimer) clearTimeout(absoluteTimer)
+          resolve({ exitCode: -1, output })
+        })
+    }
+    if (absoluteTimeoutMs) {
+      absoluteTimer = setTimeout(onAbsoluteTimeout, absoluteTimeoutMs)
+      absoluteTimer.unref?.()
+    }
     child.once('error', error => {
-      if (settled || timedOut) return
+      if (settled || idleTimedOut || absoluteTimedOut) return
       settled = true
       clearInactivityTimer()
+      if (absoluteTimer) clearTimeout(absoluteTimer)
       reject(error)
     })
     child.once('exit', code => {
-      if (settled || timedOut) return
+      if (settled || idleTimedOut || absoluteTimedOut) return
       settled = true
       clearInactivityTimer()
       resolve({ exitCode: code ?? 1, output })
+      if (absoluteTimer) clearTimeout(absoluteTimer)
     })
   })
 }

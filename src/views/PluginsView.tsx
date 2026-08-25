@@ -9,6 +9,7 @@ import {
   Download,
   ExternalLink,
   FolderGit2,
+  FolderOpen,
   GripVertical,
   Link2,
   LoaderCircle,
@@ -21,9 +22,13 @@ import {
   Wrench,
   X,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { activeOrderFromDisplay, movePackage, movePackageTo } from '../lib/profile-order'
 import type { AppSettings, InstalledApplicationAddon, InstalledPreset, InstalledSkill, ManagedPlugin, PluginTrialResult, ProfileState, RuntimeState } from '../types'
+
+/** 官方推荐整合包：固定显示在 web-app 下方的一行。 */
+const RECOMMENDED_WEB_UI_PACKAGE = '@linxin666/dsh-web-ui-all'
+const RECOMMENDED_WEB_UI_ANCHOR = '@deepseek-ai/dsh-web-app'
 
 /** 插件加载顺序页：列表、排序、启停与详情。 */
 
@@ -54,10 +59,15 @@ interface PluginsViewProps {
   onToggleApplication: (application: InstalledApplicationAddon, enabled: boolean) => void
   onUninstallApplication: (application: InstalledApplicationAddon) => void
   onTogglePreset: (preset: InstalledPreset, enabled: boolean) => void
+  onUninstallPreset: (preset: InstalledPreset) => void
   onReorder: (names: string[]) => Promise<void> | void
   onRefresh: () => void
   onBrowse: () => void
   onOpenRepository: (url: string) => void
+  /** 打开某个插件在 Profile 里的安装目录。 */
+  onOpenPluginFolder?: (packageName: string) => void
+  /** 未安装官方推荐整合包时的“下载”操作。 */
+  onInstallRecommendedWebUi?: () => void
   onToggleRuntime: () => void
   onOpenHarness: () => void
   onOpenRuntimeSettings: () => void
@@ -88,10 +98,13 @@ export function PluginsView({
   onToggleApplication,
   onUninstallApplication,
   onTogglePreset,
+  onUninstallPreset,
   onReorder,
   onRefresh,
   onBrowse,
   onOpenRepository,
+  onOpenPluginFolder,
+  onInstallRecommendedWebUi,
   onToggleRuntime,
   onOpenHarness,
   onOpenRuntimeSettings,
@@ -128,11 +141,13 @@ export function PluginsView({
     setPluginDisplayOrder(profile.plugins.map(plugin => plugin.packageName))
   }, [profileName, pluginOrderKey])
 
-  const active = profile.plugins.filter(plugin => plugin.enabled)
-  const inactive = profile.plugins.filter(plugin => !plugin.enabled)
+  const active = profile.plugins.filter(plugin => plugin.enabled && plugin.packageName !== RECOMMENDED_WEB_UI_PACKAGE)
+  const inactive = profile.plugins.filter(plugin => !plugin.enabled && plugin.packageName !== RECOMMENDED_WEB_UI_PACKAGE)
   const activeNames = active.map(plugin => plugin.packageName)
   const pluginsByName = new Map(profile.plugins.map(plugin => [plugin.packageName, plugin]))
-  const orderedPlugins = pluginDisplayOrder.map(packageName => pluginsByName.get(packageName)).filter((plugin): plugin is ManagedPlugin => Boolean(plugin))
+  const orderedPlugins = pluginDisplayOrder
+    .map(packageName => pluginsByName.get(packageName))
+    .filter((plugin): plugin is ManagedPlugin => plugin !== undefined && plugin.packageName !== RECOMMENDED_WEB_UI_PACKAGE)
   const visible = (plugin: ManagedPlugin) =>
     (plugin.enabled ? showActivePlugins : showInactivePlugins)
     && (!filter || `${plugin.displayName} ${plugin.packageName}`.toLowerCase().includes(filter.toLowerCase()))
@@ -182,6 +197,38 @@ export function PluginsView({
     if (toggled) await onReorder(targetOrder)
   }
 
+  /** 官方推荐整合包固定行（web-app 下方），独立于真实插件列表。 */
+  const RecommendedRow = () => {
+    const recommended = profile.plugins.find(item => item.packageName === RECOMMENDED_WEB_UI_PACKAGE)
+    const installed = Boolean(recommended)
+    const enabled = recommended?.enabled ?? false
+    return (
+      <div className="plugin-row plugin-row-recommended">
+        <div className="priority-cell"><span className="recommended-badge" title="启动器推荐">荐</span></div>
+        <div className="state-cell">
+          {installed ? (
+            <label className="switch" title={enabled ? '停用整合包' : '启用整合包'} onClick={event => event.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={enabled}
+                disabled={Boolean(busy)}
+                onChange={event => { if (recommended) void onToggle(recommended, event.target.checked) }}
+                aria-label={`${enabled ? '停用' : '启用'} 官方推荐 DSH Web UI`}
+              />
+              <span />
+            </label>
+          ) : (
+            <button type="button" className="recommended-download" disabled={Boolean(busy)} title="下载官方推荐整合包" aria-label="下载官方推荐整合包" onClick={event => { event.stopPropagation(); onInstallRecommendedWebUi?.() }}><Download size={14} /></button>
+          )}
+        </div>
+        <div className="plugin-name-cell"><strong>官方推荐 DSH Web UI</strong><span>{RECOMMENDED_WEB_UI_PACKAGE}</span></div>
+        <span className="plugin-description-cell">启动器推荐整合包</span>
+        <span className="plugin-version">{installed ? recommended?.version ?? '已安装' : '未安装'}</span>
+        <div className="row-actions"><span className={`recommended-state ${enabled ? 'on' : ''}`}>{enabled ? '已启用' : installed ? '已停用' : ''}</span></div>
+      </div>
+    )
+  }
+
   return (
     <div className="page plugins-page">
       <div className="management-titlebar">
@@ -229,8 +276,8 @@ export function PluginsView({
               {orderedPlugins.filter(visible).map(plugin => {
                 const activeIndex = activeNames.indexOf(plugin.packageName)
                 return (
+                <Fragment key={plugin.packageName}>
                 <PluginRow
-                  key={plugin.packageName}
                   plugin={plugin}
                   selected={selection?.kind === 'plugin' && selection.id === plugin.packageName}
                   busy={isComponentBusy(busy, plugin.repositoryFullName, plugin.packageName)}
@@ -244,7 +291,10 @@ export function PluginsView({
                   onMove={moveDirection => move(plugin.packageName, moveDirection)}
                   onDragStart={() => setDragged(plugin.packageName)}
                   onDrop={() => dropAt(plugin.packageName)}
+                  onOpenFolder={onOpenPluginFolder ? () => onOpenPluginFolder(plugin.packageName) : undefined}
                 />
+                {plugin.packageName === RECOMMENDED_WEB_UI_ANCHOR && <RecommendedRow />}
+                </Fragment>
                 )
               })}
               </div>
@@ -305,7 +355,7 @@ export function PluginsView({
               />
             </div>}
             {secondaryTab === 'presets' && <div className="resource-tab-panel" role="tabpanel">
-              <PresetList presets={installedPresets.filter(preset => visiblePreset(preset, filter))} busy={busy} locked={profileLocked} onToggle={onTogglePreset} />
+              <PresetList presets={installedPresets.filter(preset => visiblePreset(preset, filter))} busy={busy} locked={profileLocked} onToggle={onTogglePreset} onUninstall={onUninstallPreset} />
             </div>}
           </section>
           </div>
@@ -416,12 +466,15 @@ function visiblePreset(preset: InstalledPreset, filter: string): boolean {
 }
 
 /** Agent 预设列：与 Skill 相同的开关机制（目录在 .agent-presets/.disabled 下时停用）。 */
-function PresetList({ presets, busy, locked, onToggle }: {
+function PresetList({ presets, busy, locked, onToggle, onUninstall }: {
   presets: InstalledPreset[]
   busy: string | null
   locked: boolean
   onToggle: (preset: InstalledPreset, enabled: boolean) => void
+  onUninstall: (preset: InstalledPreset) => void
 }) {
+  const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null)
+  const removeBusy = (name: string) => busy === `preset-remove:${name}`
   return (
     <div className="skill-management-column preset-management-column">
       {presets.length === 0 ? (
@@ -442,6 +495,23 @@ function PresetList({ presets, busy, locked, onToggle }: {
               </label>
               <div className="skill-name-cell"><strong>{preset.name}</strong></div>
               <span className="skill-description-cell">{preset.enabled ? '已启用' : '已停用'}</span>
+              <button
+                type="button"
+                className={`icon-button preset-remove ${confirmingRemove === preset.name ? 'confirming' : ''}`}
+                title={confirmingRemove === preset.name ? '再次点击确认删除' : '删除预设'}
+                aria-label={confirmingRemove === preset.name ? `确认删除预设 ${preset.name}` : `删除预设 ${preset.name}`}
+                disabled={locked || removeBusy(preset.name)}
+                onClick={() => {
+                  if (confirmingRemove !== preset.name) {
+                    setConfirmingRemove(preset.name)
+                    return
+                  }
+                  setConfirmingRemove(null)
+                  onUninstall(preset)
+                }}
+              >
+                {removeBusy(preset.name) ? <LoaderCircle className="spin" size={13} /> : <Trash2 size={13} />}
+              </button>
             </div>
           ))}
         </div>
@@ -486,7 +556,7 @@ function SkillList({ skills, selectedName, busy, locked, onSelect, onToggle }: {
   )
 }
 
-function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop }: {
+function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop, onOpenFolder }: {
   plugin: ManagedPlugin
   selected: boolean
   busy: boolean
@@ -500,6 +570,7 @@ function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp
   onMove: (direction: -1 | 1) => void
   onDragStart: () => void
   onDrop: () => void
+  onOpenFolder?: () => void
 }) {
   return (
     <div
@@ -545,6 +616,7 @@ function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp
       <div className="row-actions" onClick={event => event.stopPropagation()}>
         <button type="button" disabled={locked || busy || !canMoveUp} onClick={() => onMove(-1)} title="向上移动" aria-label={`向上移动 ${plugin.displayName}`}><ArrowUp size={15} /></button>
         <button type="button" disabled={locked || busy || !canMoveDown} onClick={() => onMove(1)} title="向下移动" aria-label={`向下移动 ${plugin.displayName}`}><ArrowDown size={15} /></button>
+        {onOpenFolder && <button type="button" disabled={busy} onClick={onOpenFolder} title="打开插件文件夹" aria-label={`打开 ${plugin.displayName} 文件夹`}><FolderOpen size={15} /></button>}
       </div>
     </div>
   )

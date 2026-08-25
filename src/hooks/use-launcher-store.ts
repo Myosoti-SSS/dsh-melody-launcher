@@ -27,6 +27,7 @@ import type {
   PluginTrialResult,
   PresetInstallResult,
   ProfileState,
+  RecommendedWebUiStatus,
   RepositoryInstallResult,
   RuntimeOutput,
   RuntimeEnvironmentState,
@@ -54,6 +55,7 @@ export function useLauncherStore() {
   const { busy, run } = useAsyncAction(showToast)
 
   const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [recommendedWebUi, setRecommendedWebUi] = useState<RecommendedWebUiStatus | null>(null)
   const [profile, setProfile] = useState<ProfileState | null>(null)
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME_STATE)
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
@@ -82,6 +84,9 @@ export function useLauncherStore() {
   })
   const githubAuthRefreshVersion = useRef(0)
   const [logs, setLogs] = useState<RuntimeOutput[]>([])
+  // 真实进程输出（onRuntimeOutput）的计数：App 用它判断是否自动弹出运行日志，
+  // 市场/目录同步等合成的进度日志不会计入，避免切页时灵动岛被顶出来。
+  const [processLogCount, setProcessLogCount] = useState(0)
   const progressLogBuckets = useRef<Record<string, { phase: InstallProgress['phase']; bucket: number; message: string }>>({})
   const catalogProgressLogState = useRef<Record<string, string>>({})
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null)
@@ -115,7 +120,11 @@ export function useLauncherStore() {
       api.getSettings(),
       api.readProfile(),
       api.getRuntimeState(),
-      api.getDeepSeekCredentialStatus(),
+      // 凭据文件损坏时凭据状态未知，但不应阻塞整个启动器加载。
+      api.getDeepSeekCredentialStatus().catch(error => {
+        showToast({ kind: 'error', message: errorText(error) })
+        return { configured: false }
+      }),
       api.detectDshInstallation(),
       api.readInstalledSkills(),
       api.readInstalledApplications(),
@@ -246,19 +255,24 @@ export function useLauncherStore() {
       }
 
     const unsubscribers = [
-      api.onRuntimeOutput(output => appendRuntimeLog(output)),
+      api.onRuntimeOutput(output => {
+        appendRuntimeLog(output)
+        setProcessLogCount(current => current + 1)
+      }),
       api.onRuntimeState(setRuntime),
       api.onInstallProgress(handleInstallProgress),
       api.onCatalogAnalysisProgress(handleCatalogAnalysisProgress),
-      api.onDshMarketProgress(progress => handleInstallProgress({
-        repository: progress.name ? `dsh-market:${progress.name}` : 'dsh-market',
-        kind: 'plugin',
-        phase: progress.phase === 'loading' || progress.phase === 'checking' ? 'preparing' : progress.phase === 'resolving' ? 'resolving' : progress.phase,
-        percent: progress.percent ?? 0,
-        message: progress.message,
-        downloadedBytes: progress.downloadedBytes ?? undefined,
-        totalBytes: progress.totalBytes ?? undefined,
-      })),
+      api.onDshMarketProgress(progress => {
+        // 市场的插件级操作（安装/更新/卸载）与目录同步一样，只写日志行，
+        // 不进入安装活动状态：避免触发灵动岛自动弹出、Profile 切换/启动被短时锁定。
+        if (typeof progress.message === 'string' && progress.message.trim()) {
+          appendRuntimeLog({
+            channel: 'plugin',
+            level: progress.phase === 'error' ? 'error' : progress.phase === 'complete' ? 'success' : 'info',
+            text: `[dsh-market] ${progress.message} · ${progress.percent ?? 0}%`,
+          })
+        }
+      }),
       api.onLauncherUpdateProgress(progress => {
         setLauncherUpdateProgress(progress)
         setLauncherUpdate(current => current ? { ...current, state: progress.phase === 'applying' ? 'applying' : 'downloading' } : current)
@@ -288,6 +302,22 @@ export function useLauncherStore() {
       showToast({ kind: 'error', message: errorText(error) })
     }
   }, [adoptProfile, api, showToast])
+
+  /** 插件管理页的「刷新」：Profile 之外的 Skill、加载项、预设都是全局资源，需一并重读。 */
+  const refreshSecondaryResources = useCallback(async () => {
+    try {
+      const [skills, applications, presets] = await Promise.all([
+        api.readInstalledSkills(),
+        api.readInstalledApplications(),
+        api.readInstalledPresets(),
+      ])
+      setInstalledSkills(skills)
+      setInstalledApplications(applications)
+      setInstalledPresets(presets)
+    } catch (error) {
+      showToast({ kind: 'error', message: errorText(error) })
+    }
+  }, [api, showToast])
 
   const refreshCustomApiProviders = useCallback(async (): Promise<boolean> => {
     setCustomApiLoading(true)
@@ -568,6 +598,32 @@ export function useLauncherStore() {
     return true
   }, [adoptProfile, api, installedApplications, run])
 
+  const readRecommendedWebUi = useCallback(async (): Promise<RecommendedWebUiStatus> => {
+    const statusValue = await api.recommendedWebUiStatus()
+    setRecommendedWebUi(statusValue)
+    return statusValue
+  }, [api])
+
+  const installRecommendedWebUi = useCallback(async (options: { suspendOthers?: boolean }): Promise<boolean> => {
+    const result = await run('recommended-web-ui', () => api.recommendedWebUiInstall(options), {
+      success: options.suspendOthers
+        ? '官方推荐整合包已安装并启用，其它插件暂不启用。'
+        : '官方推荐整合包已安装并启用。',
+    })
+    if (result) {
+      setRecommendedWebUi(result)
+      await refreshProfile()
+    }
+    return result !== undefined
+  }, [api, refreshProfile, run])
+
+  const markRecommendedWebUiPrompted = useCallback(async (): Promise<void> => {
+    if (!settings || settings.recommendedWebUiPrompted) return
+    const next = { ...settings, recommendedWebUiPrompted: true }
+    await api.saveSettings(next)
+    setSettings(next)
+  }, [api, settings])
+
   const toggleSkill = useCallback(async (skill: InstalledSkill, enabled: boolean) => {
     const next = await run(`skill:${skill.name}`, () => api.toggleSkill(skill.name, enabled), {
       success: enabled ? `Skill「${skill.name}」已启用。` : `Skill「${skill.name}」已停用。`,
@@ -623,6 +679,13 @@ export function useLauncherStore() {
   const togglePreset = useCallback(async (preset: InstalledPreset, enabled: boolean) => {
     const next = await run(`preset:${preset.name}`, () => api.togglePreset(preset.name, enabled), {
       success: enabled ? `预设「${preset.name}」已启用。` : `预设「${preset.name}」已停用。`,
+    })
+    if (next) setInstalledPresets(next)
+  }, [api, run])
+
+  const uninstallPreset = useCallback(async (preset: InstalledPreset) => {
+    const next = await run(`preset-remove:${preset.name}`, () => api.uninstallPreset(preset.name), {
+      success: `预设「${preset.name}」已删除。`,
     })
     if (next) setInstalledPresets(next)
   }, [api, run])
@@ -921,6 +984,7 @@ export function useLauncherStore() {
     customApiLoading,
     githubAuthStatus,
     logs,
+    processLogCount,
     selectedPlugin,
     selected: profile?.plugins.find(plugin => plugin.packageName === selectedPlugin) ?? null,
     packs,
@@ -935,6 +999,7 @@ export function useLauncherStore() {
     dismissToast,
     showToast,
     refreshProfile,
+    refreshSecondaryResources,
     refreshCustomApiProviders,
     applyInstallResult,
     adoptCatalogInstallationState,
@@ -967,10 +1032,15 @@ export function useLauncherStore() {
       setGitHubAuthStatus(next)
     },
     togglePlugin,
+    recommendedWebUi,
+    readRecommendedWebUi,
+    installRecommendedWebUi,
+    markRecommendedWebUiPrompted,
     toggleSkill,
     toggleApplication,
     uninstallApplication,
     togglePreset,
+    uninstallPreset,
     reorderPlugins,
     uninstallPlugin,
     trialPlugin,

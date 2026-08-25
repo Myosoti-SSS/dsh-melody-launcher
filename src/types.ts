@@ -24,6 +24,25 @@ export interface AppSettings {
   aiDeveloperMode?: boolean
   /** DSH Copilot 的用户提示词覆盖/追加内容。 */
   aiPrompt?: string
+  /** 网络镜像 / 代理偏好；留空即用启动器默认策略（npm 镜像优先、系统代理探测）。 */
+  network?: NetworkSettings
+  /** 是否已向用户问过「官方推荐整合包 DSH Web UI」的下载/启用（弹过一次后不再弹）。 */
+  recommendedWebUiPrompted?: boolean
+}
+
+export interface NetworkSettings {
+  /** npm 注册表镜像；留空默认 npmmirror。 */
+  npmRegistry?: string
+  /** HTTP/HTTPS 代理地址（如 http://127.0.0.1:7890）；留空自动探测系统代理。 */
+  proxy?: string
+  /** GitHub/raw 镜像前缀；留空不启用（预留，便于后续扩展）。 */
+  githubMirror?: string
+}
+
+/** 官方推荐整合包（DSH Web UI 全家桶）的安装/启用状态。 */
+export interface RecommendedWebUiStatus {
+  installed: boolean
+  enabled: boolean
 }
 
 export interface CredentialStatus {
@@ -716,6 +735,8 @@ export interface AiMessage {
   text: string
   createdAt: string
   streaming?: boolean
+  /** 助手消息的思考/推理内容（流式到达，前端默认收起展示）。 */
+  reasoning?: string
 }
 
 export interface AiQueueState {
@@ -738,10 +759,22 @@ export interface AiSessionSummary {
   messageCount: number
   pendingApproval: AiApprovalRequest | null
   hasSnapshot: boolean
+  /** 会话固定使用的模型（"provider|model"）；空表示自动选择。 */
+  model?: string | null
 }
 
 export interface AiSession extends AiSessionSummary {
   messages: AiMessage[]
+}
+
+/** Copilot 模型选择器候选。 */
+export interface CopilotModelOption {
+  /** 稳定标识：deepseek-official 或自定义 provider 路由。 */
+  provider: string
+  model: string
+  label: string
+  /** 当前是否可用（缺密钥或协议不兼容时不可用）。 */
+  available: boolean
 }
 
 export type AiSessionEvent =
@@ -1123,11 +1156,15 @@ export interface LauncherApi {
   installPreset(request: PresetInstallRequest): Promise<PresetInstallResult>
   readInstalledPresets(): Promise<InstalledPreset[]>
   togglePreset(name: string, enabled: boolean): Promise<InstalledPreset[]>
+  uninstallPreset(name: string): Promise<InstalledPreset[]>
   getRuntimeState(): Promise<RuntimeState>
   startRuntime(): Promise<RuntimeState>
   stopRuntime(): Promise<RuntimeState>
   openExternal(url: string): Promise<void>
   openPath(path: string): Promise<void>
+  openProfilePluginFolder(packageName: string): Promise<void>
+  recommendedWebUiStatus(): Promise<RecommendedWebUiStatus>
+  recommendedWebUiInstall(options: { suspendOthers?: boolean }): Promise<RecommendedWebUiStatus>
   setWindowMode(mode: WindowMode): Promise<void>
   minimizeWindow(): Promise<void>
   toggleMaximizeWindow(): Promise<boolean>
@@ -1142,7 +1179,9 @@ export interface LauncherApi {
   aiHasSnapshot(): Promise<boolean>
   listAiSessions(): Promise<AiSession[]>
   createAiSession(input?: AiSessionCreateInput): Promise<AiSession>
-  sendAiSessionMessage(sessionId: string, text: string): Promise<AiSession>
+  sendAiSessionMessage(sessionId: string, text: string, model?: string | null): Promise<AiSession>
+  listCopilotModels(): Promise<CopilotModelOption[]>
+  setAiSessionModel(sessionId: string, model: string | null): Promise<AiSession>
   cancelAiSession(sessionId: string): Promise<void>
   approveAiSession(sessionId: string, requestId: string, allow: boolean): Promise<boolean>
   rollbackAiSession(sessionId: string): Promise<{ restored: number; profileName: string }>

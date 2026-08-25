@@ -13,11 +13,13 @@ import { createCopilotSessionManager, type CopilotSessionManager } from './copil
 import { createDshMarketService, type DshMarketService } from './dsh-market'
 import { runCommand } from './command'
 import { readDeepSeekApiKey } from './credentials'
+import { resolveAgentApiForModel, resolveCopilotAgentApi } from './copilot-api'
 import { findInstalledDsh } from './dsh-install'
-import { buildPluginCommandArgs, createInstaller, validateLocalPluginDirectory, type Installer } from './installer'
+import { buildPluginCommandArgs, createInstaller, syncProfilePnpmConfig, validateLocalPluginDirectory, type Installer } from './installer'
 import { registerIpcHandlers } from './ipc'
 import { createLauncherUpdater, type LauncherUpdater } from './launcher-update'
 import { createGitHubAuthService, type GitHubAuthService } from './github-auth'
+import { buildNetworkEnvironment } from './proxy'
 import {
   ensureNodeRuntime,
   ensurePnpmRuntime,
@@ -37,6 +39,7 @@ import { readPluginReceipts, recordPluginInstall } from './plugin-receipts'
 import { configureProcessTracker, shutdownTrackedProcesses, withExecutableDirectoryOnPath, withGitOnPath } from './process'
 import { createProcessSupervisor, type ProcessSupervisor } from './process-supervisor'
 import { readProfile, reorderPlugins, togglePlugin } from './profile'
+import { createRecommendedWebUiService, type RecommendedWebUiService } from './recommended-web-ui'
 import { consolidatePluginPool, createProfileService, ensureProfileWorkspaceConfig, migrateLegacyPacks, type ProfileService } from './profile-service'
 import { installPresetFromDirectory } from './preset-install'
 import { installSkillFromDirectory } from './skill-install'
@@ -44,6 +47,7 @@ import { createRendererEvents } from './renderer-events'
 import { createRuntimeController, type RuntimeController } from './runtime'
 import { createRuntimeVersionService, type RuntimeVersionService } from './runtime-versions'
 import { createSettingsStore, defaultSettings, type SettingsStore } from './settings'
+import { createTray, type TrayController } from './tray'
 import { recoverLegacyCredentials } from './dsh-credentials-compat'
 import { createNonstandardPackService, type NonstandardPackService } from './nonstandard-pack'
 
@@ -53,11 +57,17 @@ import { createNonstandardPackService, type NonstandardPackService } from './non
  */
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url))
+// 窗口图标与托盘图标共用同一资源；dev 取 public/，打包取 dist/。
+const launcherIconPath = path.join(moduleDirectory, app.isPackaged ? '../dist/launcher-icon.png' : '../public/launcher-icon.png')
 
 let mainWindow: BrowserWindow | null = null
 let processSupervisor: ProcessSupervisor | null = null
 let quitCleanupStarted = false
 let allowFinalQuit = false
+// 关闭按钮只隐藏到托盘；before-quit 置位后放行真正的关闭。
+let isQuitting = false
+let tray: TrayController | null = null
+let backgroundNoticeShown = false
 
 const getWindow = (): BrowserWindow | null => mainWindow
 const events = createRendererEvents(createRendererChannel(getWindow))
@@ -76,6 +86,7 @@ interface Services {
   applicationAddons: ApplicationAddonManager
   catalogSync: CatalogSyncService
   dshMarket: DshMarketService
+  recommendedWebUi: RecommendedWebUiService
   runtimeVersions: RuntimeVersionService
   profiles: ProfileService
   nonstandardPack: NonstandardPackService
@@ -178,6 +189,7 @@ function createServices(): Services {
     openExternal: url => void shell.openExternal(url),
     resolveApplicationLaunchPlan: () => applicationAddons.launchPlan(),
     legacyCredentialsBackupRoot: path.join(userData, 'dsh-credentials-compat'),
+    packageStoreRoot: path.join(userData, 'plugin-store'),
   })
   const profileService = createProfileService({
     dshHome: () => settings.read().then(value => value.dshHome),
@@ -281,6 +293,7 @@ function createServices(): Services {
             offlineInstallAttempted = true
             offlineNode ??= await prepareNodeRuntime('plugin')
             offlinePnpm ??= await preparePnpmRuntime('plugin', offlineNode)
+            await syncProfilePnpmConfig(targetProfileDir, buildNetworkEnvironment(current).npmRegistry, pluginStoreRoot)
             const result = await runCommand(offlinePnpm.executable, ['install', '--dir', targetProfileDir, '--offline', '--no-frozen-lockfile', '--config.auto-install-peers=false', '--store-dir', pluginStoreRoot], {
               cwd: targetProfileDir,
               env: withGitOnPath(withExecutableDirectoryOnPath(offlinePnpm.executable, withExecutableDirectoryOnPath(offlineNode.node, {
@@ -385,6 +398,13 @@ function createServices(): Services {
     githubFetch: githubAuth.fetch,
   })
 
+  // 官方推荐整合包（DSH Web UI 全家桶）：用 installer 装 latest，
+  // 避免依赖市场目录与 git 子路径回退。
+  const recommendedWebUi = createRecommendedWebUiService({
+    readSettings: () => settings.read(),
+    installer,
+  })
+
   // This service deliberately does not use the unified resource-market
   // analyzers or installers. It mirrors dsh-market's curated registry and
   // package command rules behind a separate API surface.
@@ -435,6 +455,8 @@ function createServices(): Services {
     packageStoreRoot: path.join(userData, 'plugin-store'),
     readSettings: () => settings.read(),
     readApiKey: dshHome => readDeepSeekApiKey(dshHome),
+    resolveAgentApi: dshHome => resolveCopilotAgentApi(dshHome),
+    resolveAgentApiForModel: (dshHome, provider, model) => resolveAgentApiForModel(dshHome, provider, model),
     prepareNodeRuntime: () => prepareNodeRuntime('ai'),
     preparePnpmRuntime: nodeRuntime => preparePnpmRuntime('ai', nodeRuntime),
     emitEvent: event => events.aiSessionEvent(event),
@@ -606,17 +628,70 @@ function createServices(): Services {
     if (result.dependencies > 0) events.output('plugin', 'info', `已将 ${result.dependencies} 个 Profile 插件依赖归并到共享插件池。`)
   }).catch(error => events.output('plugin', 'error', `旧整合包/插件池迁移失败：${error instanceof Error ? error.message : String(error)}`))
 
-  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager: packManager!, githubAuth, applicationAddons, catalogSync, dshMarket, runtimeVersions, profiles: profileService, nonstandardPack, profilePoolReady }
+  return {
+    settings,
+    pluginReceiptsPath,
+    runtime,
+    installer,
+    launcherUpdater,
+    pluginTrial,
+    aiInstaller,
+    copilot,
+    packManager: packManager!,
+    githubAuth,
+    applicationAddons,
+    catalogSync,
+    dshMarket,
+    recommendedWebUi,
+    runtimeVersions,
+    profiles: profileService,
+    nonstandardPack,
+    profilePoolReady,
+  }
 }
 
 function openMainWindow(): void {
-  mainWindow = createMainWindow({
+  const window = createMainWindow({
     preloadPath: path.join(moduleDirectory, 'preload.mjs'),
-    iconPath: path.join(moduleDirectory, app.isPackaged ? '../dist/launcher-icon.png' : '../public/launcher-icon.png'),
+    iconPath: launcherIconPath,
     devServerUrl: process.env.VITE_DEV_SERVER_URL,
     indexPath: path.join(moduleDirectory, '../dist/index.html'),
     onClosed: () => { mainWindow = null },
   })
+  // 点 X 或 Alt+F4 只隐藏到托盘继续后台运行；托盘菜单「退出」经 app.quit()
+  // 触发 before-quit 置位 isQuitting 后，这里才放行关闭。
+  window.on('close', event => {
+    if (isQuitting) return
+    event.preventDefault()
+    window.hide()
+    if (!backgroundNoticeShown) {
+      backgroundNoticeShown = true
+      tray?.notifyBackground()
+    }
+  })
+  mainWindow = window
+}
+
+/** 从托盘或第二实例唤起主窗口；窗口不存在时重建。 */
+function showMainWindow(): void {
+  const window = getWindow()
+  if (!window || window.isDestroyed()) {
+    openMainWindow()
+    return
+  }
+  if (window.isMinimized()) window.restore()
+  // 无边框透明窗口从后台唤起时常抢不到焦点，短暂置顶可确保激活。
+  window.setAlwaysOnTop(true, 'screen-saver')
+  window.show()
+  window.focus()
+  window.setAlwaysOnTop(false, 'screen-saver')
+}
+
+// 第二个实例直接退出，由已运行实例通过 second-instance 唤起前台窗口。
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => showMainWindow())
 }
 
 app.whenReady().then(async () => {
@@ -640,6 +715,7 @@ app.whenReady().then(async () => {
   })
   await services.profilePoolReady
   openMainWindow()
+  tray = createTray({ iconPath: launcherIconPath, showMainWindow })
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) openMainWindow()
   })
@@ -710,8 +786,16 @@ app.on('before-quit', event => {
   event.preventDefault()
   if (quitCleanupStarted) return
   quitCleanupStarted = true
+  // 放行窗口 close：清理完成后窗口随退出流程正常关闭。
+  isQuitting = true
   void shutdownLauncherProcesses().finally(() => {
     allowFinalQuit = true
     app.quit()
   })
+})
+
+// will-quit 在 before-quit 清理完成后触发，此时移除托盘图标。
+app.on('will-quit', () => {
+  tray?.destroy()
+  tray = null
 })

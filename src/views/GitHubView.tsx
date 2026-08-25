@@ -1,5 +1,5 @@
 import { ExternalLink, GitFork, GitPullRequest, LoaderCircle, LogIn, RefreshCw } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLauncherApi } from '../api/client'
 import { PageHeading } from '../components/PageHeading'
 import { errorText, formatRelativeTime } from '../lib/format'
@@ -16,19 +16,24 @@ export function GitHubView({ authStatus, onLogin, onOpen, onError }: GitHubViewP
   const api = useLauncherApi()
   const [pullRequests, setPullRequests] = useState<GitHubPullRequestSummary[]>([])
   const [loading, setLoading] = useState(false)
+  // 是否已拿到过数据：聚焦触发的重拉走静默路径，不把列表闪回 loading 态。
+  const hasDataRef = useRef(false)
 
   const load = useCallback(async () => {
     if (!authStatus.authenticated) {
+      hasDataRef.current = false
       setPullRequests([])
       return
     }
-    setLoading(true)
+    const showSpinner = !hasDataRef.current
+    if (showSpinner) setLoading(true)
     try {
       setPullRequests(await api.listGitHubPullRequests())
+      hasDataRef.current = true
     } catch (error) {
       onError(errorText(error))
     } finally {
-      setLoading(false)
+      if (showSpinner) setLoading(false)
     }
   }, [api, authStatus.authenticated, onError])
 
@@ -64,7 +69,7 @@ export function GitHubView({ authStatus, onLogin, onOpen, onError }: GitHubViewP
           <section className="github-pr-list">
             <header><div><GitPullRequest size={18} /><h2>最近提交</h2></div><span>{pullRequests.length} 条</span></header>
             {loading ? <div className="list-loading"><LoaderCircle className="spin" size={20} />正在读取 GitHub</div> : pullRequests.length === 0 ? (
-              <div className="github-empty-list"><GitPullRequest size={21} /><span>还没有找到基于 Melody Launcher 的提交。</span></div>
+              <div className="github-empty-list"><span>还没有找到基于 Melody Launcher 的提交。</span></div>
             ) : pullRequests.map(pull => (
               <button type="button" className="github-pr-row" key={pull.number} onClick={() => onOpen(pull.url)}>
                 <span className={`github-pr-state ${pull.state}`}><GitPullRequest size={17} /></span>

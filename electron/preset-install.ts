@@ -6,6 +6,7 @@ import AdmZip from 'adm-zip'
 import type { InstalledPreset, PresetInstallTarget } from '../src/types'
 import { downloadGitHubArchive, githubArchiveUrl } from './github-archive'
 import { isSafeRepositoryName } from './profile'
+import { removePresetReceipt } from './preset-receipts'
 import { isSkillName } from './skill-format'
 
 const MAX_FILES = 5000
@@ -294,5 +295,20 @@ export async function toggleInstalledPreset(dshHome: string, name: string, enabl
     }
     throw error
   }
+  return readInstalledPresets(dshHome)
+}
+
+/**
+ * 卸载一个本地 agent-preset：删除其目录（启用或停用位置）并清理安装凭据。
+ * 预设是全局资源，不随插件卸载联动，由用户在预设列表里显式删除。
+ */
+export async function uninstallInstalledPreset(dshHome: string, name: string, presetReceiptsPath: string): Promise<InstalledPreset[]> {
+  if (!isSkillName(name)) throw new Error('预设名称无效。')
+  const preset = (await readInstalledPresets(dshHome)).find(item => item.name === name)
+  if (!preset) throw new Error(`未找到本地预设：${name}`)
+  const presetRoot = path.join(dshHome, '.agent-presets')
+  assertInside(presetRoot, preset.path)
+  await rm(preset.path, { recursive: true, force: true })
+  await removePresetReceipt(presetReceiptsPath, name)
   return readInstalledPresets(dshHome)
 }
