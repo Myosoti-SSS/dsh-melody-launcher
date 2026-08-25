@@ -63,6 +63,101 @@ function cancelWindowModeAnimation(window: BrowserWindow): void {
   windowModeAnimations.delete(window)
 }
 
+// ---------------------------------------------------------------------------
+// 最小化 / 还原动画
+//
+// 窗口是自绘无边框透明壳（frame:false + transparent:true），Windows 不会给它
+// 原生最小化动画。这里用 JS 做"收进任务栏 / 还原长大"的过渡，视觉接近 Edge：
+//   - 最小化：把窗口朝所在显示器任务栏上沿收缩并淡出，再调用 minimize()；
+//   - 还原：'restore' 时从当前位置长大回最小化前的边界并淡入。
+// ---------------------------------------------------------------------------
+
+const MINIMIZE_ANIMATION_MS = 130
+const MINIMIZE_ANIMATION_FRAME = 8
+const minimizeRestoreBounds = new WeakMap<BrowserWindow, Rectangle>()
+
+/** 点击最小化：先收缩淡出到任务栏上沿，再真正最小化。 */
+export function animateWindowMinimize(window: BrowserWindow): void {
+  if (window.isDestroyed() || window.isMinimized() || window.isMaximized()) {
+    window.minimize()
+    return
+  }
+  const start = window.getBounds()
+  minimizeRestoreBounds.set(window, start)
+  const workArea = screen.getDisplayMatching(start).workArea
+  const end = {
+    x: Math.round(start.x + start.width / 2 - 60),
+    y: workArea.y + workArea.height - 6,
+    width: 120,
+    height: 8,
+  }
+  const [minWidth, minHeight] = window.getMinimumSize()
+  window.setMinimumSize(1, 1)
+  const startedAt = performance.now()
+  const tick = () => {
+    if (window.isDestroyed() || window.isMinimized()) {
+      window.setMinimumSize(minWidth, minHeight)
+      window.setOpacity(1)
+      return
+    }
+    const progress = Math.min(1, (performance.now() - startedAt) / MINIMIZE_ANIMATION_MS)
+    const eased = easeOutCubic(progress)
+    window.setBounds({
+      x: Math.round(start.x + (end.x - start.x) * eased),
+      y: Math.round(start.y + (end.y - start.y) * eased),
+      width: Math.round(start.width + (end.width - start.width) * eased),
+      height: Math.round(start.height + (end.height - start.height) * eased),
+    })
+    window.setOpacity(1 - eased)
+    syncWindowShadow(window)
+    if (progress >= 1) {
+      window.setMinimumSize(minWidth, minHeight)
+      window.setOpacity(1)
+      window.minimize()
+      return
+    }
+    setTimeout(tick, MINIMIZE_ANIMATION_FRAME)
+  }
+  tick()
+}
+
+/** 从任务栏还原时，从当前位置长大回最小化前的边界并淡入。 */
+export function attachWindowMinimizeAnimation(window: BrowserWindow): void {
+  window.on('restore', () => {
+    const target = minimizeRestoreBounds.get(window)
+    if (!target || window.isDestroyed()) return
+    minimizeRestoreBounds.delete(window)
+    const start = window.getBounds()
+    const [minWidth, minHeight] = window.getMinimumSize()
+    window.setMinimumSize(1, 1)
+    const startedAt = performance.now()
+    const tick = () => {
+      if (window.isDestroyed() || window.isMinimized()) {
+        window.setMinimumSize(minWidth, minHeight)
+        window.setOpacity(1)
+        return
+      }
+      const progress = Math.min(1, (performance.now() - startedAt) / MINIMIZE_ANIMATION_MS)
+      const eased = easeOutCubic(progress)
+      window.setBounds({
+        x: Math.round(start.x + (target.x - start.x) * eased),
+        y: Math.round(start.y + (target.y - start.y) * eased),
+        width: Math.round(start.width + (target.width - start.width) * eased),
+        height: Math.round(start.height + (target.height - start.height) * eased),
+      })
+      window.setOpacity(eased)
+      syncWindowShadow(window)
+      if (progress >= 1) {
+        window.setMinimumSize(minWidth, minHeight)
+        window.setOpacity(1)
+        return
+      }
+      setTimeout(tick, MINIMIZE_ANIMATION_FRAME)
+    }
+    tick()
+  })
+}
+
 export function isWindowMode(value: unknown): value is WindowMode {
   return value === 'launcher' || value === 'manager'
 }
@@ -112,6 +207,7 @@ export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
   window.setHasShadow(true)
   window.once('closed', options.onClosed)
   attachWindowShadow(window)
+  attachWindowMinimizeAnimation(window)
   window.once('ready-to-show', () => {
     window.show()
     showWindowShadow(window)

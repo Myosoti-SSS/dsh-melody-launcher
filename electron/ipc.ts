@@ -5,7 +5,7 @@ import path from 'node:path'
 import { IPC, IPC_EVENTS } from '../src/constants'
 import type { AiSessionCreateInput, ApplicationInstallRequest, AppSettings, CustomApiProviderInput, PackCreateRequest, PluginInstallRequest, PresetInstallRequest, SkillInstallRequest, WindowMode, ProfileRepositoryImportMode, PackPluginEntry } from '../src/types'
 import type { ApplicationAddonManager } from './application-addons'
-import { isWindowMode } from './app-window'
+import { animateWindowMinimize, isWindowMode } from './app-window'
 import { clearDeepSeekApiKey, getDeepSeekCredentialStatus, setDeepSeekApiKey } from './credentials'
 import { listCustomApiProviders, removeCustomApiProvider, saveCustomApiProvider } from './custom-api'
 import { listCopilotModels } from './copilot-api'
@@ -914,7 +914,10 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     if (!isWindowMode(mode)) throw new Error('窗口模式无效。')
     deps.setWindowMode(mode)
   })
-  ipcMain.handle(IPC.windowMinimize, () => deps.getWindow()?.minimize())
+  ipcMain.handle(IPC.windowMinimize, () => {
+    const window = deps.getWindow()
+    if (window) animateWindowMinimize(window)
+  })
   ipcMain.handle(IPC.windowToggleMaximize, () => {
     const window = deps.getWindow()
     if (!window || window.isDestroyed()) return false

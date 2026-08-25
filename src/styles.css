@@ -864,6 +864,8 @@ input:focus-visible {
   grid-template-columns: max-content minmax(0, 1fr) minmax(0, max-content) max-content;
   align-items: center;
   gap: 8px;
+  /* 与右侧「停止 DSH」等操作簇保留呼吸距离，避免运行中芯片贴住按钮。 */
+  margin-right: 16px;
   container: header-management / inline-size;
 }
 
@@ -876,6 +878,7 @@ input:focus-visible {
   padding: 0 11px;
   gap: 7px;
   border: 1px solid var(--line);
+  margin-right: 16px;
   border-radius: 6px;
   color: var(--muted);
   background: var(--surface-soft);
