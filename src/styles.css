@@ -1622,6 +1622,24 @@ input:focus-visible {
 .copilot-message-role { display: block; margin-bottom: 4px; color: var(--muted); font-size: var(--copilot-font-small); font-weight: 700; }
 .copilot-message .ai-markdown { font-size: var(--copilot-font); line-height: 1.6; }
 
+.copilot-thinking {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+.copilot-thinking summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--copilot-font-small);
+  font-weight: 650;
+  user-select: none;
+}
+.copilot-thinking summary::before { content: '💭 '; }
+.copilot-thinking[open] summary { margin-bottom: 6px; }
+.copilot-thinking .ai-markdown { color: var(--muted); font-size: var(--copilot-font-small); }
+
 .copilot-empty {
   display: grid;
   height: 100%;
@@ -1651,6 +1669,7 @@ input:focus-visible {
 .copilot-model-bar select:disabled { color: var(--quiet); opacity: .6; cursor: default; }
 .copilot-input-wrap { position: relative; width: 100%; min-width: 0; }
 .copilot-composer textarea { display: block; width: 100%; min-width: 0; min-height: 58px; max-height: 120px; resize: vertical; padding: 8px 43px 8px 9px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; font: inherit; font-size: var(--copilot-font); line-height: 1.55; }
+.copilot-composer-hint { margin-top: 4px; padding-left: 2px; color: var(--quiet); font-size: 9px; }
 .copilot-send-button { position: absolute; right: 6px; bottom: 6px; display: grid; width: 30px; height: 30px; padding: 0; place-items: center; border: 1px solid var(--line-strong); border-radius: 5px; color: #fff; background: var(--accent); cursor: pointer; }
 .copilot-send-button:hover:not(:disabled) { background: var(--accent-hover); }
 .copilot-send-button.stop { border-color: #e8cdca; background: var(--danger); }
@@ -3563,7 +3582,7 @@ input:focus-visible {
 
 .column-headings {
   display: grid;
-  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 52px;
+  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 90px;
   min-height: 31px;
   align-items: center;
   padding: 0 8px;
@@ -3580,7 +3599,7 @@ input:focus-visible {
 
 .plugin-row {
   display: grid;
-  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 52px;
+  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 90px;
   min-width: 0;
   min-height: 40px;
   align-items: center;
@@ -6898,7 +6917,10 @@ input:focus-visible {
 .dsh-market-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 11px; }
 .dsh-market-toolbar select { height: 34px; min-width: 0; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--ink); background: #fff; font-size: 11px; }
 .dsh-market-progress { display: flex; min-height: 34px; align-items: center; margin-bottom: 10px; padding: 0 11px; gap: 7px; border: 1px solid #c3d7ca; border-radius: 5px; color: var(--accent); background: var(--accent-soft); font-size: 11px; }
-.dsh-market-progress strong { margin-left: auto; font-family: Consolas, monospace; font-size: 10px; }
+.dsh-market-progress-track { flex: 1; min-width: 110px; height: 4px; border-radius: 2px; background: #dfe6e1; overflow: hidden; }
+.dsh-market-progress-track.determinate span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 180ms ease; }
+.dsh-market-progress-track.indeterminate span { display: block; width: 38%; height: 100%; border-radius: inherit; background: var(--accent); animation: install-progress-slide 1.25s ease-in-out infinite; }
+.dsh-market-progress strong { flex: 0 0 auto; font-family: Consolas, monospace; font-size: 10px; }
 .dsh-market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); align-items: start; gap: 10px; }
 .dsh-market-card { display: flex; min-width: 0; min-height: 190px; flex-direction: column; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 2px 7px rgb(40 55 45 / 4%); }
 .dsh-market-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; }

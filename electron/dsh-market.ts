@@ -154,6 +154,20 @@ function normalizeRegistry(value: Registry): Registry {
   return { ...value, plugins }
 }
 
+/** 从 pnpm 的 `Progress:` 行解析百分比（CI 模式实际输出，`downloaded of Y` 风格不常见）。 */
+function pnpmProgressPercent(text: string): number | null {
+  const line = /Progress:\s*(.+)/i.exec(text)?.[1]
+  if (!line) return null
+  const read = (key: string): number => {
+    const match = new RegExp(`\\b${key}\\s+(\\d+)`, 'i').exec(line)
+    return match ? Number(match[1]) : 0
+  }
+  const resolved = read('resolved')
+  if (resolved <= 0) return null
+  const done = read('downloaded') + read('reused') + read('added')
+  return Math.min(82, 20 + Math.round(done / resolved * 62))
+}
+
 function describeMarketFailure(entry: RegistryPlugin, exitCode: number, output: string): string {
   if (/workspace\s*[::*]|\bworkspace:\*\b|WORKSPACE_PKG_NOT_FOUND/i.test(output)) {
     return `安装「${entry.name}」失败：该插件是 monorepo 的 workspace 内部包，无法作为独立 git 依赖安装，自动改用 npm 源也失败。请确认该插件已发布到 npm 后重试。`
@@ -291,10 +305,16 @@ export function createDshMarketService(options: DshMarketOptions) {
     const network = buildNetworkEnvironment(settings)
     const handleOutput = (text: string, level: OutputLevel) => {
       options.emitOutput(level, text)
-      const match = /downloaded\s+(\d+)\s+of\s+(\d+)/i.exec(text)
-      if (match) progress(name, 'downloading', `正在下载 ${match[1]} / ${match[2]} 个包`, Math.min(82, 20 + Math.round(Number(match[1]) / Number(match[2]) * 60)))
-      else if (/build|prepare|prepack/i.test(text)) progress(name, 'building', '正在执行插件构建步骤', 84)
-      else progress(name, 'downloading', '正在下载插件及依赖', null)
+      const pair = /downloaded\s+(\d+)\s+of\s+(\d+)/i.exec(text)
+      const pnpmPercent = pnpmProgressPercent(text)
+      if (pair) {
+        progress(name, 'downloading', `正在下载插件及依赖（${pair[1]} / ${pair[2]} 个包）`, Math.min(82, 20 + Math.round(Number(pair[1]) / Number(pair[2]) * 60)))
+      } else if (pnpmPercent !== null) {
+        progress(name, 'downloading', '正在下载插件及依赖', pnpmPercent)
+      } else if (/build|prepare|prepack/i.test(text)) {
+        progress(name, 'building', '正在执行插件构建步骤', 84)
+      }
+      // 其余输出不刷新进度：保留当前数值，避免已解析的真实百分比被 null 覆盖。
     }
     let useOfficialRegistry = false
     const runDshPlugin = (): Promise<CommandResult> => {

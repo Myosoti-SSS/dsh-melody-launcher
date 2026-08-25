@@ -1,4 +1,5 @@
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { existsSync } from 'node:fs'
 import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC, IPC_EVENTS } from '../src/constants'
@@ -930,6 +931,13 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
   ipcMain.handle(IPC.openPath, async (_event, target: string) => {
     if (!path.isAbsolute(target)) throw new Error('路径无效。')
+    await shell.openPath(target)
+  })
+  ipcMain.handle(IPC.openProfilePluginFolder, async (_event, packageName: string) => {
+    if (typeof packageName !== 'string' || !isSafePackageName(packageName)) throw new Error('插件名称无效。')
+    const current = await settings.read()
+    const target = path.join(current.dshHome, 'profiles', current.profileName, 'node_modules', ...packageName.split('/'))
+    if (!existsSync(target)) throw new Error(`插件目录不存在：${target}`)
     await shell.openPath(target)
   })
 }

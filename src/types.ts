@@ -701,6 +701,8 @@ export interface AiMessage {
   text: string
   createdAt: string
   streaming?: boolean
+  /** 助手消息的思考/推理内容（流式到达，前端默认收起展示）。 */
+  reasoning?: string
 }
 
 export interface AiQueueState {
@@ -1062,6 +1064,7 @@ export interface LauncherApi {
   stopRuntime(): Promise<RuntimeState>
   openExternal(url: string): Promise<void>
   openPath(path: string): Promise<void>
+  openProfilePluginFolder(packageName: string): Promise<void>
   setWindowMode(mode: WindowMode): Promise<void>
   minimizeWindow(): Promise<void>
   toggleMaximizeWindow(): Promise<boolean>

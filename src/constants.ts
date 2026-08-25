@@ -148,6 +148,7 @@ export const IPC = {
   packsRemoveApplication: 'packs:remove-application',
   openExternal: 'shell:open-external',
   openPath: 'shell:open-path',
+  openProfilePluginFolder: 'shell:open-profile-plugin-folder',
   windowSetMode: 'window:set-mode',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggle-maximize',

@@ -107,6 +107,7 @@ const api: LauncherApi = {
   stopRuntime: () => ipcRenderer.invoke(IPC.runtimeStop),
   openExternal: url => ipcRenderer.invoke(IPC.openExternal, url),
   openPath: path => ipcRenderer.invoke(IPC.openPath, path),
+  openProfilePluginFolder: packageName => ipcRenderer.invoke(IPC.openProfilePluginFolder, packageName),
   setWindowMode: (mode: WindowMode) => ipcRenderer.invoke(IPC.windowSetMode, mode),
   minimizeWindow: () => ipcRenderer.invoke(IPC.windowMinimize),
   toggleMaximizeWindow: () => ipcRenderer.invoke(IPC.windowToggleMaximize),

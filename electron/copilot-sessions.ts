@@ -255,9 +255,16 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
     options.emitEvent({ kind: 'session-updated', session: cloneSession(session) })
   }
 
-  function appendMessage(sessionId: string, role: AiMessage['role'], text: string, streaming = false, id = randomUUID()): AiMessage {
+  function appendMessage(sessionId: string, role: AiMessage['role'], text: string, streaming = false, id = randomUUID(), reasoning?: string): AiMessage {
     const session = record(sessionId).session
-    const message: AiMessage = { id, role, text: text.slice(-MAX_MESSAGE_CHARS), createdAt: now(), streaming }
+    const message: AiMessage = {
+      id,
+      role,
+      text: text.slice(-MAX_MESSAGE_CHARS),
+      createdAt: now(),
+      streaming,
+      ...(reasoning ? { reasoning } : {}),
+    }
     session.messages.push(message)
     session.messages = trimMessages(session.messages)
     session.messageCount = session.messages.length
@@ -271,6 +278,16 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
     const message = session.messages.find(item => item.id === messageId)
     if (!message) return
     message.text = `${message.text}${chunk}`.slice(-MAX_MESSAGE_CHARS)
+    message.streaming = true
+    session.updatedAt = now()
+    options.emitEvent({ kind: 'message', sessionId, message: { ...message } })
+  }
+
+  function updateAssistantReasoning(sessionId: string, messageId: string, chunk: string): void {
+    const session = record(sessionId).session
+    const message = session.messages.find(item => item.id === messageId)
+    if (!message) return
+    message.reasoning = `${message.reasoning ?? ''}${chunk}`.slice(-MAX_MESSAGE_CHARS)
     message.streaming = true
     session.updatedAt = now()
     options.emitEvent({ kind: 'message', sessionId, message: { ...message } })
@@ -553,9 +570,11 @@ export function createCopilotSessionManager(options: CopilotSessionManagerOption
       clientInfo: { name: 'dsh-melody-launcher', version: '0.2.6' },
       onPermissionRequest: request => permission(sessionId, request),
       onSessionUpdate: update => {
-        if (update.text) {
+        if (update.text || update.reasoning) {
+          // 思考可能先于正文到达：有任一内容就先把助手消息建出来再累加。
           if (!active.assistantMessageId) active.assistantMessageId = appendMessage(sessionId, 'assistant', '', true).id
-          updateAssistantMessage(sessionId, active.assistantMessageId, update.text)
+          if (update.text) updateAssistantMessage(sessionId, active.assistantMessageId, update.text)
+          if (update.reasoning) updateAssistantReasoning(sessionId, active.assistantMessageId, update.reasoning)
         } else if (update.title && update.kind === 'tool_call') {
           appendMessage(sessionId, 'tool', `工具调用：${update.title}`)
         }

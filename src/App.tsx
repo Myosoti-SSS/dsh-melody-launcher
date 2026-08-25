@@ -121,7 +121,7 @@ function LauncherShell() {
   // installer is still active; only an in-flight Profile switch disables it.
   const profileSwitcherLocked = store.busy?.startsWith('profile-switch:') === true
   const runtimeBusy = store.busy === BUSY.runtime || installingResource || installingApplication || Boolean(store.busy?.startsWith('application'))
-  const runtimeActivity = Boolean(store.runtime.running || isInstallProgressActive(store.installProgress))
+  const runtimeActivity = Boolean(store.runtime.running)
   const latestRuntimeLog = store.logs.at(-1)
   const runtimeUpdateKey = [
     store.busy ?? '',
@@ -144,8 +144,6 @@ function LauncherShell() {
   ].join('|')
   const runtimeActivityRef = useRef(false)
   const runtimeActivityInitializedRef = useRef(false)
-  const runtimeLogRef = useRef<number | null>(null)
-  const runtimeLogInitializedRef = useRef(false)
 
   const revealRuntimeDrawer = () => {
     if (runtimeDrawerMode === 'expanded') return
@@ -181,22 +179,6 @@ function LauncherShell() {
     if (runtimeActivity && !runtimeActivityRef.current) revealRuntimeDrawer()
     runtimeActivityRef.current = runtimeActivity
   }, [runtimeActivity, store.loading])
-
-  // Some plugin operations stream directly to the terminal without creating an
-  // InstallProgress record. Treat a new process-output entry as activity as well —
-  // keyed on the real-output counter, so catalog/market sync's synthetic progress
-  // lines (also written to the log list) don't pop the drawer on page switch.
-  useEffect(() => {
-    if (store.loading) return
-    const version = store.processLogCount
-    if (!runtimeLogInitializedRef.current) {
-      runtimeLogInitializedRef.current = true
-      runtimeLogRef.current = version
-      return
-    }
-    if (version !== runtimeLogRef.current) revealRuntimeDrawer()
-    runtimeLogRef.current = version
-  }, [store.processLogCount, store.loading])
 
   useEffect(() => {
     if (!runtimeDrawerAutoOpened || runtimeDrawerMode !== 'half') return
@@ -420,6 +402,7 @@ function LauncherShell() {
                   onRefresh={() => { void store.refreshProfile(); void store.refreshSecondaryResources() }}
                   onBrowse={() => navigation.setView('discover')}
                   onOpenRepository={url => void api.openExternal(url)}
+                  onOpenPluginFolder={packageName => { void api.openProfilePluginFolder(packageName) }}
                   onToggleRuntime={toggleRuntime}
                   onOpenHarness={openHarness}
                   onOpenRuntimeSettings={() => changeRuntimeDrawerMode('expanded')}

@@ -9,6 +9,7 @@ import {
   Download,
   ExternalLink,
   FolderGit2,
+  FolderOpen,
   GripVertical,
   Link2,
   LoaderCircle,
@@ -59,6 +60,8 @@ interface PluginsViewProps {
   onRefresh: () => void
   onBrowse: () => void
   onOpenRepository: (url: string) => void
+  /** 打开某个插件在 Profile 里的安装目录。 */
+  onOpenPluginFolder?: (packageName: string) => void
   onToggleRuntime: () => void
   onOpenHarness: () => void
   onOpenRuntimeSettings: () => void
@@ -94,6 +97,7 @@ export function PluginsView({
   onRefresh,
   onBrowse,
   onOpenRepository,
+  onOpenPluginFolder,
   onToggleRuntime,
   onOpenHarness,
   onOpenRuntimeSettings,
@@ -246,6 +250,7 @@ export function PluginsView({
                   onMove={moveDirection => move(plugin.packageName, moveDirection)}
                   onDragStart={() => setDragged(plugin.packageName)}
                   onDrop={() => dropAt(plugin.packageName)}
+                  onOpenFolder={onOpenPluginFolder ? () => onOpenPluginFolder(plugin.packageName) : undefined}
                 />
                 )
               })}
@@ -508,7 +513,7 @@ function SkillList({ skills, selectedName, busy, locked, onSelect, onToggle }: {
   )
 }
 
-function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop }: {
+function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop, onOpenFolder }: {
   plugin: ManagedPlugin
   selected: boolean
   busy: boolean
@@ -522,6 +527,7 @@ function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp
   onMove: (direction: -1 | 1) => void
   onDragStart: () => void
   onDrop: () => void
+  onOpenFolder?: () => void
 }) {
   return (
     <div
@@ -567,6 +573,7 @@ function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp
       <div className="row-actions" onClick={event => event.stopPropagation()}>
         <button type="button" disabled={locked || busy || !canMoveUp} onClick={() => onMove(-1)} title="向上移动" aria-label={`向上移动 ${plugin.displayName}`}><ArrowUp size={15} /></button>
         <button type="button" disabled={locked || busy || !canMoveDown} onClick={() => onMove(1)} title="向下移动" aria-label={`向下移动 ${plugin.displayName}`}><ArrowDown size={15} /></button>
+        {onOpenFolder && <button type="button" disabled={busy} onClick={onOpenFolder} title="打开插件文件夹" aria-label={`打开 ${plugin.displayName} 文件夹`}><FolderOpen size={15} /></button>}
       </div>
     </div>
   )

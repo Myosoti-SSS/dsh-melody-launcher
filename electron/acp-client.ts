@@ -47,9 +47,33 @@ export interface AcpSessionUpdate {
   kind: string
   /** *_chunk 类的文本内容。 */
   text?: string
+  /** *_chunk 类的思考/推理内容（与 text 同 chunk 到达时可能都非空）。 */
+  reasoning?: string
   /** tool_call 类的标题。 */
   title?: string
   toolCallId?: string
+}
+
+/** 归一化一条 session/update 通知：提取 kind 与 *_chunk 的 text/reasoning。 */
+export function normalizeSessionUpdate(params: unknown): AcpSessionUpdate {
+  const record = (params ?? {}) as Record<string, unknown>
+  const update = (record.update ?? {}) as Record<string, unknown>
+  const base: AcpSessionUpdate = {
+    sessionId: String(record.sessionId ?? ''),
+    kind: String(update.sessionUpdate ?? ''),
+  }
+  const kind = base.kind
+  if (kind.endsWith('_chunk')) {
+    const content = update.content
+    if (content && typeof content === 'object') {
+      if ('text' in content) base.text = String((content as Record<string, unknown>).text ?? '')
+      if ('reasoning' in content) base.reasoning = String((content as Record<string, unknown>).reasoning ?? '')
+    }
+  } else if (kind === 'tool_call' || kind === 'tool_call_update') {
+    base.title = typeof update.title === 'string' ? update.title : undefined
+    base.toolCallId = typeof update.toolCallId === 'string' ? update.toolCallId : undefined
+  }
+  return base
 }
 
 /** 归一化后的 session/request_permission 请求。 */
@@ -249,26 +273,6 @@ export function createAcpClient(options: AcpClientOptions): AcpClient {
       rawInput: toolCall.rawInput,
       options: optionsList,
     }
-  }
-
-  function normalizeSessionUpdate(params: unknown): AcpSessionUpdate {
-    const record = (params ?? {}) as Record<string, unknown>
-    const update = (record.update ?? {}) as Record<string, unknown>
-    const base: AcpSessionUpdate = {
-      sessionId: String(record.sessionId ?? ''),
-      kind: String(update.sessionUpdate ?? ''),
-    }
-    const kind = base.kind
-    if (kind.endsWith('_chunk')) {
-      const content = update.content
-      if (content && typeof content === 'object' && 'text' in content) {
-        base.text = String((content as Record<string, unknown>).text ?? '')
-      }
-    } else if (kind === 'tool_call' || kind === 'tool_call_update') {
-      base.title = typeof update.title === 'string' ? update.title : undefined
-      base.toolCallId = typeof update.toolCallId === 'string' ? update.toolCallId : undefined
-    }
-    return base
   }
 
   return {
