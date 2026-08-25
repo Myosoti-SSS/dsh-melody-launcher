@@ -7292,3 +7292,39 @@ input:focus-visible {
 .profile-import-differences { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 10px 0; color: var(--muted); font-size: 10px; }
 .profile-import-differences strong { width: 100%; color: var(--ink); font-size: 11px; }
 @media (max-width: 620px) { .profile-import-mode-picker { grid-template-columns: 1fr; } .profile-repository-url-row { flex-direction: column; } .profile-import-plugin-list > div { flex-direction: column; gap: 2px; } .profile-import-plugin-list small { max-width: none; text-align: left; } }
+
+/* ---- 官方推荐整合包（DSH Web UI） ---- */
+.plugin-row-recommended { background: var(--accent-soft); }
+.plugin-row-recommended .plugin-name-cell strong { color: var(--accent); }
+.recommended-badge {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 5px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 10px;
+  font-weight: 750;
+}
+.recommended-download {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+.recommended-download:hover:not(:disabled) { background: var(--accent-hover); }
+.recommended-download:disabled { cursor: default; opacity: .5; }
+.recommended-state { color: var(--muted); font-size: 10px; }
+.recommended-state.on { color: var(--accent); font-weight: 650; }
+
+.recommended-dialog { width: min(460px, calc(100vw - 40px)); }
+.recommended-dialog-copy { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.7; }
+.recommended-action-row { display: grid; gap: 6px; padding: 2px 0 10px; }
+.recommended-action-row small { color: var(--muted); font-size: 10px; line-height: 1.6; }

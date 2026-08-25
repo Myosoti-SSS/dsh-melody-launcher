@@ -26,6 +26,8 @@ export interface AppSettings {
   aiPrompt?: string
   /** 网络镜像 / 代理偏好；留空即用启动器默认策略（npm 镜像优先、系统代理探测）。 */
   network?: NetworkSettings
+  /** 是否已向用户问过「官方推荐整合包 DSH Web UI」的下载/启用（弹过一次后不再弹）。 */
+  recommendedWebUiPrompted?: boolean
 }
 
 export interface NetworkSettings {
@@ -35,6 +37,12 @@ export interface NetworkSettings {
   proxy?: string
   /** GitHub/raw 镜像前缀；留空不启用（预留，便于后续扩展）。 */
   githubMirror?: string
+}
+
+/** 官方推荐整合包（DSH Web UI 全家桶）的安装/启用状态。 */
+export interface RecommendedWebUiStatus {
+  installed: boolean
+  enabled: boolean
 }
 
 export interface CredentialStatus {
@@ -1065,6 +1073,8 @@ export interface LauncherApi {
   openExternal(url: string): Promise<void>
   openPath(path: string): Promise<void>
   openProfilePluginFolder(packageName: string): Promise<void>
+  recommendedWebUiStatus(): Promise<RecommendedWebUiStatus>
+  recommendedWebUiInstall(options: { suspendOthers?: boolean }): Promise<RecommendedWebUiStatus>
   setWindowMode(mode: WindowMode): Promise<void>
   minimizeWindow(): Promise<void>
   toggleMaximizeWindow(): Promise<boolean>

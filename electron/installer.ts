@@ -48,6 +48,7 @@ import { readPresetReceipts, recordPresetInstall } from './preset-receipts'
 import { readSkillReceipts, recordSkillInstall } from './skill-receipts'
 import { isSafePackageName, isSafeProfileName, readProfile } from './profile'
 import { withExecutableDirectoryOnPath } from './process'
+import { buildNetworkEnvironment } from './proxy'
 import { analyzeSkillRepository } from './skill-catalog'
 import { readInstalledSkills as readLocalSkills, toggleInstalledSkill } from './skill-format'
 import { installPresetFromRepository, readInstalledPresets as readLocalPresets, toggleInstalledPreset, uninstallInstalledPreset } from './preset-install'
@@ -486,6 +487,7 @@ export function createInstaller(options: InstallerOptions): Installer {
   ): Promise<void> {
     const settings = await options.readSettings()
     const targetProfile = profileName ?? settings.profileName
+    const network = buildNetworkEnvironment(settings)
     const nodeRuntime = await prepareNode(installingRepository)
     const pnpmRuntime = await preparePnpm(nodeRuntime, installingRepository)
     const executable = resolveNodeExecutable(settings.launchExecutable, nodeRuntime)
@@ -511,6 +513,9 @@ export function createInstaller(options: InstallerOptions): Installer {
           pnpmRuntime.executable,
           withExecutableDirectoryOnPath(nodeRuntime.node, {
             ...process.env,
+            ...network.proxy,
+            npm_config_registry: network.npmRegistry,
+            NPM_CONFIG_REGISTRY: network.npmRegistry,
             DSH_HOME: settings.dshHome,
             ...(options.packageStoreRoot ? { npm_config_store_dir: options.packageStoreRoot, NPM_CONFIG_STORE_DIR: options.packageStoreRoot } : {}),
             ...(options.packageStoreRoot ? { pnpm_config_store_dir: options.packageStoreRoot, PNPM_CONFIG_STORE_DIR: options.packageStoreRoot } : {}),
@@ -542,6 +547,9 @@ export function createInstaller(options: InstallerOptions): Installer {
         cwd: profilePath,
         env: withExecutableDirectoryOnPath(nodeRuntime.node, {
           ...process.env,
+          ...network.proxy,
+          npm_config_registry: network.npmRegistry,
+          NPM_CONFIG_REGISTRY: network.npmRegistry,
           CI: 'true',
           DSH_HOME: settings.dshHome,
           ...(options.packageStoreRoot ? { npm_config_store_dir: options.packageStoreRoot, NPM_CONFIG_STORE_DIR: options.packageStoreRoot } : {}),

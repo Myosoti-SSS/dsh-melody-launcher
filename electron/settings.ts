@@ -44,6 +44,7 @@ export function defaultSettings(input: DefaultSettingsInput): AppSettings {
     uiTheme: 'forest',
     aiDeveloperMode: false,
     aiPrompt: '',
+    recommendedWebUiPrompted: false,
   }
 }
 
@@ -133,6 +134,7 @@ export function validateSettings(input: AppSettings): AppSettings {
     aiDeveloperMode: Boolean(input.aiDeveloperMode),
     aiPrompt: typeof input.aiPrompt === 'string' ? input.aiPrompt.slice(0, 20_000) : '',
     network: validNetworkSettings(input.network),
+    recommendedWebUiPrompted: Boolean(input.recommendedWebUiPrompted),
   }
 }
 
@@ -159,6 +161,7 @@ export function mergeStoredSettings(defaults: AppSettings, stored: Partial<AppSe
     aiDeveloperMode: Boolean(stored.aiDeveloperMode),
     aiPrompt: typeof stored.aiPrompt === 'string' ? stored.aiPrompt.slice(0, 20_000) : '',
     network: validNetworkSettings(stored.network) ?? defaults.network,
+    recommendedWebUiPrompted: Boolean(stored.recommendedWebUiPrompted),
   }
 }
 

@@ -149,6 +149,8 @@ export const IPC = {
   openExternal: 'shell:open-external',
   openPath: 'shell:open-path',
   openProfilePluginFolder: 'shell:open-profile-plugin-folder',
+  recommendedStatus: 'recommended:status',
+  recommendedInstall: 'recommended:install',
   windowSetMode: 'window:set-mode',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggle-maximize',

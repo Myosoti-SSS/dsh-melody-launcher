@@ -34,6 +34,7 @@ import { readPluginReceipts, recordPluginInstall } from './plugin-receipts'
 import { configureProcessTracker, shutdownTrackedProcesses, withExecutableDirectoryOnPath } from './process'
 import { createProcessSupervisor, type ProcessSupervisor } from './process-supervisor'
 import { readProfile, reorderPlugins, togglePlugin } from './profile'
+import { createRecommendedWebUiService, type RecommendedWebUiService } from './recommended-web-ui'
 import { consolidatePluginPool, createProfileService, ensureProfileWorkspaceConfig, migrateLegacyPacks, type ProfileService } from './profile-service'
 import { installPresetFromDirectory } from './preset-install'
 import { installSkillFromDirectory } from './skill-install'
@@ -72,6 +73,7 @@ interface Services {
   applicationAddons: ApplicationAddonManager
   catalogSync: CatalogSyncService
   dshMarket: DshMarketService
+  recommendedWebUi: RecommendedWebUiService
   runtimeVersions: RuntimeVersionService
   profiles: ProfileService
   profilePoolReady: Promise<void>
@@ -355,6 +357,13 @@ function createServices(): Services {
     githubFetch: githubAuth.fetch,
   })
 
+  // 官方推荐整合包（DSH Web UI 全家桶）：用 installer 装 latest，
+  // 避免依赖市场目录与 git 子路径回退。
+  const recommendedWebUi = createRecommendedWebUiService({
+    readSettings: () => settings.read(),
+    installer,
+  })
+
   // This service deliberately does not use the unified resource-market
   // analyzers or installers. It mirrors dsh-market's curated registry and
   // package command rules behind a separate API surface.
@@ -554,7 +563,7 @@ function createServices(): Services {
     if (result.dependencies > 0) events.output('plugin', 'info', `已将 ${result.dependencies} 个 Profile 插件依赖归并到共享插件池。`)
   }).catch(error => events.output('plugin', 'error', `旧整合包/插件池迁移失败：${error instanceof Error ? error.message : String(error)}`))
 
-  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager: packManager!, githubAuth, applicationAddons, catalogSync, dshMarket, runtimeVersions, profiles: profileService, profilePoolReady }
+  return { settings, pluginReceiptsPath, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager: packManager!, githubAuth, applicationAddons, catalogSync, dshMarket, recommendedWebUi, runtimeVersions, profiles: profileService, profilePoolReady }
 }
 
 function openMainWindow(): void {

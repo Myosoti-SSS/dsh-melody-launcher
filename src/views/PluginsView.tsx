@@ -22,9 +22,13 @@ import {
   Wrench,
   X,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { activeOrderFromDisplay, movePackage, movePackageTo } from '../lib/profile-order'
 import type { AppSettings, InstalledApplicationAddon, InstalledPreset, InstalledSkill, ManagedPlugin, PluginTrialResult, ProfileState, RuntimeState } from '../types'
+
+/** 官方推荐整合包：固定显示在 web-app 下方的一行。 */
+const RECOMMENDED_WEB_UI_PACKAGE = '@linxin666/dsh-web-ui-all'
+const RECOMMENDED_WEB_UI_ANCHOR = '@deepseek-ai/dsh-web-app'
 
 /** 插件加载顺序页：列表、排序、启停与详情。 */
 
@@ -62,6 +66,8 @@ interface PluginsViewProps {
   onOpenRepository: (url: string) => void
   /** 打开某个插件在 Profile 里的安装目录。 */
   onOpenPluginFolder?: (packageName: string) => void
+  /** 未安装官方推荐整合包时的“下载”操作。 */
+  onInstallRecommendedWebUi?: () => void
   onToggleRuntime: () => void
   onOpenHarness: () => void
   onOpenRuntimeSettings: () => void
@@ -98,6 +104,7 @@ export function PluginsView({
   onBrowse,
   onOpenRepository,
   onOpenPluginFolder,
+  onInstallRecommendedWebUi,
   onToggleRuntime,
   onOpenHarness,
   onOpenRuntimeSettings,
@@ -188,6 +195,38 @@ export function PluginsView({
     if (toggled) await onReorder(targetOrder)
   }
 
+  /** 官方推荐整合包固定行（web-app 下方），独立于真实插件列表。 */
+  const RecommendedRow = () => {
+    const recommended = profile.plugins.find(item => item.packageName === RECOMMENDED_WEB_UI_PACKAGE)
+    const installed = Boolean(recommended)
+    const enabled = recommended?.enabled ?? false
+    return (
+      <div className="plugin-row plugin-row-recommended">
+        <div className="priority-cell"><span className="recommended-badge" title="启动器推荐">荐</span></div>
+        <div className="state-cell">
+          {installed ? (
+            <label className="switch" title={enabled ? '停用整合包' : '启用整合包'} onClick={event => event.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={enabled}
+                disabled={Boolean(busy)}
+                onChange={event => { if (recommended) void onToggle(recommended, event.target.checked) }}
+                aria-label={`${enabled ? '停用' : '启用'} 官方推荐 DSH Web UI`}
+              />
+              <span />
+            </label>
+          ) : (
+            <button type="button" className="recommended-download" disabled={Boolean(busy)} title="下载官方推荐整合包" aria-label="下载官方推荐整合包" onClick={event => { event.stopPropagation(); onInstallRecommendedWebUi?.() }}><Download size={14} /></button>
+          )}
+        </div>
+        <div className="plugin-name-cell"><strong>官方推荐 DSH Web UI</strong><span>{RECOMMENDED_WEB_UI_PACKAGE}</span></div>
+        <span className="plugin-description-cell">启动器推荐整合包</span>
+        <span className="plugin-version">{installed ? recommended?.version ?? '已安装' : '未安装'}</span>
+        <div className="row-actions"><span className={`recommended-state ${enabled ? 'on' : ''}`}>{enabled ? '已启用' : installed ? '已停用' : ''}</span></div>
+      </div>
+    )
+  }
+
   return (
     <div className="page plugins-page">
       <div className="management-titlebar">
@@ -235,8 +274,8 @@ export function PluginsView({
               {orderedPlugins.filter(visible).map(plugin => {
                 const activeIndex = activeNames.indexOf(plugin.packageName)
                 return (
+                <Fragment key={plugin.packageName}>
                 <PluginRow
-                  key={plugin.packageName}
                   plugin={plugin}
                   selected={selection?.kind === 'plugin' && selection.id === plugin.packageName}
                   busy={isComponentBusy(busy, plugin.repositoryFullName, plugin.packageName)}
@@ -252,6 +291,8 @@ export function PluginsView({
                   onDrop={() => dropAt(plugin.packageName)}
                   onOpenFolder={onOpenPluginFolder ? () => onOpenPluginFolder(plugin.packageName) : undefined}
                 />
+                {plugin.packageName === RECOMMENDED_WEB_UI_ANCHOR && <RecommendedRow />}
+                </Fragment>
                 )
               })}
               </div>
