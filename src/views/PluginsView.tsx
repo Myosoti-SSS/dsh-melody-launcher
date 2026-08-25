@@ -141,11 +141,13 @@ export function PluginsView({
     setPluginDisplayOrder(profile.plugins.map(plugin => plugin.packageName))
   }, [profileName, pluginOrderKey])
 
-  const active = profile.plugins.filter(plugin => plugin.enabled)
-  const inactive = profile.plugins.filter(plugin => !plugin.enabled)
+  const active = profile.plugins.filter(plugin => plugin.enabled && plugin.packageName !== RECOMMENDED_WEB_UI_PACKAGE)
+  const inactive = profile.plugins.filter(plugin => !plugin.enabled && plugin.packageName !== RECOMMENDED_WEB_UI_PACKAGE)
   const activeNames = active.map(plugin => plugin.packageName)
   const pluginsByName = new Map(profile.plugins.map(plugin => [plugin.packageName, plugin]))
-  const orderedPlugins = pluginDisplayOrder.map(packageName => pluginsByName.get(packageName)).filter((plugin): plugin is ManagedPlugin => Boolean(plugin))
+  const orderedPlugins = pluginDisplayOrder
+    .map(packageName => pluginsByName.get(packageName))
+    .filter((plugin): plugin is ManagedPlugin => plugin !== undefined && plugin.packageName !== RECOMMENDED_WEB_UI_PACKAGE)
   const visible = (plugin: ManagedPlugin) =>
     (plugin.enabled ? showActivePlugins : showInactivePlugins)
     && (!filter || `${plugin.displayName} ${plugin.packageName}`.toLowerCase().includes(filter.toLowerCase()))
