@@ -1316,7 +1316,10 @@ export async function prepareAcpRuntime(
   signal?: AbortSignal,
 ): Promise<void> {
   if (signal?.aborted) throw new Error('AI 任务已取消。')
-  if (await isAcpRuntimeReady(acpRuntimeRoot)) return
+  if (await isAcpRuntimeReady(acpRuntimeRoot)) {
+    await patchAcpLlmDeepseek(acpRuntimeRoot)
+    return
+  }
   await mkdir(acpRuntimeRoot, { recursive: true })
   await atomicWrite(path.join(acpRuntimeRoot, 'package.json'), '{"name":"dsh-acp-runtime","private":true}\n')
   const specifiers = ACP_RUNTIME_PACKAGES.map(([name, version]) => `${name}@${version}`)
@@ -1352,6 +1355,36 @@ export async function prepareAcpRuntime(
   if (result.exitCode !== 0) {
     throw new Error(formatAcpRuntimeInstallFailure(result.exitCode, result.output))
   }
+  await patchAcpLlmDeepseek(acpRuntimeRoot)
+}
+
+/**
+ * 修补 @deepseek-ai/dsh-llm-deepseek 的流式 tool_call 合并逻辑。
+ *
+ * rc.8 适配器按 DeepSeek 官方线格式编写（tool_call 的 name/id 只在首个
+ * delta 出现）。自定义 API（如阿里 DashScope 兼容模式）被映射到该适配器后，
+ * 后续 delta 会重复携带 `function.name: null`（`null !== void 0` 为真），把
+ * 首分片捕获的真实工具名覆盖成 null，收尾序列化时兜底成 `""`，工具执行就报
+ * `unknown tool ""`。这里把两处「后到覆盖」改为「首个真实值生效」。
+ * 幂等：已补丁、文件缺失或版本不含原文时直接返回，不重复写。
+ */
+export async function patchAcpLlmDeepseek(acpRuntimeRoot: string): Promise<boolean> {
+  const file = path.join(acpRuntimeRoot, 'node_modules', '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js')
+  if (!existsSync(file)) return false
+  const source = await readFile(file, 'utf8')
+  const fixes: ReadonlyArray<readonly [before: string, after: string]> = [
+    ['if (call.id !== void 0) block.callId = call.id;', 'if (call.id) block.callId = call.id;'],
+    ['if (call.function?.name !== void 0) block.name = call.function.name;', 'if (call.function?.name) block.name = call.function.name;'],
+  ]
+  let next = source
+  for (const [before, after] of fixes) {
+    if (next.includes(after)) continue
+    if (!next.includes(before)) continue
+    next = next.split(before).join(after)
+  }
+  if (next === source) return false
+  await writeFile(file, next, 'utf8')
+  return true
 }
 
 // ---------------------------------------------------------------------------

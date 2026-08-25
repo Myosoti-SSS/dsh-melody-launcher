@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { DEFAULT_PROFILE_NAME, DSH_PACKAGE_NAME } from '../src/constants'
-import type { AppSettings, DshInstallationStatus, UiTheme } from '../src/types'
+import type { AppSettings, DshInstallationStatus, NetworkSettings, UiTheme } from '../src/types'
 import { managedDshExecutable } from './dsh-install'
 import { isSafeProfileName } from './profile'
 
@@ -62,6 +62,20 @@ function validRuntimeVersion(value: unknown): value is string {
     && /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value.trim())
 }
 
+/** 网络镜像/代理偏好：任一项非空才保留；丢空项以避免存一堆空字符串。 */
+function validNetworkSettings(value: unknown): NetworkSettings | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const network = value as Record<string, unknown>
+  const text = (field: string): string | undefined =>
+    typeof network[field] === 'string' && (network[field] as string).trim() !== ''
+      ? (network[field] as string).trim()
+      : undefined
+  const npmRegistry = text('npmRegistry')
+  const proxy = text('proxy')
+  const githubMirror = text('githubMirror')
+  return npmRegistry || proxy || githubMirror ? { npmRegistry, proxy, githubMirror } : undefined
+}
+
 /** 兼容曾经直接写在启动参数里的 --port。 */
 export function webPortFromLaunchArgs(args: unknown): number | null {
   if (!Array.isArray(args)) return null
@@ -118,6 +132,7 @@ export function validateSettings(input: AppSettings): AppSettings {
     uiTheme: validUiTheme(input.uiTheme) ? input.uiTheme : 'forest',
     aiDeveloperMode: Boolean(input.aiDeveloperMode),
     aiPrompt: typeof input.aiPrompt === 'string' ? input.aiPrompt.slice(0, 20_000) : '',
+    network: validNetworkSettings(input.network),
   }
 }
 
@@ -143,6 +158,7 @@ export function mergeStoredSettings(defaults: AppSettings, stored: Partial<AppSe
     uiTheme: validUiTheme(stored.uiTheme) ? stored.uiTheme : defaults.uiTheme ?? 'forest',
     aiDeveloperMode: Boolean(stored.aiDeveloperMode),
     aiPrompt: typeof stored.aiPrompt === 'string' ? stored.aiPrompt.slice(0, 20_000) : '',
+    network: validNetworkSettings(stored.network) ?? defaults.network,
   }
 }
 

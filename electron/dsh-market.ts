@@ -10,7 +10,12 @@ import type {
 } from '../src/types'
 import { DSH_PACKAGE_NAME } from '../src/constants'
 import { runCommand, type CommandOptions, type CommandResult, type OutputLevel } from './command'
-import { approveAllIgnoredBuilds } from './plugin-install'
+import { approveAllIgnoredBuilds, approveBuildKeys, gitPrepareBuildKeys } from './plugin-install'
+import {
+  buildNetworkEnvironment,
+  DEFAULT_NPM_REGISTRY,
+  NPM_OFFICIAL_REGISTRY,
+} from './proxy'
 import { readProfile } from './profile'
 import { resolveNodeExecutable, ensureNodeRuntime, ensurePnpmRuntime, type NodeRuntime, type PnpmRuntime } from './node-runtime'
 import { withExecutableDirectoryOnPath } from './process'
@@ -57,12 +62,13 @@ interface InstalledRecord {
   enabled: boolean
 }
 
-export function parseDshMarketSourceUrl(url: string): { repo: string; subpath: string | null } | null {
-  const match = /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\/tree\/[^/]+\/(.+?))?\/?$/.exec(url)
+export function parseDshMarketSourceUrl(url: string): { repo: string; subpath: string | null; branch: string | null } | null {
+  const match = /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\/tree\/([^/]+)\/(.+?))?\/?$/.exec(url)
   if (!match || !GITHUB_REPO.test(match[1])) return null
-  const subpath = match[2] ?? null
+  const branch = match[2] ?? null
+  const subpath = match[3] ?? null
   if (subpath !== null && (!/^[A-Za-z0-9_./-]+$/.test(subpath) || subpath.split('/').some(part => part === '' || part === '.' || part === '..'))) return null
-  return { repo: match[1], subpath }
+  return { repo: match[1], subpath, branch }
 }
 
 export function dshMarketInstallTarget(entry: { url: string; npm?: string | null }): string | null {
@@ -72,9 +78,10 @@ export function dshMarketInstallTarget(entry: { url: string; npm?: string | null
   return source.subpath === null ? `github:${source.repo}` : `github:${source.repo}#path:/${source.subpath}`
 }
 
-function entryIdentities(entry: { name: string; url: string; npm?: string | null }): Set<string> {
+function entryIdentities(entry: { name: string; url: string; npm?: string | null }, npmAlias?: string | null): Set<string> {
   const ids = new Set([entry.name.toLowerCase()])
-  if (entry.npm) ids.add(entry.npm.toLowerCase())
+  const alias = npmAlias ?? entry.npm
+  if (alias) ids.add(alias.toLowerCase())
   const source = parseDshMarketSourceUrl(entry.url)
   if (source) ids.add(source.subpath === null ? source.repo.toLowerCase() : `${source.repo.toLowerCase()}#path:/${source.subpath.toLowerCase()}`)
   return ids
@@ -92,8 +99,8 @@ function installedIdentities(name: string, spec: string): Set<string> {
   return ids
 }
 
-export function findDshMarketInstalledAlias(entry: { name: string; url: string; npm?: string | null }, installed: Record<string, string>): string | null {
-  const entryIds = entryIdentities(entry)
+export function findDshMarketInstalledAlias(entry: { name: string; url: string; npm?: string | null }, installed: Record<string, string>, npmAlias?: string | null): string | null {
+  const entryIds = entryIdentities(entry, npmAlias)
   const source = parseDshMarketSourceUrl(entry.url)
   const entryRepo = source === null ? null : source.subpath === null
     ? source.repo.toLowerCase()
@@ -144,6 +151,16 @@ function normalizeRegistry(value: Registry): Registry {
   return { ...value, plugins }
 }
 
+function describeMarketFailure(entry: RegistryPlugin, exitCode: number, output: string): string {
+  if (/workspace\s*[::*]|\bworkspace:\*\b|WORKSPACE_PKG_NOT_FOUND/i.test(output)) {
+    return `安装「${entry.name}」失败：该插件是 monorepo 的 workspace 内部包，无法作为独立 git 依赖安装，自动改用 npm 源也失败。请确认该插件已发布到 npm 后重试。`
+  }
+  if (/ERR_PNPM_FETCH_5\d\d|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|getaddrinfo|socket hang up|GIT_DEP_PREPARE_NOT_ALLOWED/i.test(output)) {
+    return `安装「${entry.name}」失败（代码 ${exitCode}）：直连 GitHub/npm 受限或构建被拒。请在设置页「网络」中配置代理或 GitHub 镜像后重试。\n${output.slice(-500)}`
+  }
+  return `dsh-market 插件操作失败（代码 ${exitCode}）：${output.slice(-800)}`
+}
+
 export function createDshMarketService(options: DshMarketOptions) {
   const fetchImpl = options.fetchImpl ?? fetch
   const execute = options.runCommand ?? runCommand
@@ -152,6 +169,9 @@ export function createDshMarketService(options: DshMarketOptions) {
   let registryLoading: Promise<Registry> | null = null
   let updatesCache: { at: number; data: Record<string, DshMarketUpdateStatus> } | null = null
   let active = false
+  /** 「注册表条目名 → 实际 npm 包名」映射：git workspace 聚合包回退安装后登记，
+      让目录/身份匹配（已安装、启停等）都能认识这条 npm 来源。 */
+  const npmAliasByName = new Map<string, string>()
 
   const progress = (name: string, phase: DshMarketProgress['phase'], message: string, percent: number | null = null): void => {
     options.emitProgress({ name, phase, message, percent })
@@ -209,7 +229,8 @@ export function createDshMarketService(options: DshMarketOptions) {
     const settings = await options.readSettings()
     const installed = await readInstalled(settings)
     const plugins: DshMarketPlugin[] = registry.plugins!.map(entry => {
-      const alias = findDshMarketInstalledAlias(entry, installed.map)
+      const npm = npmAliasByName.get(entry.name) ?? entry.npm ?? null
+      const alias = findDshMarketInstalledAlias(entry, installed.map, npm)
       const record = alias ? installed.records.find(item => item.name === alias) : undefined
       return {
         name: entry.name,
@@ -217,7 +238,7 @@ export function createDshMarketService(options: DshMarketOptions) {
         url: entry.url,
         category: entry.category,
         description: entry.description ?? {},
-        npm: entry.npm ?? null,
+        npm,
         stars: entry.stars ?? 0,
         added: entry.added ?? '',
         install: entry.install ?? `dsh plugin --profile ${settings.profileName} add ${dshMarketInstallTarget(entry) ?? ''}`,
@@ -236,7 +257,7 @@ export function createDshMarketService(options: DshMarketOptions) {
     }
   }
 
-  async function runPlugin(name: string, args: string[], repository: string): Promise<CommandResult> {
+  async function runPlugin(name: string, args: string[], repository: string, registryOverride?: string): Promise<CommandResult> {
     const settings = await options.readSettings()
     const node = await options.prepareNodeRuntime()
     const pnpm = await options.preparePnpmRuntime(node)
@@ -259,6 +280,9 @@ export function createDshMarketService(options: DshMarketOptions) {
       } : {}),
     }
     const dshEnv = withExecutableDirectoryOnPath(pnpm.executable, withExecutableDirectoryOnPath(node.node, commandEnv))
+    // 镜像优先：默认 npmmirror（或用户网络设置），网络失败时切官方源重试一次；
+    // 同时注入探测到的系统代理，让 github/codeload 与 npm 的请求都能走梯子。
+    const network = buildNetworkEnvironment(settings)
     const handleOutput = (text: string, level: OutputLevel) => {
       options.emitOutput(level, text)
       const match = /downloaded\s+(\d+)\s+of\s+(\d+)/i.exec(text)
@@ -266,11 +290,20 @@ export function createDshMarketService(options: DshMarketOptions) {
       else if (/build|prepare|prepack/i.test(text)) progress(name, 'building', '正在执行插件构建步骤', 84)
       else progress(name, 'downloading', '正在下载插件及依赖', null)
     }
-    const runDshPlugin = () => execute(executable, commandArgs, {
-      cwd: settings.workspace,
-      env: dshEnv,
-      onOutput: handleOutput,
-    })
+    let useOfficialRegistry = false
+    const runDshPlugin = (): Promise<CommandResult> => {
+      const registry = registryOverride ?? (useOfficialRegistry ? NPM_OFFICIAL_REGISTRY : network.npmRegistry)
+      return execute(executable, commandArgs, {
+        cwd: settings.workspace,
+        env: {
+          ...dshEnv,
+          ...network.proxy,
+          npm_config_registry: registry,
+          NPM_CONFIG_REGISTRY: registry,
+        },
+        onOutput: handleOutput,
+      })
+    }
     options.emitOutput('info', `dsh-market 插件操作：${args.join(' ')}`)
     progress(name, 'resolving', '正在解析精选插件来源', 12)
     let result = await runDshPlugin()
@@ -292,19 +325,66 @@ export function createDshMarketService(options: DshMarketOptions) {
       progress(name, 'resolving', 'Profile 依赖已迁移，正在重试插件操作', 80)
       result = await runDshPlugin()
     }
-    // Keep dsh-market's recovery behavior: an ignored build approval or a
-    // transient network failure gets exactly one automatic retry.
+    // Keep dsh-market's recovery behavior: an ignored build approval, a git
+    // host build approval, or a transient network failure gets exactly one
+    // automatic retry each.
     if (result.exitCode !== 0 && /ERR_PNPM_IGNORED_BUILDS/i.test(result.output)) {
       const approved = await approveAllIgnoredBuilds(path.join(settings.dshHome, 'profiles', settings.profileName, 'pnpm-workspace.yaml'), result.output)
       if (approved.length > 0) {
         progress(name, 'building', `已允许 ${approved.length} 个构建脚本，正在重试`, 86)
         result = await runDshPlugin()
       }
-    } else if (result.exitCode !== 0 && /ERR_PNPM_FETCH_5\d\d|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(result.output)) {
-      progress(name, 'resolving', '网络临时失败，按 dsh-market 规则自动重试一次', 18)
-      result = await runDshPlugin()
+    } else if (result.exitCode !== 0 && /GIT_DEP_PREPARE_NOT_ALLOWED|git-hosted package.*build scripts|needs to execute build scripts/i.test(result.output)) {
+      // pnpm 11 对 git 托管且带 prepare/prepack 脚本的包做硬校验，必须先把包加入
+      // pnpm-workspace.yaml 的 allowBuilds 才能继续。
+      const keys = gitPrepareBuildKeys(result.output)
+      if (keys.length > 0) {
+        const approved = await approveBuildKeys(path.join(settings.dshHome, 'profiles', settings.profileName, 'pnpm-workspace.yaml'), keys)
+        if (approved.length > 0) {
+          options.emitOutput('info', `dsh-market 已允许 git 插件构建脚本：${approved.join(', ')}`)
+          progress(name, 'building', `已允许 ${approved.length} 个 git 插件构建脚本，正在重试`, 86)
+          result = await runDshPlugin()
+        }
+      }
+    } else if (result.exitCode !== 0 && /ERR_PNPM_FETCH_5\d\d|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|getaddrinfo|socket hang up/i.test(result.output)) {
+      progress(name, 'resolving', '网络临时失败，切换 npm 源后自动重试一次', 18)
+      if (!useOfficialRegistry) {
+        useOfficialRegistry = true
+        result = await runDshPlugin()
+      }
     }
     return result
+  }
+
+  /**
+   * git 源为 monorepo workspace 子包时的 npm 回退：从仓库的 package.json 读出
+   * npm 包名，改用 npm 源安装（默认走 npmmirror）。成功返回 true 并登记别名。
+   */
+  async function fallbackToNpmPackage(entry: RegistryPlugin, source: { repo: string; subpath: string | null; branch: string | null }, output: string): Promise<boolean> {
+    if (source.subpath === null || !/workspace(?:\s*[::*]|:)|WORKSPACE_PKG_NOT_FOUND/i.test(output)) return false
+    const manifestUrl = `https://raw.githubusercontent.com/${source.repo}/${source.branch ?? 'HEAD'}/${source.subpath}/package.json`
+    let manifest: { name?: unknown; version?: unknown }
+    try {
+      const response = await fetchImpl(manifestUrl, {
+        headers: { accept: 'application/json', 'user-agent': 'dsh-melody-launcher/dsh-market' },
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (!response.ok) return false
+      manifest = await response.json() as typeof manifest
+    } catch { return false }
+    const packageName = typeof manifest?.name === 'string' && manifest.name.trim() !== '' ? manifest.name.trim() : null
+    if (!packageName) return false
+    const version = typeof manifest?.version === 'string' && manifest.version.trim() !== '' ? manifest.version.trim() : null
+    const spec = version ? `${packageName}@${version}` : packageName
+    options.emitOutput('info', `dsh-market：${entry.name} 是 monorepo workspace 子包，改用 npm 源安装（${spec}）。`)
+    progress(entry.name, 'resolving', `该插件是 monorepo workspace 子包，改用 npm 源安装（${packageName}）`, 22)
+    const retry = await runPlugin(entry.name, ['add', spec], entry.url)
+    if (retry.exitCode !== 0) {
+      options.emitOutput('error', `dsh-market：npm 回退安装失败（代码 ${retry.exitCode}）：${retry.output.slice(-600)}`)
+      return false
+    }
+    npmAliasByName.set(entry.name, packageName)
+    return true
   }
 
   async function mutate(name: string, action: 'install' | 'update' | 'uninstall'): Promise<DshMarketInstalledPlugin[]> {
@@ -318,20 +398,27 @@ export function createDshMarketService(options: DshMarketOptions) {
       if (!target) throw new Error('dsh-market 不支持此插件的来源地址。')
       const settings = await options.readSettings()
       const before = await readInstalled(settings)
-      const alias = findDshMarketInstalledAlias(entry, before.map)
+      const npmAlias = npmAliasByName.get(entry.name) ?? entry.npm
+      const alias = findDshMarketInstalledAlias(entry, before.map, npmAlias)
       if (action === 'install' && alias) throw new Error(`插件已安装（${alias}）。`)
       if (action === 'update' && !alias) throw new Error('插件尚未安装，不能更新。')
       if (action === 'install' && alias === null) {
-        const names = [entry.npm, entry.name].filter((value): value is string => typeof value === 'string' && value !== '')
+        const names = [npmAlias ?? '', entry.name].filter((value): value is string => typeof value === 'string' && value !== '')
         const collision = names.find(value => before.map[value] !== undefined)
         if (collision !== undefined) throw new Error(`同名冲突：Profile 已安装「${collision}」，请先卸载后再从 dsh-market 安装。`)
       }
       progress(name, action === 'uninstall' ? 'resolving' : 'checking', action === 'uninstall' ? '正在准备卸载' : '正在核对 dsh-market 来源', 8)
       const result = await runPlugin(name, action === 'uninstall' ? ['remove', alias ?? name] : ['add', target], entry.url)
-      if (result.exitCode !== 0) throw new Error(`dsh-market 插件操作失败（代码 ${result.exitCode}）：${result.output.slice(-800)}`)
+      if (result.exitCode !== 0) {
+        const source = parseDshMarketSourceUrl(entry.url)
+        const fellBack = action === 'install' && source !== null
+          ? await fallbackToNpmPackage(entry, source, result.output)
+          : false
+        if (!fellBack) throw new Error(describeMarketFailure(entry, result.exitCode, result.output))
+      }
       const after = await readInstalled(settings)
       if (action !== 'uninstall') {
-        const installedName = findDshMarketInstalledAlias(entry, after.map)
+        const installedName = findDshMarketInstalledAlias(entry, after.map, npmAliasByName.get(entry.name))
         if (!installedName) throw new Error('pnpm 已完成，但 dsh-market 未检测到安装结果。')
         const profile = await readProfile(settings.dshHome, settings.profileName)
         const component = profile.plugins.find(item => item.packageName === installedName)
@@ -355,11 +442,12 @@ export function createDshMarketService(options: DshMarketOptions) {
     const installed = await readInstalled(settings)
     const result: Record<string, DshMarketUpdateStatus> = {}
     await Promise.all(Object.entries(installed.map).map(async ([name, spec]) => {
-      const entry = registry.plugins!.find(item => findDshMarketInstalledAlias(item, { [name]: spec }) === name)
+      const entry = registry.plugins!.find(item => findDshMarketInstalledAlias(item, { [name]: spec }, npmAliasByName.get(item.name)) === name)
       if (!entry) return
+      const npmName = npmAliasByName.get(entry.name) ?? entry.npm
       try {
-        if (entry.npm) {
-          const response = await fetchImpl(`https://registry.npmjs.org/${encodeURIComponent(entry.npm)}/latest`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(10_000) })
+        if (npmName) {
+          const response = await fetchImpl(`https://registry.npmjs.org/${encodeURIComponent(npmName)}/latest`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(10_000) })
           const latest = response.ok ? ((await response.json() as { version?: string }).version ?? null) : null
           const current = installed.records.find(item => item.name === name)?.version ?? null
           result[name] = { kind: 'npm', current, latest, updateAvailable: compareDshMarketVersions(current, latest) !== null && (compareDshMarketVersions(current, latest) ?? 0) < 0 }
@@ -370,7 +458,7 @@ export function createDshMarketService(options: DshMarketOptions) {
           const latest = response?.ok ? ((await response.json() as { sha?: string }).sha ?? null) : null
           result[name] = { kind: 'github', current, latest, updateAvailable: current !== null && latest !== null && current !== latest }
         }
-      } catch { result[name] = { kind: entry.npm ? 'npm' : 'github', current: null, latest: null, updateAvailable: false } }
+      } catch { result[name] = { kind: npmName ? 'npm' : 'github', current: null, latest: null, updateAvailable: false } }
     }))
     updatesCache = { at: Date.now(), data: result }
     return result
@@ -411,7 +499,7 @@ export function createDshMarketService(options: DshMarketOptions) {
       const installed = await readInstalled(settings)
       const entry = (await loadRegistry()).plugins!.find(item => item.name === name || item.npm === name)
       if (!entry) throw new Error('插件不在 dsh-market 精选目录中。')
-      const alias = findDshMarketInstalledAlias(entry, installed.map)
+      const alias = findDshMarketInstalledAlias(entry, installed.map, npmAliasByName.get(entry.name))
       if (!alias) throw new Error('插件尚未安装。')
       const profileDir = path.join(settings.dshHome, 'profiles', settings.profileName)
       const manifestPath = path.join(profileDir, 'package.json')

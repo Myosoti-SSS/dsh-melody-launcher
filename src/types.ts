@@ -24,6 +24,17 @@ export interface AppSettings {
   aiDeveloperMode?: boolean
   /** DSH Copilot 的用户提示词覆盖/追加内容。 */
   aiPrompt?: string
+  /** 网络镜像 / 代理偏好；留空即用启动器默认策略（npm 镜像优先、系统代理探测）。 */
+  network?: NetworkSettings
+}
+
+export interface NetworkSettings {
+  /** npm 注册表镜像；留空默认 npmmirror。 */
+  npmRegistry?: string
+  /** HTTP/HTTPS 代理地址（如 http://127.0.0.1:7890）；留空自动探测系统代理。 */
+  proxy?: string
+  /** GitHub/raw 镜像前缀；留空不启用（预留，便于后续扩展）。 */
+  githubMirror?: string
 }
 
 export interface CredentialStatus {

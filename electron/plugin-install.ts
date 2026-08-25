@@ -11,6 +11,29 @@ export function ignoredBuildKeys(output: string): string[] {
   return [...new Set(sections.flatMap(match => match[1].match(BUILD_KEY_PATTERN) ?? []))]
 }
 
+/**
+ * 解析 pnpm 11 的 `GIT_DEP_PREPARE_NOT_ALLOWED` 报错提示块，提取需要加入
+ * allowBuilds 的 git 托管包构建键（形如 `<name>@<depPath>`）。
+ */
+export function gitPrepareBuildKeys(output: string): string[] {
+  const plainText = output.replace(/\x1b\[[0-9;]*m/g, '')
+  const lines = plainText.split(/\r?\n/)
+  const keys: string[] = []
+  let collecting = false
+  for (const line of lines) {
+    if (collecting) {
+      if (/^\S/.test(line) && line.trim() !== '') collecting = false
+      else {
+        const match = line.match(/^\s*((?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+@[^\s,]+)\s*:\s*(?:true|false)/)
+        if (match) keys.push(match[1])
+      }
+      continue
+    }
+    if (/^allowBuilds\s*:/.test(line.trim())) collecting = true
+  }
+  return [...new Set(keys)]
+}
+
 function buildKeyRepository(buildKey: string): string | undefined {
   const separator = buildKey.search(/@(?=(?:git\+)?https?:\/\/|github:)/i)
   return separator < 0 ? undefined : repositoryFullNameFromSpecifier(buildKey.slice(separator + 1))

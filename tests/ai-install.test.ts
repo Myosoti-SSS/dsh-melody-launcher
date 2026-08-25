@@ -23,6 +23,7 @@ import {
   isSensitivePath,
   isWorkspaceFileRequest,
   lockCredentialsOut,
+  patchAcpLlmDeepseek,
   renderAcpComposition,
   resolveAcpPersona,
   restoreCredentialsLock,
@@ -951,6 +952,53 @@ describe('凭据锁', () => {
     expect(await readFile(credentialsPath, 'utf8')).toBe('in-place\n')
     expect(await readFile(locked, 'utf8')).toBe('stale\n')
 
+    await rm(root, { recursive: true, force: true })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// patchAcpLlmDeepseek
+// ---------------------------------------------------------------------------
+
+describe('patchAcpLlmDeepseek', () => {
+  const BUGGY_LINES = [
+    'if (call.id !== void 0) block.callId = call.id;',
+    'if (call.function?.name !== void 0) block.name = call.function.name;',
+  ]
+
+  async function writeFakeAdapter(root: string, code: string): Promise<string> {
+    const file = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js')
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, code, 'utf8')
+    return file
+  }
+
+  it('把流式 tool_call 的两处「后到覆盖」改成「首个真实值生效」', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-llm-patch-'))
+    const file = await writeFakeAdapter(root, `for (const call of delta?.tool_calls ?? []) {\n\t${BUGGY_LINES[0]}\n\t${BUGGY_LINES[1]}\n}`)
+    const changed = await patchAcpLlmDeepseek(root)
+    expect(changed).toBe(true)
+    const patched = await readFile(file, 'utf8')
+    expect(patched).toContain('if (call.id) block.callId = call.id;')
+    expect(patched).toContain('if (call.function?.name) block.name = call.function.name;')
+    expect(patched).not.toContain('!== void 0')
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('幂等：已补丁后再次调用返回 false 且不写入', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-llm-patch-'))
+    const file = await writeFakeAdapter(root, `\t${BUGGY_LINES[0]}\n\t${BUGGY_LINES[1]}\n`)
+    await patchAcpLlmDeepseek(root)
+    const first = await readFile(file, 'utf8')
+    const changed = await patchAcpLlmDeepseek(root)
+    expect(changed).toBe(false)
+    expect(await readFile(file, 'utf8')).toBe(first)
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('文件缺失时返回 false 且不抛错', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-llm-patch-'))
+    await expect(patchAcpLlmDeepseek(root)).resolves.toBe(false)
     await rm(root, { recursive: true, force: true })
   })
 })

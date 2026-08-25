@@ -6466,6 +6466,42 @@ input:focus-visible {
   .app-body.copilot-open .repository-row {
     grid-template-columns: minmax(280px, 1fr) 96px 120px minmax(220px, auto);
   }
+
+  /* Profile / 整合包页：样式在 PacksView 内联块里，单类规则挡不住挤压。
+     这里用 ≥3 类的选择器压过内联规则，让标题/按钮可换行、双栏合并为单列、
+     统计卡等宽收缩。 */
+  .app-body.copilot-open .packs-page .page-heading {
+    flex-wrap: wrap;
+    gap: 12px 24px;
+  }
+
+  .app-body.copilot-open .packs-page .page-heading h1 {
+    overflow-wrap: anywhere;
+  }
+
+  .app-body.copilot-open .packs-page .page-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .app-body.copilot-open .packs-page .packs-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-body.copilot-open .packs-page .packs-layout .packs-list-panel {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .app-body.copilot-open .packs-page .packs-stats,
+  .app-body.copilot-open .packs-page .stats-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .app-body.copilot-open .packs-page .profile-environment-heading,
+  .app-body.copilot-open .packs-page .profile-environment-row {
+    flex-wrap: wrap;
+  }
 }
 
 @media (max-width: 860px) {
