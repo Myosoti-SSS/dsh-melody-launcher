@@ -119,7 +119,7 @@ async function tempProfile(): Promise<{ root: string; profileDir: string }> {
   return { root, profileDir }
 }
 
-function registryResponse(plugins: Array<{ name: string; owner: string; url: string; category: string }>) {
+function registryResponse(plugins: Array<{ name: string; owner: string; url: string; category: string; npm?: string | null }>) {
   return {
     ok: true,
     status: 200,
@@ -183,7 +183,7 @@ describe('dsh-market network & recovery paths', () => {
       readSettings: async () => ({ ...marketSettings, dshHome: root }),
       prepareNodeRuntime: node,
       preparePnpmRuntime: pnpm,
-      fetchImpl: async () => registryResponse([{ name: 'demo', owner: 'a', url: 'https://github.com/a/b', category: 'plugin' }]),
+      fetchImpl: async () => registryResponse([{ name: 'demo', owner: 'a', url: 'https://github.com/a/b', npm: 'demo', category: 'plugin' }]),
       runCommand: async (_executable, args, options) => {
         envs.push(options.env)
         if (!args.includes('add')) return { exitCode: 0, output: 'Done in 1s' }
@@ -234,6 +234,99 @@ describe('dsh-market network & recovery paths', () => {
       'plugin --profile web add github:a/b#path:/packages/demo',
       'plugin --profile web add @linxin/demo@0.2.0',
     ])
+    await rm(root, { recursive: true, force: true })
+  })
+})
+
+describe('dsh-market npm fallback search & activation', () => {
+  const node = async () => ({ root: 'C:/node', node: 'C:/node/node.exe', npm: 'C:/node/npm.cmd', npx: 'C:/node/npx.cmd', managed: true })
+  const pnpm = async () => ({ root: 'C:/pnpm', executable: 'C:/pnpm/pnpm.cmd' })
+
+  it('falls back via the npm mirror search when the GitHub raw fetch is unreachable', async () => {
+    const { root } = await tempProfile()
+    const calls: string[] = []
+    let addRuns = 0
+    const service = createDshMarketService({
+      readSettings: async () => ({ ...marketSettings, dshHome: root }),
+      prepareNodeRuntime: node,
+      preparePnpmRuntime: pnpm,
+      fetchImpl: async input => {
+        const url = String(input)
+        if (url.includes('/-/v1/search')) {
+          return {
+            ok: true, status: 200, headers: { get: () => null },
+            json: async () => ({ objects: [{ package: { name: '@linxin/demo' } }, { package: { name: 'unrelated-tool' } }] }),
+          } as unknown as Response
+        }
+        if (url.includes('raw.githubusercontent.com')) {
+          return { ok: false, status: 404, headers: { get: () => null } } as unknown as Response
+        }
+        return {
+          ok: true, status: 200, headers: { get: () => null },
+          json: async () => ({ updated: 'x', count: 1, categories: {}, plugins: [{ name: 'demo', owner: 'a', url: 'https://github.com/a/b/tree/main/packages/demo', category: 'plugin' }] }),
+        } as unknown as Response
+      },
+      runCommand: async (_executable, args) => {
+        calls.push(args.join(' '))
+        if (!args.includes('add')) return { exitCode: 0, output: 'Done in 1s' }
+        addRuns += 1
+        return addRuns === 1 ? { exitCode: 1, output: 'ECONNRESET socket hang up' } : { exitCode: 0, output: 'done' }
+      },
+      emitProgress: () => undefined,
+      emitOutput: () => undefined,
+    })
+
+    await expect(service.install('demo')).rejects.toThrow('未检测到安装结果')
+    expect(addRuns).toBe(2)
+    expect(calls).toEqual([
+      'plugin --profile web add github:a/b#path:/packages/demo',
+      'plugin --profile web add @linxin/demo',
+    ])
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('activates the installed npm fallback package into the profile bundles', async () => {
+    const { root, profileDir } = await tempProfile()
+    let addRuns = 0
+    const service = createDshMarketService({
+      readSettings: async () => ({ ...marketSettings, dshHome: root }),
+      prepareNodeRuntime: node,
+      preparePnpmRuntime: pnpm,
+      fetchImpl: async input => {
+        const url = String(input)
+        if (url.includes('raw.githubusercontent.com')) {
+          return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ name: '@linxin/demo', version: '0.2.0' }) } as unknown as Response
+        }
+        return {
+          ok: true, status: 200, headers: { get: () => null },
+          json: async () => ({ updated: 'x', count: 1, categories: {}, plugins: [{ name: 'demo', owner: 'a', url: 'https://github.com/a/b/tree/main/packages/demo', category: 'plugin' }] }),
+        } as unknown as Response
+      },
+      runCommand: async (_executable, args) => {
+        if (!args.includes('add')) return { exitCode: 0, output: 'Done in 1s' }
+        addRuns += 1
+        if (addRuns === 1) return { exitCode: 1, output: 'WORKSPACE_PKG_NOT_FOUND workspace:*' }
+        // 模拟 pnpm add 成功：写入依赖与可加载的 bundle 包。
+        const manifestPath = path.join(profileDir, 'package.json')
+        const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+        manifest.dependencies = { '@linxin/demo': '0.2.0' }
+        await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+        await mkdir(path.join(profileDir, 'node_modules', '@linxin', 'demo'), { recursive: true })
+        await writeFile(
+          path.join(profileDir, 'node_modules', '@linxin', 'demo', 'package.json'),
+          JSON.stringify({ name: '@linxin/demo', version: '0.2.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+          'utf8',
+        )
+        return { exitCode: 0, output: 'done' }
+      },
+      emitProgress: () => undefined,
+      emitOutput: () => undefined,
+    })
+
+    const installed = await service.install('demo')
+    const manifest = JSON.parse(await readFile(path.join(profileDir, 'package.json'), 'utf8'))
+    expect(manifest.dsh.profile.bundles).toContain('@linxin/demo')
+    expect(installed.some(item => item.name === 'demo' && item.installed)).toBe(true)
     await rm(root, { recursive: true, force: true })
   })
 })

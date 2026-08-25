@@ -41,7 +41,9 @@ import {
 import { prepareAiRepositorySource, type AiRepositorySource, type SubmoduleInfo } from './ai-repository-source'
 import { collectCommandOutput } from './command'
 import type { NodeRuntime, PnpmRuntime } from './node-runtime'
-import { formatCommandLine, spawnCommand, withExecutableDirectoryOnPath } from './process'
+import { formatCommandLine, killChildProcessTree, spawnCommand, withExecutableDirectoryOnPath } from './process'
+
+export { killChildProcessTree }
 
 // ---------------------------------------------------------------------------
 // 常量：ACP 运行时与超时
@@ -1529,27 +1531,6 @@ async function abortTask(current: ActiveTask, reason: string): Promise<void> {
     }
   }
   current.acp?.close()
-}
-
-export async function killChildProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null) return
-  if (process.platform === 'win32' && child.pid) {
-    const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true })
-    await new Promise<void>(resolve => {
-      const timeout = setTimeout(() => {
-        killer.kill()
-        resolve()
-      }, 5_000)
-      const finish = () => {
-        clearTimeout(timeout)
-        resolve()
-      }
-      killer.once('error', finish)
-      killer.once('exit', finish)
-    })
-  } else {
-    child.kill('SIGTERM')
-  }
 }
 
 export function createAiInstaller(options: AiInstallerOptions): AiInstaller {

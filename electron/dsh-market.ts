@@ -25,6 +25,9 @@ const NPM_NAME = /^(@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/i
 const GITHUB_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const CORE = new Set(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-headless'])
 
+/** 单次 dsh-market 插件操作的整体上限：防止 GitHub 卡死时无限占用 Profile 锁、界面永远转圈。 */
+const DSH_MARKET_COMMAND_TIMEOUT_MS = 30 * 60_000
+
 export interface DshMarketOptions {
   readSettings: () => Promise<AppSettings>
   prepareNodeRuntime: () => Promise<NodeRuntime>
@@ -267,6 +270,9 @@ export function createDshMarketService(options: DshMarketOptions) {
       ? settings.launchArgs.slice(0, packageIndex + 1)
       : path.basename(executable).toLowerCase().startsWith('dsh') ? [] : ['--yes', DSH_PACKAGE_NAME]
     const commandArgs = [...prefix, 'plugin', '--profile', settings.profileName, ...args]
+    // git 源插件（github:/git+ 或带 #path:）的仓库在 github/codeload，换 npm 注册表解决不了，
+    // 网络失败时直接失败走 npm 回退，避免白等一次。
+    const isGitTarget = args.some(argument => /^(github:|git\+)/i.test(argument) || argument.includes('#path:'))
     const commandEnv = {
       ...process.env,
       DSH_HOME: settings.dshHome,
@@ -302,6 +308,7 @@ export function createDshMarketService(options: DshMarketOptions) {
           NPM_CONFIG_REGISTRY: registry,
         },
         onOutput: handleOutput,
+        timeoutMs: DSH_MARKET_COMMAND_TIMEOUT_MS,
       })
     }
     options.emitOutput('info', `dsh-market 插件操作：${args.join(' ')}`)
@@ -318,6 +325,7 @@ export function createDshMarketService(options: DshMarketOptions) {
         cwd: profilePath,
         env: dshEnv,
         onOutput: (text, level) => options.emitOutput(level, text),
+        timeoutMs: DSH_MARKET_COMMAND_TIMEOUT_MS,
       })
       if (migrate.exitCode !== 0) {
         throw new Error(`插件依赖迁移失败（代码 ${migrate.exitCode}）：${migrate.output.slice(-800)}`)
@@ -346,7 +354,7 @@ export function createDshMarketService(options: DshMarketOptions) {
           result = await runDshPlugin()
         }
       }
-    } else if (result.exitCode !== 0 && /ERR_PNPM_FETCH_5\d\d|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|getaddrinfo|socket hang up/i.test(result.output)) {
+    } else if (result.exitCode !== 0 && !isGitTarget && /ERR_PNPM_FETCH_5\d\d|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|getaddrinfo|socket hang up/i.test(result.output)) {
       progress(name, 'resolving', '网络临时失败，切换 npm 源后自动重试一次', 18)
       if (!useOfficialRegistry) {
         useOfficialRegistry = true
@@ -357,34 +365,93 @@ export function createDshMarketService(options: DshMarketOptions) {
   }
 
   /**
-   * git 源为 monorepo workspace 子包时的 npm 回退：从仓库的 package.json 读出
-   * npm 包名，改用 npm 源安装（默认走 npmmirror）。成功返回 true 并登记别名。
+   * git 源为 monorepo workspace 子包（或其 GitHub 直连失败）时的 npm 回退：
+   * 尽量从仓库/镜像获取实际的 npm 包名，改用 npm 源安装（默认走 npmmirror）。
+   * 成功返回 true 并登记别名 + 激活到 bundles。
    */
-  async function fallbackToNpmPackage(entry: RegistryPlugin, source: { repo: string; subpath: string | null; branch: string | null }, output: string): Promise<boolean> {
-    if (source.subpath === null || !/workspace(?:\s*[::*]|:)|WORKSPACE_PKG_NOT_FOUND/i.test(output)) return false
-    const manifestUrl = `https://raw.githubusercontent.com/${source.repo}/${source.branch ?? 'HEAD'}/${source.subpath}/package.json`
-    let manifest: { name?: unknown; version?: unknown }
-    try {
-      const response = await fetchImpl(manifestUrl, {
-        headers: { accept: 'application/json', 'user-agent': 'dsh-melody-launcher/dsh-market' },
-        signal: AbortSignal.timeout(15_000),
-      })
-      if (!response.ok) return false
-      manifest = await response.json() as typeof manifest
-    } catch { return false }
-    const packageName = typeof manifest?.name === 'string' && manifest.name.trim() !== '' ? manifest.name.trim() : null
-    if (!packageName) return false
-    const version = typeof manifest?.version === 'string' && manifest.version.trim() !== '' ? manifest.version.trim() : null
+  async function fallbackToNpmPackage(entry: RegistryPlugin, source: { repo: string; subpath: string | null; branch: string | null }): Promise<boolean> {
+    if (source.subpath === null) return false
+    const viaRaw = await fetchSubpackageManifest(source.repo, source.branch, source.subpath)
+    let packageName = viaRaw?.name ?? null
+    let version = viaRaw?.version ?? null
+    if (!packageName) {
+      // GitHub/raw 不可达（大陆直连）时改用 npm 镜像搜索子包目录名。
+      const folder = source.subpath.split('/').at(-1)
+      packageName = folder ? await findNpmPackageByFolderName(folder) : null
+      if (!packageName) return false
+    }
     const spec = version ? `${packageName}@${version}` : packageName
-    options.emitOutput('info', `dsh-market：${entry.name} 是 monorepo workspace 子包，改用 npm 源安装（${spec}）。`)
-    progress(entry.name, 'resolving', `该插件是 monorepo workspace 子包，改用 npm 源安装（${packageName}）`, 22)
+    options.emitOutput('info', `dsh-market：${entry.name} 无法按 git 子包安装，改用 npm 源安装（${spec}）。`)
+    progress(entry.name, 'resolving', `改用 npm 源安装（${packageName}）`, 22)
     const retry = await runPlugin(entry.name, ['add', spec], entry.url)
     if (retry.exitCode !== 0) {
       options.emitOutput('error', `dsh-market：npm 回退安装失败（代码 ${retry.exitCode}）：${retry.output.slice(-600)}`)
       return false
     }
     npmAliasByName.set(entry.name, packageName)
+    await ensureProfileBundleEnabled(packageName)
     return true
+  }
+
+  /** 读取仓库子包的 package.json，得到 npm 包名与版本；GitHub 不可达时返回 null。 */
+  async function fetchSubpackageManifest(repo: string, branch: string | null, subpath: string): Promise<{ name: string | null; version: string | null } | null> {
+    try {
+      const manifestUrl = `https://raw.githubusercontent.com/${repo}/${branch ?? 'HEAD'}/${subpath}/package.json`
+      const response = await fetchImpl(manifestUrl, {
+        headers: { accept: 'application/json', 'user-agent': 'dsh-melody-launcher/dsh-market' },
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (!response.ok) return null
+      const manifest = await response.json() as { name?: unknown; version?: unknown }
+      return {
+        name: typeof manifest?.name === 'string' && manifest.name.trim() !== '' ? manifest.name.trim() : null,
+        version: typeof manifest?.version === 'string' && manifest.version.trim() !== '' ? manifest.version.trim() : null,
+      }
+    } catch { return null }
+  }
+
+  /** 通过 npm 镜像搜索接口按子包目录名找包（国内可达，GitHub 不通时兜底）。 */
+  async function findNpmPackageByFolderName(folder: string): Promise<string | null> {
+    try {
+      const settings = await options.readSettings()
+      const registry = buildNetworkEnvironment(settings).npmRegistry.replace(/\/+$/, '')
+      const url = `${registry}/-/v1/search?text=${encodeURIComponent(folder)}&size=20`
+      const response = await fetchImpl(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15_000) })
+      if (!response.ok) return null
+      const body = await response.json() as { objects?: Array<{ package?: { name?: string } }> }
+      const target = folder.toLowerCase()
+      const match = body.objects
+        ?.map(item => item.package?.name)
+        .find(name => typeof name === 'string' && name.split('/').at(-1)?.toLowerCase() === target)
+      return match ?? null
+    } catch { return null }
+  }
+
+  /** 把已安装且声明 dsh.bundle 的包加入 dsh.profile.bundles（等价 dsh CLI 的 reconcile，保证插件真正启用）。 */
+  async function ensureProfileBundleEnabled(packageName: string): Promise<void> {
+    try {
+      const settings = await options.readSettings()
+      const profileDir = path.join(settings.dshHome, 'profiles', settings.profileName)
+      const manifestPath = path.join(profileDir, 'package.json')
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+        dependencies?: Record<string, string>
+        dsh?: { profile?: { bundles?: string[] } }
+      }
+      if (typeof manifest.dependencies?.[packageName] !== 'string') return
+      try {
+        const installed = JSON.parse(await readFile(path.join(profileDir, 'node_modules', ...packageName.split('/'), 'package.json'), 'utf8')) as { dsh?: { bundle?: unknown } }
+        if (installed?.dsh?.bundle === undefined) return
+      } catch { return }
+      const bundles = [...(manifest.dsh?.profile?.bundles ?? [])]
+      if (bundles.includes(packageName)) return
+      manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles: [...bundles, packageName] } }
+      const temporary = `${manifestPath}.dsh-market.tmp`
+      await writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+      try { await rename(temporary, manifestPath) } catch {
+        await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+        await unlink(temporary).catch(() => undefined)
+      }
+    } catch { /* profile 写入失败不阻断安装 */ }
   }
 
   async function mutate(name: string, action: 'install' | 'update' | 'uninstall'): Promise<DshMarketInstalledPlugin[]> {
@@ -412,7 +479,7 @@ export function createDshMarketService(options: DshMarketOptions) {
       if (result.exitCode !== 0) {
         const source = parseDshMarketSourceUrl(entry.url)
         const fellBack = action === 'install' && source !== null
-          ? await fallbackToNpmPackage(entry, source, result.output)
+          ? await fallbackToNpmPackage(entry, source)
           : false
         if (!fellBack) throw new Error(describeMarketFailure(entry, result.exitCode, result.output))
       }
@@ -423,6 +490,8 @@ export function createDshMarketService(options: DshMarketOptions) {
         const profile = await readProfile(settings.dshHome, settings.profileName)
         const component = profile.plugins.find(item => item.packageName === installedName)
         if (!component || !component.compatible) throw new Error('插件已下载，但没有检测到可加载的 DSH Bundle。')
+        // dsh CLI 的 reconcile 不一定每次都会把 bundle 加进层列表，这里兜底激活。
+        await ensureProfileBundleEnabled(installedName)
       }
       updatesCache = null
       progress(name, 'verifying', '正在刷新 dsh-market 安装状态', 94)
