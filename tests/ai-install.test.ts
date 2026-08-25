@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { parseDocument } from 'yaml'
 import {
   ACP_RUNTIME_PACKAGES,
+  ACP_STREAM_BEFORE,
   acpEnvironment,
   aiInfrastructureFailure,
   buildAcpServerCommand,
@@ -24,6 +25,7 @@ import {
   isWorkspaceFileRequest,
   lockCredentialsOut,
   patchAcpLlmDeepseek,
+  patchAcpStreaming,
   renderAcpComposition,
   resolveAcpPersona,
   restoreCredentialsLock,
@@ -999,6 +1001,31 @@ describe('patchAcpLlmDeepseek', () => {
   it('文件缺失时返回 false 且不抛错', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'dsh-llm-patch-'))
     await expect(patchAcpLlmDeepseek(root)).resolves.toBe(false)
+    await rm(root, { recursive: true, force: true })
+  })
+})
+
+describe('patchAcpStreaming', () => {
+  it('forwards assistant/chunk deltas idempotently', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-acp-stream-'))
+    const file = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-acp', 'lib', 'index.js')
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, `${ACP_STREAM_BEFORE}\n`, 'utf8')
+
+    expect(await patchAcpStreaming(root)).toBe(true)
+    const patched = await readFile(file, 'utf8')
+    expect(patched).toContain('streamedChunkKeys')
+    expect(patched).toContain('"assistant/chunk"')
+    expect(await patchAcpStreaming(root)).toBe(false)
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('returns false when the target version does not contain the known block', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-acp-stream-'))
+    const file = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-acp', 'lib', 'index.js')
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, '// 另一个版本\n', 'utf8')
+    expect(await patchAcpStreaming(root)).toBe(false)
     await rm(root, { recursive: true, force: true })
   })
 })

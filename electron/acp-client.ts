@@ -66,8 +66,13 @@ export function normalizeSessionUpdate(params: unknown): AcpSessionUpdate {
   if (kind.endsWith('_chunk')) {
     const content = update.content
     if (content && typeof content === 'object') {
-      if ('text' in content) base.text = String((content as Record<string, unknown>).text ?? '')
-      if ('reasoning' in content) base.reasoning = String((content as Record<string, unknown>).reasoning ?? '')
+      const value = content as Record<string, unknown>
+      if (value.type === 'reasoning') {
+        if (typeof value.text === 'string') base.reasoning = value.text
+      } else {
+        if (value.reasoning !== undefined && value.reasoning !== null) base.reasoning = String(value.reasoning)
+        if ('text' in value) base.text = String(value.text ?? '')
+      }
     }
   } else if (kind === 'tool_call' || kind === 'tool_call_update') {
     base.title = typeof update.title === 'string' ? update.title : undefined

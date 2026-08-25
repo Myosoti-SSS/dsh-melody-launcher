@@ -67,3 +67,15 @@ describe('normalizeSessionUpdate', () => {
     expect(update.text).toBeUndefined()
   })
 })
+
+describe('normalizeSessionUpdate reasoning type', () => {
+  it('maps a reasoning-typed chunk to the reasoning field instead of text', async () => {
+    const { normalizeSessionUpdate } = await import('../electron/acp-client')
+    const update = normalizeSessionUpdate({
+      sessionId: 'sess-1',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'reasoning', text: '思考增量' } },
+    })
+    expect(update.reasoning).toBe('思考增量')
+    expect(update.text).toBeUndefined()
+  })
+})
