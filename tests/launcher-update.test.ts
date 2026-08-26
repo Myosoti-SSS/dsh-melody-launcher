@@ -96,6 +96,31 @@ describe('checkLauncherUpdate', () => {
     const status = await checkLauncherUpdate(() => '0.1.9', malformed)
     expect(status.state).toBe('error')
   })
+
+  it('falls back to a mirror when the primary API is rate limited', async () => {
+    const withMirror = (async input => {
+      const url = String(input)
+      if (url.startsWith('https://api.github.com/')) return new Response('', { status: 403 })
+      if (url.includes('/releases/latest')) return new Response(JSON.stringify(releaseBody()), { status: 200 })
+      return new Response('', { status: 404 })
+    }) as typeof fetch
+    const status = await checkLauncherUpdate(() => '0.1.9', withMirror)
+    expect(status.state).toBe('update-available')
+    expect(status.remoteVersion).toBe('0.1.10')
+    expect(status.assetName).toBe(PORTABLE)
+  })
+
+  it('prefers the primary endpoint when it still works', async () => {
+    const hits: string[] = []
+    const tracking = (async input => {
+      hits.push(String(input))
+      if (String(input).endsWith('/releases/latest')) return new Response(JSON.stringify(releaseBody()), { status: 200 })
+      return new Response('', { status: 404 })
+    }) as typeof fetch
+    await checkLauncherUpdate(() => '0.1.9', tracking)
+    expect(hits).toHaveLength(1)
+    expect(hits[0]).toContain('https://api.github.com/')
+  })
 })
 
 /** 分块发送内容的假 fetch，模拟 GitHub 资产下载。 */
@@ -211,6 +236,14 @@ describe('apply', () => {
     expect(script).toContain('del "%~f0"')
   })
 
+  it('cleans up the script even when the move fails', () => {
+    const script = buildApplyScript('Old.exe', 'C:\\temp\\new.exe', 'C:\\Launcher\\Old.exe')
+    // 不再用 exit /b 1 提前退出：那会跳过 del，让 cmd 残留在 userData/launcher-update 里。
+    expect(script).not.toContain('exit /b 1')
+    expect(script).toContain('if not errorlevel 1 start "" "C:\\Launcher\\Old.exe"')
+    expect(script).toContain('del "%~f0"')
+  })
+
   it('throws when called without a downloaded update', async () => {
     const userDataPath = mkdtempSync(path.join(os.tmpdir(), 'launcher-update-'))
     const updater = createLauncherUpdater({
@@ -222,7 +255,25 @@ describe('apply', () => {
     await expect(updater.apply()).rejects.toThrow('没有已下载的启动器更新')
   })
 
-  it('writes the apply script, spawns it and exits the app', async () => {
+  it('refuses to apply over a non-portable executable in dev mode', async () => {
+    delete process.env.PORTABLE_EXECUTABLE_FILE
+    const userDataPath = mkdtempSync(path.join(os.tmpdir(), 'launcher-update-'))
+    const updateRoot = path.join(userDataPath, 'launcher-update')
+    await mkdir(updateRoot, { recursive: true })
+    await writeFile(path.join(updateRoot, PORTABLE), new Uint8Array(9))
+    const updater = createLauncherUpdater({
+      getVersion: () => '0.1.9',
+      userDataPath,
+      getExecPath: () => 'C:\\dev\\dshlauncher\\node_modules\\electron\\dist\\electron.exe',
+      githubFetch: latestFetch(releaseBody()),
+      emitProgress: () => undefined,
+    })
+    await updater.check()
+    await updater.download()
+    await expect(updater.apply()).rejects.toThrow('自动更新仅支持便携版启动器')
+  })
+
+  it('writes the apply script, spawns it via wscript and exits the app', async () => {
     const userDataPath = mkdtempSync(path.join(os.tmpdir(), 'launcher-update-'))
     const updateRoot = path.join(userDataPath, 'launcher-update')
     await mkdir(updateRoot, { recursive: true })
@@ -252,13 +303,17 @@ describe('apply', () => {
     await updater.apply()
 
     expect(spawned).toHaveLength(1)
-    expect(spawned[0].command).toBe('cmd.exe')
-    expect(spawned[0].args[0]).toBe('/c')
-    expect(String(spawned[0].args[1])).toContain(`apply-${process.pid}.cmd`)
+    expect(spawned[0].command).toBe('wscript.exe')
+    expect(String(spawned[0].args[0])).toContain(`apply-${process.pid}.vbs`)
     expect(unrefCalled).toBe(true)
     expect(exitCode).toBe(0)
 
-    const script = await import('node:fs/promises').then(fs => fs.readFile(spawned[0].args[1] as string, 'utf8'))
+    // 通过 wscript（GUI 子系统，无控制台）隐藏运行 cmd 脚本；vbs 运行后自删。
+    const vbs = await import('node:fs/promises').then(fs => fs.readFile(spawned[0].args[0] as string, 'utf8'))
+    expect(vbs).toContain('WScript.Shell')
+    expect(vbs).toContain('DeleteFile WScript.ScriptFullName')
+    const scriptPath = /shell\.Run """(.*\.cmd)""", 0, False/.exec(vbs)?.[1] as string
+    const script = await import('node:fs/promises').then(fs => fs.readFile(scriptPath, 'utf8'))
     expect(script).toContain('move /y')
     expect(script).toContain('start ""')
   })

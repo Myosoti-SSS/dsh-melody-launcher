@@ -13,6 +13,9 @@ import { downloadReleaseAsset } from './release-download'
  */
 
 const GITHUB_API_ROOT = 'https://api.github.com'
+/** api.github.com 的镜像前缀（按顺序尝试）。直连被匿名限流（403）或连接失败时，
+ * 镜像用自己的出口绕过官方限额，读取同一个 Release 元数据。 */
+const GITHUB_API_MIRRORS = ['https://gh-proxy.com/', 'https://ghfast.top/', 'https://ghproxy.net/'] as const
 const GITHUB_HEADERS = {
   Accept: 'application/vnd.github+json',
   'User-Agent': 'DSH-Launcher',
@@ -61,19 +64,30 @@ export function resolvePortableAsset(release: GitHubLatestRelease): ResolvedLaun
 }
 
 async function fetchLatestRelease(fetchImpl: typeof fetch): Promise<{ tag: string; htmlUrl: string; asset: ResolvedLauncherAsset }> {
-  const url = `${GITHUB_API_ROOT}/repos/${LAUNCHER_REPOSITORY}/releases/latest`
-  const response = await fetchImpl(url, { headers: GITHUB_HEADERS })
-  if (!response.ok) {
-    if (response.status === 403) throw new Error('GitHub 请求额度暂时用尽。')
-    throw new Error(`GitHub 返回 ${response.status}。`)
+  const endpoint = `${GITHUB_API_ROOT}/repos/${LAUNCHER_REPOSITORY}/releases/latest`
+  const candidates = [endpoint, ...GITHUB_API_MIRRORS.map(prefix => `${prefix}${endpoint}`)]
+  const failures: string[] = []
+  for (const url of candidates) {
+    try {
+      const response = await fetchImpl(url, { headers: GITHUB_HEADERS })
+      if (!response.ok) {
+        failures.push(url === endpoint
+          ? response.status === 403 ? 'GitHub 请求额度暂时用尽。' : `GitHub 返回 ${response.status}。`
+          : `镜像返回 ${response.status}。`)
+        continue
+      }
+      const release = await response.json() as GitHubLatestRelease
+      const asset = resolvePortableAsset(release)
+      return {
+        tag: typeof release.tag_name === 'string' ? release.tag_name : '',
+        htmlUrl: typeof release.html_url === 'string' ? release.html_url : '',
+        asset,
+      }
+    } catch (error) {
+      failures.push(url === endpoint ? errorMessage(error) : '镜像不可用。')
+    }
   }
-  const release = await response.json() as GitHubLatestRelease
-  const asset = resolvePortableAsset(release)
-  return {
-    tag: typeof release.tag_name === 'string' ? release.tag_name : '',
-    htmlUrl: typeof release.html_url === 'string' ? release.html_url : '',
-    asset,
-  }
+  throw new Error(failures.join('；'))
 }
 
 function checkedAt(): string {
@@ -155,7 +169,7 @@ export async function checkLauncherUpdate(
   return snapshot.status
 }
 
-/** 生成原位替换 + 重启的批处理脚本（Windows cmd）。 */
+/** 生成原位替换 + 重启的批处理脚本（Windows cmd）。替换失败也清理脚本自身，不留残留。 */
 export function buildApplyScript(execBase: string, tempPath: string, execPath: string): string {
   return [
     '@echo off',
@@ -171,8 +185,9 @@ export function buildApplyScript(execBase: string, tempPath: string, execPath: s
     '  )',
     ')',
     `move /y "${tempPath}" "${execPath}" >nul`,
-    'if errorlevel 1 exit /b 1',
-    `start "" "${execPath}"`,
+    'if not errorlevel 1 start "" "' + execPath + '"',
+    // 无论替换成功与否都删除脚本：move 失败说明目标被占用（旧实例还在），
+    // 残留的 cmd 没有继续执行的意义，下次启动器更新会重新生成。
     'del "%~f0"',
     '',
   ].join('\r\n')
@@ -278,6 +293,11 @@ export function createLauncherUpdater(options: LauncherUpdaterOptions): Launcher
     }
     const target = pending as PendingUpdate
     const execPath = (options.getExecPath ?? (() => process.env.PORTABLE_EXECUTABLE_FILE || process.execPath))()
+    // 开发模式（process.execPath 指向 node_modules/electron 等）没有独立的便携包，
+    // 原位替换会把下载的新启动器 move 到 Electron 二进制上，破坏开发环境。只允许便携版更新。
+    if (!process.env.PORTABLE_EXECUTABLE_FILE && !path.basename(execPath).toLowerCase().includes('-portable')) {
+      throw new Error('当前以开发模式运行，自动更新仅支持便携版启动器。')
+    }
     const execBase = path.basename(execPath)
     const tempPath = path.join(updateRoot, target.asset.name)
     const scriptPath = path.join(updateRoot, `apply-${process.pid}.cmd`)
@@ -285,8 +305,18 @@ export function createLauncherUpdater(options: LauncherUpdaterOptions): Launcher
     await writeFile(scriptPath, buildApplyScript(execBase, tempPath, execPath))
     status = { ...status, state: 'applying', message: '正在替换并重启应用…' }
     options.emitProgress({ phase: 'applying', percent: 100 })
+    // cmd 是控制台程序：detached spawn 会让 Windows 给它新建一个可见的黑色终端
+    // （Node 的 windowsHide 在此组合下不生效）。改用 wscript 隐藏启动 cmd，
+    // 并通过 vbs 的自删保持目录干净。
+    const vbsPath = path.join(updateRoot, `apply-${process.pid}.vbs`)
+    await writeFile(vbsPath, [
+      'Set shell = CreateObject("WScript.Shell")',
+      `shell.Run """${scriptPath}""", 0, False`,
+      'CreateObject("Scripting.FileSystemObject").DeleteFile WScript.ScriptFullName',
+      '',
+    ].join('\r\n'))
     const doSpawn = options.spawnProcess ?? nodeSpawn
-    const child = doSpawn('cmd.exe', ['/c', scriptPath], {
+    const child = doSpawn('wscript.exe', [vbsPath], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
