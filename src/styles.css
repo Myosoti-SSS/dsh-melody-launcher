@@ -410,14 +410,29 @@ input:focus-visible {
   grid-column: 2;
   align-self: start;
   padding-top: 12px;
-  color: #171b18;
+  color: #fff;
   text-align: right;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.42);
 }
 
 .launcher-kicker {
   font-size: 9px;
   font-weight: 850;
+}
+
+/* 启动页文字使用 Photoshop「叠加」混合模式，白色在不同背景裁切下保持清晰。 */
+.launcher-title-block > .launcher-kicker,
+.launcher-title-block > h1,
+.launcher-title-block > p,
+.launcher-runtime-state small,
+.launcher-runtime-state strong,
+.launcher-runtime-state > span:last-child,
+.launcher-profile-row > span,
+.launcher-profile-select,
+.launcher-runtime-source,
+.launcher-open-button,
+.launcher-footer {
+  color: #fff;
+  mix-blend-mode: overlay;
 }
 
 .launcher-title-block h1 {
@@ -430,9 +445,9 @@ input:focus-visible {
 
 .launcher-title-block p {
   margin: 3px 0 0;
-  color: rgba(23, 27, 24, 0.72);
   font-size: 11px;
   font-weight: 650;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.58);
 }
 
 .launcher-update-notice {
@@ -541,7 +556,6 @@ input:focus-visible {
 }
 
 .launcher-runtime-state small {
-  color: rgba(255, 255, 255, 0.58);
   font-size: 9px;
 }
 
@@ -553,7 +567,6 @@ input:focus-visible {
 }
 
 .launcher-runtime-state > span:last-child {
-  color: rgba(255, 255, 255, 0.66);
   font-family: Consolas, monospace;
   font-size: 10px;
 }
@@ -673,7 +686,7 @@ input:focus-visible {
   gap: 9px;
   border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 5px;
-  color: rgba(255, 255, 255, 0.72);
+  color: #fff;
   background: rgba(18, 22, 19, 0.7);
   font-size: 10px;
   backdrop-filter: blur(7px);
@@ -704,7 +717,7 @@ input:focus-visible {
 }
 
 .launcher-runtime-source {
-  color: rgba(255, 255, 255, 0.62);
+  color: #fff;
 }
 
 .launcher-open-button {
@@ -713,7 +726,7 @@ input:focus-visible {
   padding: 0;
   gap: 4px;
   border: 0;
-  color: #b9ead6;
+  color: #fff;
   background: transparent;
   font-size: 10px;
   font-weight: 700;
@@ -733,7 +746,7 @@ input:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: rgba(255, 255, 255, 0.72);
+  color: #fff;
   font-size: 9px;
   font-weight: 650;
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.78);
@@ -1266,6 +1279,8 @@ input:focus-visible {
   min-height: 0;
   overflow: visible;
   background: var(--chrome);
+  /* Copilot 与边缘按钮共享这一宽度，避免两个控件在拖动时脱节。 */
+  --copilot-edge-width: var(--copilot-width, 420px);
   transition: grid-template-columns 220ms cubic-bezier(.2, .8, .2, 1);
 }
 
@@ -1289,6 +1304,20 @@ input:focus-visible {
 .app-body.copilot-resizing .copilot-panel,
 .app-body.copilot-resizing .manager-edge-actions {
   transition: none;
+}
+
+/* 分界阴影属于主工作区：它位于 Copilot 面板上方，但不参与命中测试。 */
+.app-body.copilot-open::after {
+  content: '';
+  position: absolute;
+  z-index: 40;
+  top: 0;
+  right: var(--copilot-edge-width, var(--copilot-width, 420px));
+  bottom: 0;
+  width: 1px;
+  background: transparent;
+  box-shadow: 8px 0 22px -10px rgba(30, 45, 36, 0.32), 2px 0 8px -3px rgba(30, 45, 36, 0.16);
+  pointer-events: none;
 }
 
 .side-navigation {
@@ -1399,6 +1428,7 @@ input:focus-visible {
 
 .copilot-panel {
   position: relative;
+  /* 主工作区的右侧阴影位于面板之上，分界视觉归主区域所有。 */
   z-index: 25;
   display: flex;
   min-width: 0;
@@ -1754,7 +1784,7 @@ input:focus-visible {
 
 /* Copilot 打开后，侧栏按钮贴着工作区/侧栏分界线；返回按钮仍固定在窗口最右下角。 */
 .app-body.copilot-open .manager-edge-actions {
-  right: var(--copilot-width, 420px);
+  right: var(--copilot-edge-width, var(--copilot-width, 420px));
 }
 
 .copilot-prompt-field textarea { resize: vertical; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 5px; font: inherit; font-size: 12px; line-height: 18px; }
@@ -6314,36 +6344,6 @@ input:focus-visible {
   }
 }
 
-/* Copilot 打开且窗口宽度不足以同时容纳侧栏、内容下限与整列 Copilot 时，
-   把它切换为悬浮覆盖（默认 Copilot 420px + 侧栏 218px + 管理页行宽下限约 610px ≈ 1250px）。 */
-@media (max-width: 1250px) {
-  .app-body.copilot-open,
-  .app-body.sidebar-collapsed.copilot-open {
-    grid-template-columns: 218px minmax(0, 1fr);
-  }
-
-  .app-body.sidebar-collapsed.copilot-open {
-    grid-template-columns: 64px minmax(0, 1fr);
-  }
-
-  .copilot-panel {
-    position: absolute;
-    z-index: 30;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(400px, calc(100% - 218px));
-  }
-
-  .app-body.sidebar-collapsed.copilot-open .copilot-panel {
-    width: min(400px, calc(100% - 64px));
-  }
-
-  .app-body.copilot-open .manager-edge-actions {
-    right: 1px;
-  }
-}
-
 /* 中等宽度：整合包标签与右侧按钮文字同步收缩，避免切换器被单独压扁。 */
 @media (max-width: 1320px) {
   .header-pack-switcher {
@@ -6393,28 +6393,13 @@ input:focus-visible {
     grid-template-columns: 190px minmax(0, 1fr) 0;
   }
 
-  /* Copilot 改为悬浮覆盖：启动项管理等页面内容按行宽下限（min 610px）排布，
-     窗口缩小时若仍占一个网格列会把工作区压到内容最小宽度以下，导致整体溢出错乱。 */
-  .app-body.copilot-open,
-  .app-body.sidebar-collapsed.copilot-open {
-    grid-template-columns: 190px minmax(0, 1fr);
+  /* 与桌面端保持相同的三列模型，边界和快捷按钮才能共享拖动宽度。 */
+  .app-body.copilot-open {
+    grid-template-columns: 190px minmax(0, 1fr) var(--copilot-width, 380px);
   }
 
   .app-body.sidebar-collapsed.copilot-open {
-    grid-template-columns: 64px minmax(0, 1fr);
-  }
-
-  .copilot-panel {
-    position: absolute;
-    width: min(400px, calc(100% - 190px));
-  }
-
-  .app-body.sidebar-collapsed.copilot-open .copilot-panel {
-    width: min(400px, calc(100% - 64px));
-  }
-
-  .app-body.copilot-open .manager-edge-actions {
-    right: 1px;
+    grid-template-columns: 64px minmax(0, 1fr) var(--copilot-width, 380px);
   }
 
   .page {
@@ -6453,10 +6438,9 @@ input:focus-visible {
   }
 }
 
-/* Copilot 占一个网格列时，工作区宽度 = 窗口宽 - 侧栏 218 - Copilot ~420。
-   默认 1380 管理窗口下只剩约 742px，管理页两列基础布局（min 940px）会横向溢出。
-   打开 Copilot 时把“中等宽度”适配提前到 1578px（218+420+940）生效，保证页面不被挤乱。 */
-@media (max-width: 1578px) {
+/* Copilot 仍占独立网格列时，管理内容提前收缩；这里只处理内容排版，
+   不改变 Copilot 面板、拖拽边界或快捷按钮的定位逻辑。 */
+@media (min-width: 861px) and (max-width: 1578px) {
   .app-body.copilot-open .page {
     padding-right: 20px;
     padding-left: 20px;
@@ -6492,9 +6476,6 @@ input:focus-visible {
     grid-template-columns: minmax(280px, 1fr) 96px 120px minmax(220px, auto);
   }
 
-  /* Profile / 整合包页：样式在 PacksView 内联块里，单类规则挡不住挤压。
-     这里用 ≥3 类的选择器压过内联规则，让标题/按钮可换行、双栏合并为单列、
-     统计卡等宽收缩。 */
   .app-body.copilot-open .packs-page .page-heading {
     flex-wrap: wrap;
     gap: 12px 24px;
@@ -6554,6 +6535,7 @@ input:focus-visible {
   .app-body {
     position: relative;
     grid-template-columns: 60px minmax(0, 1fr);
+    --copilot-edge-width: min(var(--copilot-width, 420px), calc(100% - 60px));
   }
 
   .app-body.copilot-open,
@@ -6563,16 +6545,16 @@ input:focus-visible {
 
   .copilot-panel {
     position: absolute;
-    z-index: 30;
+    /* 浮层覆盖主区域时必须位于 workspace 之上；边界阴影仍由父层伪元素绘制。 */
+    z-index: 35;
     top: 0;
     right: 0;
     bottom: 0;
-    width: min(390px, calc(100% - 60px));
-    box-shadow: none;
+    width: var(--copilot-edge-width);
   }
 
   .app-body.copilot-open .manager-edge-actions {
-    right: 1px;
+    right: var(--copilot-edge-width);
   }
 
   .side-navigation {
@@ -6873,6 +6855,7 @@ input:focus-visible {
 
   .app-body {
     grid-template-columns: 50px minmax(0, 1fr);
+    --copilot-edge-width: min(var(--copilot-width, 420px), calc(100% - 50px));
   }
 
   .header-pack-switcher {
@@ -6885,7 +6868,7 @@ input:focus-visible {
   }
 
   .copilot-panel {
-    width: calc(100% - 50px);
+    width: var(--copilot-edge-width);
   }
 
   .side-navigation {

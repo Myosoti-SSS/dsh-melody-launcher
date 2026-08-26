@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import type { AppSettings, RuntimeOutput, WindowMode } from '../src/types'
 import { ACP_RUNTIME_DIRNAME, CREDENTIALS_LOCK_DIRNAME, createAiInstaller, healCredentialsLock, type AiInstaller } from './ai-install'
 import { createApplicationAddonManager, type ApplicationAddonManager } from './application-addons'
-import { applyWindowMode, createMainWindow, createRendererChannel } from './app-window'
+import { applyWindowMode, applyWindowModeImmediate, createMainWindow, createRendererChannel } from './app-window'
 import { createCatalogSyncService, type CatalogSyncService } from './catalog-sync'
 import { createCopilotSessionManager, type CopilotSessionManager } from './copilot-sessions'
 import { createDshMarketService, type DshMarketService } from './dsh-market'
@@ -61,6 +61,7 @@ const moduleDirectory = path.dirname(fileURLToPath(import.meta.url))
 const launcherIconPath = path.join(moduleDirectory, app.isPackaged ? '../dist/launcher-icon.png' : '../public/launcher-icon.png')
 
 let mainWindow: BrowserWindow | null = null
+let mainWindowMode: WindowMode = 'launcher'
 let processSupervisor: ProcessSupervisor | null = null
 let quitCleanupStarted = false
 let allowFinalQuit = false
@@ -651,12 +652,16 @@ function createServices(): Services {
 }
 
 function openMainWindow(): void {
+  mainWindowMode = 'launcher'
   const window = createMainWindow({
     preloadPath: path.join(moduleDirectory, 'preload.mjs'),
     iconPath: launcherIconPath,
     devServerUrl: process.env.VITE_DEV_SERVER_URL,
     indexPath: path.join(moduleDirectory, '../dist/index.html'),
-    onClosed: () => { mainWindow = null },
+    onClosed: () => {
+      mainWindow = null
+      mainWindowMode = 'launcher'
+    },
   })
   // 点 X 或 Alt+F4 只隐藏到托盘继续后台运行；托盘菜单「退出」经 app.quit()
   // 触发 before-quit 置位 isQuitting 后，这里才放行关闭。
@@ -676,9 +681,11 @@ function openMainWindow(): void {
 function showMainWindow(): void {
   const window = getWindow()
   if (!window || window.isDestroyed()) {
+    mainWindowMode = 'launcher'
     openMainWindow()
     return
   }
+  applyWindowModeImmediate(window, mainWindowMode)
   if (window.isMinimized()) window.restore()
   // 无边框透明窗口从后台唤起时常抢不到焦点，短暂置顶可确保激活。
   window.setAlwaysOnTop(true, 'screen-saver')
@@ -711,7 +718,10 @@ app.whenReady().then(async () => {
   registerIpcHandlers({
     ...services,
     getWindow,
-    setWindowMode: (mode: WindowMode) => applyWindowMode(mainWindow, mode),
+    setWindowMode: (mode: WindowMode) => {
+      mainWindowMode = mode
+      applyWindowMode(mainWindow, mode)
+    },
   })
   await services.profilePoolReady
   openMainWindow()

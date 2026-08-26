@@ -53,21 +53,29 @@ export function DSHCopilotPanel({ state, legacyAi, onLegacyApprove, onLegacyCanc
   const endRef = useRef<HTMLDivElement>(null)
 
   const beginResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
     event.preventDefault()
-    event.currentTarget.setPointerCapture(event.pointerId)
+    const handle = event.currentTarget
+    const pointerId = event.pointerId
+    handle.setPointerCapture(pointerId)
     const startX = event.clientX
     const startWidth = width
+    let finished = false
     onResizeStateChange?.(true)
     const move = (moveEvent: PointerEvent) => onWidthChange(startWidth + startX - moveEvent.clientX)
     const stop = () => {
+      if (finished) return
+      finished = true
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', stop)
       window.removeEventListener('pointercancel', stop)
+      handle.removeEventListener('lostpointercapture', stop)
       onResizeStateChange?.(false)
     }
     window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', stop, { once: true })
-    window.addEventListener('pointercancel', stop, { once: true })
+    window.addEventListener('pointerup', stop)
+    window.addEventListener('pointercancel', stop)
+    handle.addEventListener('lostpointercapture', stop, { once: true })
   }
 
   useEffect(() => {
@@ -157,7 +165,7 @@ export function DSHCopilotPanel({ state, legacyAi, onLegacyApprove, onLegacyCanc
 
   return (
     <aside className={`copilot-panel ${open ? 'open' : 'closed'}`} aria-label="DSH Copilot" aria-hidden={!open}>
-      <div className="copilot-resize-handle" role="separator" aria-orientation="vertical" aria-label="调整 DSH Copilot 宽度" onPointerDown={beginResize} />
+      <div className="copilot-resize-handle" role="separator" aria-orientation="vertical" aria-label="调整 DSH Copilot 宽度" aria-valuemin={320} aria-valuemax={720} aria-valuenow={Math.round(width)} onPointerDown={beginResize} />
       <header className="copilot-header">
         <div className="copilot-header-brand"><Bot size={18} /><div><strong>DSH Copilot</strong></div></div>
         <div className="copilot-session-picker">
