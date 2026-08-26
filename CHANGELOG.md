@@ -2,6 +2,22 @@
 
 本文件记录 DSH 旋律启动器（dsh-melody-launcher）的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本语义遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.4.2] - 2026-08-26
+
+### Bug 修复
+
+- **启动器自动更新静默失效**：未登录 GitHub 或匿名 API 额度耗尽时，更新检查直连 `api.github.com` 被限流（403）后直接进入 error 状态，顶部不显示任何更新入口。现在直连失败时按序走镜像（`gh-proxy.com` 等）读取 Release 元数据，检测恢复正常。
+- **启动器自动更新残留 apply 脚本**：替换脚本在 `move` 失败时提前 `exit /b 1` 跳过自删，userData 里残留 `apply-*.cmd`。现在替换失败同样清理脚本自身。
+- **开发模式误覆盖 Electron 二进制**：以 `npm run dev`（`node_modules\electron\dist\electron.exe`）运行时点击更新，替换脚本会把下载的便携版安装包 move 到 Electron 可执行文件上，破坏开发环境。现在非便携模式（无 `PORTABLE_EXECUTABLE_FILE`）直接拒绝应用更新并给出明确提示。
+- **便携版更新弹出黑色终端**：替换脚本经 `cmd.exe` detached 启动时 Windows 强制新建可见控制台窗口。改用 `wscript` 静默执行，不再弹窗。
+- **DSH 已是最新仍显示「更新 DSH」按钮**：资源市场 deepseek-harness 行只要检测到已安装就固定显示「更新 DSH」。现在按真实版本状态显示「已是最新」（置灰）或「更新 DSH」。
+- **相同 DSH 版本重复安装崩溃**：对已由 pnpm 管理（node_modules 走 junction 链接）的版本目录执行 `npm install --prefix` 重装，npm 依赖树解析在 `@npmcli/arborist Link.matches` 崩溃。现在目标版本与已安装版本一致时直接跳过重装，新版本会安装到全新目录。
+
+### 测试
+
+- 新增启动器更新：`wscript` 替换、开发模式保护、镜像 fallback、脚本失败清理等 4 项测试。
+- 全套 592 项测试通过，`tsc --noEmit` 通过。
+
 ## [v0.4.0] - 2026-08-25（预览版）
 
 > 本版本为桌面端**大版本预览更新**：重构 Copilot 对话体验、补齐 DSH Market 下载可靠性、引入官方推荐整合包「DSH Web UI」一键安装，并修复多项兼容性与稳定性问题。预览版供尝鲜，发现问题欢迎在运行日志或讨论区反馈。
