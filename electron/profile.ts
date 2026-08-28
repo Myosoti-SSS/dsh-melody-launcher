@@ -596,7 +596,10 @@ async function removePnpmVirtualPackage(profileDir: string, packageName: string,
   } catch {
     return
   }
-  const virtualRoot = path.resolve(profileDir, 'node_modules', '.pnpm')
+  // realpath can expand Windows short names (RUNNER~1) while resolving the
+  // direct junction. Compare both against the expanded virtual root or
+  // path.relative incorrectly reports the real package as outside `.pnpm`.
+  const virtualRoot = path.resolve(await realpath(path.join(profileDir, 'node_modules', '.pnpm')).catch(() => path.join(profileDir, 'node_modules', '.pnpm')))
   const relative = path.relative(virtualRoot, resolved)
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return
   const segments = relative.split(path.sep).filter(Boolean)
@@ -620,6 +623,11 @@ async function hasOtherPackageLink(nodeModulesRoot: string, target: string, dire
   async function visit(directory: string): Promise<boolean> {
     const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
     for (const entry of entries) {
+      // Only top-level Profile dependencies keep a virtual entry reachable.
+      // Do not descend into `.pnpm`: a canonicalization mismatch on Windows
+      // (for example short names returned by realpath) could make the target
+      // look like a second consumer and silently skip removal.
+      if (entry.name === '.pnpm' || entry.name === '.bin') continue
       const candidate = path.join(directory, entry.name)
       const normalizedCandidate = normalizeFsPath(candidate)
       if (normalizedCandidate === normalizedDirectLink || normalizedCandidate === normalizedTarget) continue
@@ -655,6 +663,7 @@ function normalizeFsPath(value: string): string {
 async function pruneOrphanedPnpmVirtualEntries(profileDir: string): Promise<void> {
   const nodeModulesRoot = path.join(profileDir, 'node_modules')
   const virtualRoot = path.join(nodeModulesRoot, '.pnpm')
+  const canonicalVirtualRoot = path.resolve(await realpath(virtualRoot).catch(() => virtualRoot))
   const entries = await readdir(virtualRoot, { withFileTypes: true }).catch(() => [])
   const packageEntries = entries.filter(entry => entry.isDirectory() && entry.name !== 'node_modules')
   if (packageEntries.length === 0) return
@@ -662,7 +671,7 @@ async function pruneOrphanedPnpmVirtualEntries(profileDir: string): Promise<void
   const reachable = new Set<string>()
   const visited = new Set<string>()
   const markResolved = async (resolvedPath: string): Promise<void> => {
-    const relative = path.relative(virtualRoot, resolvedPath)
+    const relative = path.relative(canonicalVirtualRoot, resolvedPath)
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return
     const segments = relative.split(path.sep).filter(Boolean)
     const nodeModulesIndex = segments.indexOf('node_modules')
@@ -670,7 +679,7 @@ async function pruneOrphanedPnpmVirtualEntries(profileDir: string): Promise<void
     const key = segments[0]
     if (reachable.has(key)) return
     reachable.add(key)
-    const packageNodeModules = path.join(virtualRoot, key, 'node_modules')
+    const packageNodeModules = path.join(canonicalVirtualRoot, key, 'node_modules')
     const marker = normalizeFsPath(packageNodeModules)
     if (visited.has(marker)) return
     visited.add(marker)
