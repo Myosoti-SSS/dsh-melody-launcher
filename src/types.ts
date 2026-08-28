@@ -727,6 +727,8 @@ export interface PackPluginEntry {
 }
 
 export type AiSessionKind = 'chat' | 'repository-install' | 'plugin-adaptation' | 'runtime-repair'
+/** Copilot agent implementation.  Existing sessions default to DSH. */
+export type AiSessionBackend = 'dsh' | 'codex'
 export type AiSessionPhase = 'idle' | 'queued' | 'preparing' | 'running' | 'done' | 'cancelled' | 'error' | 'interrupted'
 
 export interface AiMessage {
@@ -759,6 +761,8 @@ export interface AiSessionSummary {
   messageCount: number
   pendingApproval: AiApprovalRequest | null
   hasSnapshot: boolean
+  /** Backend used by this conversation; omitted in pre-Codex persisted data. */
+  backend?: AiSessionBackend
   /** 会话固定使用的模型（"provider|model"）；空表示自动选择。 */
   model?: string | null
 }
@@ -787,6 +791,7 @@ export type AiSessionEvent =
 
 export interface AiSessionCreateInput {
   kind?: AiSessionKind
+  backend?: AiSessionBackend
   title?: string
   subject?: string | null
 }

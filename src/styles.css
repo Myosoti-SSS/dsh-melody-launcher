@@ -1441,6 +1441,9 @@ input:focus-visible {
   transform: translateX(0);
   transition: opacity 160ms ease, transform 220ms cubic-bezier(.2, .8, .2, 1), visibility 0s linear;
   will-change: transform;
+  /* The panel owns its responsive layout; the viewport can be much wider
+     than the panel when it is docked beside the workspace. */
+  container: copilot / inline-size;
   /* 对话是面板的主要阅读内容：字号随窗口宽度自适应（约 12px → 15.5px）。 */
   --copilot-font: clamp(12px, 0.55vw + 5.5px, 15.5px);
   --copilot-font-small: clamp(10px, 0.3vw + 6.5px, 12px);
@@ -1518,7 +1521,7 @@ input:focus-visible {
   display: grid;
   min-width: 0;
   align-items: center;
-  grid-template-columns: minmax(0, 1fr) 30px 30px;
+  grid-template-columns: minmax(92px, .75fr) minmax(0, 1fr) 30px 30px;
   gap: 5px;
 }
 
@@ -1532,6 +1535,8 @@ input:focus-visible {
   color: var(--ink);
   background: #fff;
   font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .copilot-session-picker .icon-button {
@@ -1621,8 +1626,9 @@ input:focus-visible {
   padding: 7px 10px 7px 12px;
   border-bottom: 1px solid var(--line);
 }
+.copilot-task-head > div:first-child { min-width: 0; flex: 1 1 auto; }
 .copilot-task-head strong,
-.copilot-task-head small { display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copilot-task-head small { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .copilot-task-head strong { font-size: var(--copilot-font-small); }
 .copilot-task-head small { margin-top: 2px; color: var(--muted); font-size: calc(var(--copilot-font-small) - 1px); }
 .copilot-task-actions { display: flex; align-items: center; gap: 5px; }
@@ -1700,6 +1706,7 @@ input:focus-visible {
   font-size: var(--copilot-font-small);
 }
 .copilot-model-bar select:disabled { color: var(--quiet); opacity: .6; cursor: default; }
+.copilot-codex-note { max-width: 100%; margin-bottom: 6px; overflow-wrap: anywhere; color: var(--muted); font-size: var(--copilot-font-small); }
 .copilot-input-wrap { position: relative; width: 100%; min-width: 0; }
 .copilot-composer textarea { display: block; width: 100%; min-width: 0; min-height: 58px; max-height: 120px; resize: vertical; padding: 8px 43px 8px 9px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; font: inherit; font-size: var(--copilot-font); line-height: 1.55; }
 .copilot-composer-hint { margin-top: 4px; padding-left: 2px; color: var(--quiet); font-size: 9px; }
@@ -1713,6 +1720,58 @@ input:focus-visible {
 .copilot-footer button { min-height: 30px; padding: 0 8px; font-size: var(--copilot-font-small); }
 .copilot-footer-spacer { flex: 1; }
 .copilot-complete { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: 9px; }
+
+/* Copilot is also usable as a narrow overlay on small windows.  Let the
+   header consume a second row before its selects are allowed to overflow. */
+@container copilot (max-width: 540px) {
+  .copilot-header {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    min-height: auto;
+    padding: 9px 10px;
+    gap: 7px;
+  }
+
+  .copilot-session-picker {
+    grid-template-columns: minmax(74px, .72fr) minmax(0, 1fr) 30px 30px;
+  }
+}
+
+@container copilot (max-width: 300px) {
+  .copilot-session-picker {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px 28px;
+    gap: 4px;
+  }
+
+  .copilot-session-picker select {
+    padding-right: 18px;
+    font-size: 9px;
+  }
+
+  .copilot-session-picker .icon-button {
+    width: 28px;
+    height: 28px;
+  }
+
+  .copilot-task-head {
+    padding-right: 7px;
+    padding-left: 8px;
+  }
+
+  .copilot-message.user {
+    margin-left: 10px;
+  }
+
+  .copilot-approval {
+    margin-right: 7px;
+    margin-left: 7px;
+  }
+
+  .copilot-composer {
+    padding-right: 7px;
+    padding-left: 7px;
+  }
+}
 
 .manager-edge-actions {
   position: absolute;
@@ -2445,16 +2504,6 @@ input:focus-visible {
   gap: 8px;
 }
 
-.management-header-search {
-  width: min(260px, 28vw);
-  height: 34px;
-  padding-left: 9px;
-}
-
-.management-header-search input {
-  font-size: 11px;
-}
-
 .management-control-bar {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
@@ -2717,6 +2766,10 @@ input:focus-visible {
 }
 
 .management-primary-panel {
+  padding-top: 0;
+}
+
+.management-secondary-panel {
   padding-top: 0;
 }
 
@@ -6618,11 +6671,6 @@ input:focus-visible {
   .management-title-actions button {
     flex: 1;
     justify-content: center;
-  }
-
-  .management-header-search {
-    width: 100%;
-    flex: 1 0 100%;
   }
 
   .management-control-bar,

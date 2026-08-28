@@ -2,6 +2,26 @@
 
 本文件记录 DSH 旋律启动器（dsh-melody-launcher）的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本语义遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.4.3] - 2026-08-29
+
+### 新增功能
+
+- **Codex ACP 后端**：Copilot 现在可选择 `Codex ACP`，通过 Codex App Server 的 JSONL 协议进行多轮对话，并调用本机 Codex 工具。命令执行、文件修改、权限审批、工具输出和思考过程会在同一会话中展示。
+- 新增 Codex App Server 客户端与传输层，支持 `initialize`、`thread/start`、`turn/start`、`turn/interrupt`、多轮线程复用和服务器请求兜底。
+
+### Bug 修复
+
+- 修复 Codex 在一轮工具调用后停止的问题：启动器持续等待 `turn/completed`，并正确响应工具执行、文件修改、权限与宿主请求。
+- 修复 Codex 进程退出、EOF、stdin/stdout 错误或 code 0 意外断开后，会话停留在 `running` 的问题；pending turn、审批和修改队列锁会同步释放。
+- 修复消息事件到达顺序导致的对话看起来被截断的问题；最终回答与工具日志按时间恢复顺序。
+- 加固 DSH ACP 传输层：异常流关闭、重复关闭、晚注册监听和子进程树清理更稳定。
+- 恢复插件页搜索栏位置，并调整 Copilot 窄宽度下的响应式布局。
+
+### 测试
+
+- 新增 Codex 协议、请求兜底、transport 生命周期、会话集成、UI 和 code 0 退出回归测试。
+- 全套 681 项测试通过，47 项依赖真实环境的测试按惯例跳过；`tsc --noEmit` 与 `vite build` 通过。
+
 ## [v0.4.2] - 2026-08-26
 
 ### Bug 修复

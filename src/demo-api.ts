@@ -343,6 +343,7 @@ function demoSession(input: AiSessionCreateInput = {}): AiSession {
     messageCount: 0,
     pendingApproval: null,
     hasSnapshot: false,
+    backend: input.backend === 'codex' ? 'codex' : 'dsh',
     messages: [],
   }
   demoAiSessions = [session, ...demoAiSessions]
