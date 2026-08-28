@@ -859,6 +859,18 @@ export function createInstaller(options: InstallerOptions): Installer {
       options.emitOutput('info', `读取 DSH 版本列表失败，回落到 npm latest：${error instanceof Error ? error.message : String(error)}`)
     }
     const runtimeRoot = selectedVersion ? dshVersionRoot(settings.dshInstallPath, selectedVersion) : settings.dshInstallPath
+    // 选中的发布版本与已安装版本一致时直接认定已是最新，而不是对现有目录重跑一次安装。
+    // 已装目录可能由 pnpm 管理（node_modules 走 junction 链接），npm 重装同一布局会
+    // 在依赖树解析阶段崩溃（@npmcli/arborist Link.matches：Cannot read properties of null）。
+    if (selectedVersion) {
+      const existing = await getManagedDshStatus(runtimeRoot)
+      if (existing.installed && existing.version && normalizeDshVersion(existing.version) === normalizeDshVersion(selectedVersion)) {
+        options.emitOutput('info', `本地 DSH ${existing.version} 已是最新发布版本，无需重新安装。`)
+        const profile = await readProfile(settings.dshHome, settings.profileName, options.pluginReceiptsPath)
+        emit({ repository, kind: 'dsh', phase: 'complete', percent: 100, message: `DSH ${existing.version} 已是最新版本` })
+        return { kind: 'dsh', profile, settings, dshInstallation: existing }
+      }
+    }
     await mkdir(runtimeRoot, { recursive: true })
     const manifestPath = path.join(runtimeRoot, 'package.json')
     if (!existsSync(manifestPath)) {

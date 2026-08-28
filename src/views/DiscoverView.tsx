@@ -41,6 +41,7 @@ import type {
   CatalogRepositoryAnalysis,
   CatalogRepositoryResult,
   DshInstallationStatus,
+  DshUpdateStatus,
   InstalledPreset,
   InstalledSkill,
   InstalledApplicationAddon,
@@ -295,6 +296,7 @@ export function DiscoverView({
   const [analysisProgress, setAnalysisProgress] = useState<Record<string, CatalogAnalysisProgress>>({})
   const [batchScan, setBatchScan] = useState<BatchScanState | null>(null)
   const [dshInstallation, setDshInstallation] = useState<DshInstallationStatus>(EMPTY_DSH_INSTALLATION)
+  const [dshUpdate, setDshUpdate] = useState<DshUpdateStatus | null>(null)
   const [starredRepositories, setStarredRepositories] = useState<Record<string, boolean>>({})
   const [starringRepository, setStarringRepository] = useState<string | null>(null)
   const [targetDialog, setTargetDialog] = useState<{
@@ -351,6 +353,7 @@ export function DiscoverView({
   }, [api, onAnalysis, onError, onInstallationState, page, query, sort])
 
   useEffect(() => { void search('', 'stars', 1) }, [])
+  useEffect(() => { void api.checkDshUpdate().then(setDshUpdate).catch(() => undefined) }, [api])
   useEffect(() => () => { batchRunRef.current += 1 }, [])
   useEffect(() => api.onCatalogAnalysisProgress(progress => {
     setAnalysisProgress(current => ({ ...current, [progress.repository]: progress }))
@@ -823,7 +826,11 @@ export function DiscoverView({
           const trialTarget = plugins.length === 1 && anyInstalled ? plugins[0] : undefined
           const trial = trialTarget ? pluginTrials[`${trialTarget.profileName}:${trialTarget.packageName}`] : undefined
           const actionLabel = repo.kind === 'dsh'
-            ? dshInstallation.installed ? '更新 DSH' : '安装 DSH'
+            ? dshUpdate?.state === 'update-available'
+              ? '更新 DSH'
+              : dshUpdate?.state === 'up-to-date'
+                ? '已是最新'
+                : dshInstallation.installed ? '更新 DSH' : '安装 DSH'
             : !analysis
               ? anyInstalled ? '检测更新' : '检测'
               : analysis.kind === 'invalid'
@@ -836,6 +843,7 @@ export function DiscoverView({
                     ? '选择组件'
                     : anyInstalled ? '更新' : '安装'
           const actionDisabled = isChecking
+            || (repo.kind === 'dsh' && dshUpdate?.state === 'up-to-date')
             || (Boolean(analysis) && (
               activeInstalling !== null
               || aiActive
